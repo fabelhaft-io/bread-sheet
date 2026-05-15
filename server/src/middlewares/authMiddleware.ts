@@ -12,13 +12,14 @@ export interface AuthRequest extends Request {
   user?: {
     id: string;
     email?: string;
+    isAnonymous: boolean;
   };
 }
 
 export const requireAuth = async (
   req: AuthRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) => {
   try {
     const authHeader = req.headers.authorization;
@@ -35,7 +36,10 @@ export const requireAuth = async (
     }
 
     // Verify token with Supabase
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(token);
 
     if (error || !user) {
       return res.status(401).json({ error: 'Invalid or expired token' });
@@ -45,11 +49,28 @@ export const requireAuth = async (
     req.user = {
       id: user.id,
       email: user.email,
+      isAnonymous: user.is_anonymous !== false,
     };
 
     next();
   } catch (err) {
     console.error('Auth Middleware Error:', err);
-    res.status(500).json({ error: 'Internal server error during authentication' });
+    res
+      .status(500)
+      .json({ error: 'Internal server error during authentication' });
   }
+};
+
+export const requireRegistered = (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.user.isAnonymous) {
+    return res.status(403).json({ error: 'Registration required' });
+  }
+  next();
 };

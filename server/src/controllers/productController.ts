@@ -37,3 +37,8 @@ export const getProductByBarcode = async (req: Request, res: Response, next: Nex
     next(error);
   }
 };
+
+// POST /api/products
+export const submitProduct = async (req: Request, res: Response, next: NextFunction) => {
+
+};

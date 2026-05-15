@@ -9,7 +9,7 @@ vi.mock('@supabase/supabase-js', () => ({
   }),
 }));
 
-import { requireAuth } from './authMiddleware.js';
+import { requireAuth, requireRegistered } from './authMiddleware.js';
 
 function makeReqResNext(authHeader?: string) {
   const req: any = { headers: {} };
@@ -52,14 +52,72 @@ describe('requireAuth', () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it('calls next() and attaches user to req when token is valid', async () => {
+  it('attaches user with isAnonymous=false for a registered user (is_anonymous: false)', async () => {
     mockGetUser.mockResolvedValue({
-      data: { user: { id: 'user-123', email: 'test@example.com' } },
+      data: { user: { id: 'user-123', email: 'test@example.com', is_anonymous: false } },
       error: null,
     });
     const { req, res, next } = makeReqResNext('Bearer valid-token');
     await requireAuth(req, res, next);
     expect(next).toHaveBeenCalledOnce();
-    expect(req.user).toEqual({ id: 'user-123', email: 'test@example.com' });
+    expect(req.user).toEqual({ id: 'user-123', email: 'test@example.com', isAnonymous: false });
+  });
+
+  it('attaches user with isAnonymous=true for an anonymous user (is_anonymous: true)', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'anon-456', email: undefined, is_anonymous: true } },
+      error: null,
+    });
+    const { req, res, next } = makeReqResNext('Bearer anon-token');
+    await requireAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user).toEqual({ id: 'anon-456', email: undefined, isAnonymous: true });
+  });
+
+  it('treats missing is_anonymous field as anonymous (isAnonymous=true)', async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: 'user-789', email: 'other@example.com' } },
+      error: null,
+    });
+    const { req, res, next } = makeReqResNext('Bearer legacy-token');
+    await requireAuth(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(req.user).toEqual({ id: 'user-789', email: 'other@example.com', isAnonymous: true });
+  });
+
+  it('returns 500 when an unexpected error is thrown', async () => {
+    mockGetUser.mockRejectedValue(new Error('network failure'));
+    const { req, res, next } = makeReqResNext('Bearer some-token');
+    await requireAuth(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Internal server error during authentication' });
+    expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('requireRegistered', () => {
+  it('returns 401 when req.user is not set', () => {
+    const { req, res, next } = makeReqResNext();
+    requireRegistered(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Authentication required' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when the user is anonymous', () => {
+    const { req, res, next } = makeReqResNext();
+    req.user = { id: 'anon-1', email: undefined, isAnonymous: true };
+    requireRegistered(req, res, next);
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Registration required' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('calls next() when the user is registered', () => {
+    const { req, res, next } = makeReqResNext();
+    req.user = { id: 'user-1', email: 'registered@example.com', isAnonymous: false };
+    requireRegistered(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(res.status).not.toHaveBeenCalled();
   });
 });

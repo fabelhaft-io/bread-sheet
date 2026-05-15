@@ -23,6 +23,20 @@ model User {
   
   ratings   Rating[]
   groups    GroupMember[]
+
+  submittedProducts   Product[]              @relation("ProductSubmitter")
+  productVerifications ProductVerification[]
+}
+
+enum ProductStatus {
+  VERIFIED
+  PENDING_REVIEW
+  REJECTED
+}
+
+enum VerificationVote {
+  APPROVE
+  REJECT
 }
 
 model Product {
@@ -34,6 +48,21 @@ model Product {
   description String?
   
   ratings     Rating[]
+
+  status              ProductStatus @default(VERIFIED) // existing rows = trusted (came from OFF)
+  submittedByUserId   String?
+  submittedBy         User?         @relation("ProductSubmitter", fields: [submittedByUserId], references: [id])
+
+  genericName         String?
+  energyKcal          Float?
+  carbohydrates       Float?
+  fat                 Float?
+  protein             Float?
+  salt                Float?
+  servingSize         String?
+  ingredients         String?
+
+  verifications       ProductVerification[]
 }
 
 model Rating {
@@ -48,6 +77,19 @@ model Rating {
   
   productId String
   product   Product  @relation(fields: [productId], references: [id])
+}
+
+model ProductVerification {
+  id         String           @id @default(uuid())
+  productId  String
+  userId     String
+  vote       VerificationVote
+  createdAt  DateTime         @default(now())
+
+  product    Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, userId]) // one vote per user per product; second vote overwrites via upsert
 }
 
 model Group {
