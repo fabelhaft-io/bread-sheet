@@ -74,9 +74,10 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/products/:barcode` | Any | Fetch product (Open Food Facts fallback on miss) |
+| `POST` | `/products/upload-image` | Auth | Multipart image → sharp resize → S3 upload; returns `{ url }` |
+| `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text (T5) or label image (T6, 501) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
 | `PATCH` | `/products/:barcode` | Registered | Correct a `PENDING_REVIEW` product (resets verifications) |
-| `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image |
 | `POST` | `/products/:barcode/verify` | Registered, non-submitter | Cast approval verification |
 | `DELETE` | `/products/:barcode/verify` | Registered | Retract own verification |
 | `POST` | `/products/:barcode/edits` | Registered | Propose edit to `VERIFIED` product |
@@ -153,12 +154,19 @@ The 422 body shape (`{ error, reason, field }`) is a wire contract with the clie
 
 `POST /products/extract-label` has two paths:
 
-| Input | Path | Model |
-|-------|------|-------|
-| `{ rawText: string }` (≥ `MIN_OCR_LENGTH` chars) | Text path | Claude text API — cheaper |
-| Multipart image | Vision path (fallback) | Claude vision API |
+| Input | Path | Status |
+|-------|------|--------|
+| `{ rawText: string }` (≥ `MIN_OCR_LENGTH = 50` chars) | Text path — hand-rolled regex parser (`labelExtractionService.ts`); English + German patterns | **Shipped (T5)** |
+| Multipart image | Vision path — Google Cloud Vision `documentTextDetection`, then reuses the same parser | **Pending (T6)** — returns `501` until implemented |
 
-Response always includes a `confidence: low \| medium \| high` field. The client uses this to choose the default fill mode (low → "Fill manually"; medium/high → "Pre-fill & edit").
+**Parser design (`labelExtractionService.ts`):**
+- All patterns use the `m` flag so `^` anchors to the start of each line, preventing sub-entry rows ("of which saturates", "davon Zucker") from matching the parent-nutrient patterns.
+- Decimal separators: both `.` (English) and `,` (German/European) are normalised to `.` before parsing.
+- Fields parsed: `energyKcal`, `carbohydrates`, `fat`, `protein`, `salt`, `servingSize`, `ingredients`.
+- `name`, `brand`, `genericName` are always `null` (not extractable from nutrition tables).
+- `confidence`: `high` if ≥ 5 fields parsed, `medium` if 3–4, `low` if 0–2. Never throws on no-match — returns all-null with `confidence: 'low'`.
+
+Response always includes a `confidence: 'low' | 'medium' | 'high'` field. The client uses this to choose the default fill mode (low → "Fill manually"; medium/high → "Pre-fill & edit").
 
 ---
 

@@ -10,6 +10,7 @@ import {
   submitProduct,
   uploadImage,
 } from '../controllers/productController.js';
+import { extractLabel } from '../controllers/labelExtractionController.js';
 
 const router = Router();
 
@@ -39,6 +40,8 @@ router.post(  '/upload-image',
   uploadImage,
   handleUploadError,
 );
+
+router.post('/extract-label', requireAuth, apiLimiter, requireRegistered, extractLabel);
 
 // submitProduct only works with registered users
 router.post('/', requireAuth, apiLimiter, requireRegistered, submitProduct);

@@ -195,7 +195,7 @@ User History
 - Business logic lives in `features/products/` (`api.ts`, `extract.ts`, `ocr.ts`, `image-picker.ts`, `image-processing.ts`, `constants.ts`, `types.ts`) — screens stay UI-only per the `features/` convention.
 - `MIN_OCR_LENGTH = 50` is exported from `features/products/constants.ts`; the backend (P5-003) must reference the same value.
 - Native modules (`@react-native-ml-kit/text-recognition`, `expo-image-picker`, `expo-image-manipulator`) are consumed via guarded `require()` so jest-expo tests pass without them. The user must install them and rebuild the native client before the full flow works end-to-end.
-- Backend endpoints (`POST /api/products`, `POST /api/products/extract-label`, `POST /api/products/upload-image`, `POST /api/products/:barcode/verify`, `DELETE /api/products/:barcode/verify`) are stubbed only from the client side — P5-003 is still fully open.
+- `POST /api/products` — shipped (P5-003/T3). `POST /api/products/upload-image` — shipped (P5-003/T4). `POST /api/products/extract-label` text path — shipped (P5-003/T5). Image path returns `501` (pending T6). `POST/DELETE /api/products/:barcode/verify` — pending T7.
 
 ### [TICKET-P5-003] Backend: Label Extraction, Submission, & Peer Verification
 **Goal:** Provide three backend capabilities: (1) structure nutritional data from on-device OCR text (primary) or a label image (fallback); (2) validate and normalise incoming images server-side; (3) accept product submissions from registered users and gate promotion to `VERIFIED` behind peer review by a second registered user.
@@ -245,15 +245,15 @@ User History
 - Add `plausibilityFlag: Boolean` to `Product` (default `false`) — set when AI considers data unusual but acceptable.
 - Add new model `ProductVerification`: `userId`, `barcode`, `createdAt` — composite unique key on `(userId, barcode)` to prevent duplicate votes.
 **Acceptance Criteria:**
-- [ ] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403`. *(T3: `POST /products` shipped; extract-label pending T5/T6)*
+- [x] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403`. *(text path via T5; image path pending T6)*
 - [ ] Images larger than 8 MB are rejected with `413` before any processing occurs.
 - [ ] Images in unexpected formats are converted to JPEG via `sharp`; unsupported formats return `415`.
 - [ ] Format detection uses magic bytes, not `Content-Type`.
 - [ ] After upload, a Lambda automatically resizes images to the appropriate cap and writes to the `processed/` S3 prefix.
 - [ ] The API returns the predicted `processed/` URL immediately without waiting for the Lambda.
-- [ ] `POST /products/extract-label` accepts raw OCR text and returns structured nutritional fields via Claude text API.
-- [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Claude vision inference.
-- [ ] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present.
+- [x] `POST /products/extract-label` accepts raw OCR text and returns structured nutritional fields. *(T5: hand-rolled regex parser, English + German; Claude/Vision approach superseded — see implementation plan)*
+- [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Google Cloud Vision inference. *(pending T6)*
+- [x] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present. *(text path T5; image path returns 501 until T6)*
 - [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
 - [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(deferred — T3 ships schema validation only; AI plausibility deferred to a follow-up ticket)*
 - [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — see above)*
