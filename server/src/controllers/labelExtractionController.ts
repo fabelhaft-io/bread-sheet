@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
 import { extractFromText } from '../services/labelExtractionService.js';
+import { ocrLabelImage } from '../services/visionService.js';
 
 const MIN_OCR_LENGTH = 50;
 
@@ -12,7 +13,11 @@ export const extractLabel = async (
 ) => {
   try {
     if (req.is('multipart/form-data')) {
-      return res.status(501).json({ error: 'image_path_not_implemented' });
+      if (!req.file) {
+        return res.status(400).json({ error: 'image_required' });
+      }
+      const rawText = await ocrLabelImage(req.file.buffer);
+      return res.json(extractFromText(rawText));
     }
 
     const rawText = (req.body as Record<string, unknown>).rawText;
@@ -20,8 +25,7 @@ export const extractLabel = async (
       return res.status(400).json({ error: 'raw_text_too_short' });
     }
 
-    const label = extractFromText(rawText);
-    res.json(label);
+    res.json(extractFromText(rawText));
   } catch (err) {
     next(err);
   }

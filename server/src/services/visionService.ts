@@ -1,13 +1,22 @@
 import { ImageAnnotatorClient } from '@google-cloud/vision';
-import { createHash } from 'crypto';
-import { existsSync, readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
 import path from 'path';
 
-function getMode(): 'mock' | 'live' | 'tesseract' {
-  const m = process.env.VISION_MODE ?? 'mock';
-  if (m === 'live' || m === 'tesseract') return m;
-  return 'mock';
+const VALID_VISION_MODES = ['mock', 'live', 'tesseract'] as const;
+type VisionMode = (typeof VALID_VISION_MODES)[number];
+
+function getMode(): VisionMode {
+  const m = process.env.VISION_MODE;
+  if (!m) {
+    throw new Error(
+      'Missing required environment variable: VISION_MODE. Valid values: mock | live | tesseract',
+    );
+  }
+  if (!VALID_VISION_MODES.includes(m as VisionMode)) {
+    throw new Error(
+      `Invalid VISION_MODE "${m}". Must be one of: ${VALID_VISION_MODES.join(' | ')}`,
+    );
+  }
+  return m as VisionMode;
 }
 
 // Lazily constructed and memoized — never instantiated in mock/tesseract mode.
@@ -21,21 +30,22 @@ function getVisionClient(): ImageAnnotatorClient {
   return _client;
 }
 
-function fixturesDir(): string {
-  const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(__dirname, '../__fixtures__/vision');
-}
+// Fixed OCR text returned in mock mode regardless of image content.
+const MOCK_OCR_TEXT = [
+  'Nutritional information per 100g',
+  'Energy 1234 kJ / 295 kcal',
+  'Fat 12.5g',
+  'of which saturates 2.1g',
+  'Carbohydrates 45g',
+  'of which sugars 8g',
+  'Protein 8g',
+  'Salt 0.5g',
+  'Serving size: 30g',
+  'Ingredients: Oats (60%), sugar, sunflower oil, salt, natural flavouring.',
+].join('\n');
 
-async function ocrMock(buffer: Buffer): Promise<string> {
-  const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 12);
-  const fixturePath = path.join(fixturesDir(), `${hash}.txt`);
-  if (!existsSync(fixturePath)) {
-    throw new Error(
-      `[visionService mock] Fixture missing for hash "${hash}". ` +
-        `Add ${fixturePath} with the expected raw OCR text.`,
-    );
-  }
-  return readFileSync(fixturePath, 'utf-8');
+async function ocrMock(_buffer: Buffer): Promise<string> {
+  return MOCK_OCR_TEXT;
 }
 
 async function ocrLive(buffer: Buffer): Promise<string> {

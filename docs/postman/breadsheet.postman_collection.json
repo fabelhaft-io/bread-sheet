@@ -163,7 +163,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "products", "{{barcode}}"]
             },
-            "description": "Returns the product. On a local cache miss, the server falls back to Open Food Facts and caches the result. 404 if not found anywhere."
+            "description": "Returns the product. On a local cache miss the server falls back to Open Food Facts and caches the result.\n\n**Response augmentation (T8):**\n- All products include `unverified: boolean`.\n- `VERIFIED` products: `unverified: false`.\n- `PENDING_REVIEW` / `REJECTED` products: `unverified: true`, plus `submittedByUserId` and a `submission` object containing the user-submitted nutritional fields (`name`, `brand`, `genericName`, `energyKcal`, `carbohydrates`, `fat`, `protein`, `salt`, `servingSize`, `ingredients`).\n\n**Visibility:**\n- Anonymous callers receive `404` for `PENDING_REVIEW` products (they are hidden from guests).\n- Registered callers see `PENDING_REVIEW` products with the full augmentation.\n\n**Errors:** 400 (invalid barcode format), 404 (not found / hidden)."
           },
           "response": []
         },
@@ -252,6 +252,34 @@
               "path": ["api", "products"]
             },
             "description": "Submit a new product in `PENDING_REVIEW` state. Registered users only.\n\n- 201 on first submission\n- 200 on resubmission (own pending product or another user's rejected product)\n- 422 with `{ error, reason, field }` on validation failure\n- 409 with `{ error: 'product_already_verified' | 'product_previously_rejected' | 'submission_pending' }` on conflicts\n\n`productImageUrl` must include `/submissions/` — populate it by running **Upload image** first."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve product (cast APPROVE vote)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{barcode}}/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "products", "{{barcode}}", "verify"]
+            },
+            "description": "Cast an `APPROVE` vote on a `PENDING_REVIEW` product. Registered, non-submitter only.\n\nOnce 2 net-approvals are recorded (approvals > rejections) the product status automatically flips to `VERIFIED`.\n\n**Response:** `{ verifications: <approval count> }`\n\n**Errors:**\n- 401 — unauthenticated\n- 403 — anonymous user or self-verification attempt (`{ error: 'self_verification' }`)\n- 404 — product not found (`{ error: 'product_not_found' }`)\n- 409 — product is not `PENDING_REVIEW` (`{ error: 'product_not_pending' }`)"
+          },
+          "response": []
+        },
+        {
+          "name": "Reject product (cast REJECT vote)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/products/{{barcode}}/verify",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "products", "{{barcode}}", "verify"]
+            },
+            "description": "Cast a `REJECT` vote on a `PENDING_REVIEW` product. Registered, non-submitter only.\n\nThis endpoint is **not** a vote retraction — it casts an active rejection. Once 2 net-rejections are recorded (rejections > approvals) the product status automatically flips to `REJECTED`.\n\nA caller who previously cast an `APPROVE` vote and then calls this endpoint will have their vote changed to `REJECT` (upsert semantics).\n\n**Response:** `{ verifications: <approval count> }`\n\n**Errors:**\n- 401 — unauthenticated\n- 403 — anonymous user or self-verification attempt (`{ error: 'self_verification' }`)\n- 404 — product not found (`{ error: 'product_not_found' }`)\n- 409 — product is not `PENDING_REVIEW` (`{ error: 'product_not_pending' }`)"
           },
           "response": []
         }

@@ -1,11 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 
-// ── labelExtractionService mock ──────────────────────────────────────────────
+// ── labelExtractionService / visionService mocks ─────────────────────────────
 const mockExtractFromText = vi.hoisted(() => vi.fn());
+const mockOcrLabelImage = vi.hoisted(() => vi.fn());
+// Controls whether the multer mock populates req.file for this test run.
+const injectFile = vi.hoisted(() => ({ buffer: null as Buffer | null }));
 
 vi.mock('../services/labelExtractionService.js', () => ({
   extractFromText: mockExtractFromText,
+}));
+
+vi.mock('../services/visionService.js', () => ({
+  ocrLabelImage: mockOcrLabelImage,
 }));
 
 // ── Auth / rate-limit stubs ──────────────────────────────────────────────────
@@ -53,9 +60,16 @@ vi.mock('../validators/productSubmissionValidator.js', async () => {
 });
 
 // ── multer stub (used by productRoutes) ──────────────────────────────────────
+// If `injectFile.buffer` is set before a request, the stub populates req.file
+// so image-path tests can exercise the controller without a real multipart parse.
 vi.mock('multer', () => {
   const multerFn = () => ({
-    single: () => (_req: any, _res: any, next: any) => next(),
+    single: () => (req: any, _res: any, next: any) => {
+      if (injectFile.buffer) {
+        req.file = { buffer: injectFile.buffer, mimetype: 'image/jpeg', originalname: 'label.jpg' };
+      }
+      next();
+    },
   });
   multerFn.memoryStorage = () => ({});
   multerFn.MulterError = class MulterError extends Error {
@@ -96,6 +110,8 @@ const FAKE_LABEL = {
 describe('POST /api/products/extract-label', () => {
   beforeEach(() => {
     mockExtractFromText.mockReset();
+    mockOcrLabelImage.mockReset();
+    injectFile.buffer = null;
     session.user = { id: 'user-1', email: 'test@test.com', isAnonymous: false };
   });
 
@@ -164,17 +180,35 @@ describe('POST /api/products/extract-label', () => {
     expect(res.body.error).toBe('raw_text_too_short');
   });
 
-  it('returns 501 for multipart/form-data requests', async () => {
+  it('returns 200 with extracted label when a multipart image file is provided', async () => {
+    injectFile.buffer = Buffer.from('fake-image-bytes');
+    mockOcrLabelImage.mockResolvedValue('raw OCR text from the label image');
+    mockExtractFromText.mockReturnValue(FAKE_LABEL);
+
     const res = await request(app)
       .post('/api/products/extract-label')
       .set('Authorization', 'Bearer token')
       .set('Content-Type', 'multipart/form-data; boundary=----boundary')
-      .send(
-        '------boundary\r\nContent-Disposition: form-data; name="rawText"\r\n\r\ntest\r\n------boundary--',
-      );
+      .send('------boundary--');
 
-    expect(res.status).toBe(501);
-    expect(res.body.error).toBe('image_path_not_implemented');
+    expect(res.status).toBe(200);
+    expect(res.body.energyKcal).toBe(295);
+    expect(res.body.confidence).toBe('high');
+    expect(mockOcrLabelImage).toHaveBeenCalledWith(injectFile.buffer);
+    expect(mockExtractFromText).toHaveBeenCalledWith('raw OCR text from the label image');
+  });
+
+  it('returns 400 when a multipart request has no image file', async () => {
+    // injectFile.buffer is null so the multer stub leaves req.file undefined.
+    const res = await request(app)
+      .post('/api/products/extract-label')
+      .set('Authorization', 'Bearer token')
+      .set('Content-Type', 'multipart/form-data; boundary=----boundary')
+      .send('------boundary--');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('image_required');
+    expect(mockOcrLabelImage).not.toHaveBeenCalled();
     expect(mockExtractFromText).not.toHaveBeenCalled();
   });
 

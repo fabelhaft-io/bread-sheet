@@ -43,7 +43,15 @@ router.post(  '/upload-image',
   handleUploadError,
 );
 
-router.post('/extract-label', requireAuth, apiLimiter, requireRegistered, extractLabel);
+router.post(
+  '/extract-label',
+  requireAuth,
+  apiLimiter,
+  requireRegistered,
+  upload.single('image'),
+  handleUploadError,
+  extractLabel,
+);
 
 // submitProduct only works with registered users
 router.post('/', requireAuth, apiLimiter, requireRegistered, submitProduct);

@@ -179,6 +179,7 @@ After any implementation, update all affected documentation files before finishi
 - **`README.md`** — update if setup steps, running instructions, or project structure change.
 - **`docs/architecture/`** — update the relevant file (`overview.md`, `frontend.md`, `backend.md`, `infrastructure.md`, or `data.md`) if the implementation changes anything in that file's scope.
 - **`docs/architecture-decision-records/`** — add a new ADR if the implementation introduces a significant architectural choice (new library, infrastructure pattern, auth approach, etc.).
+- **`docs/postman/breadsheet.postman_collection.json`** — add or update requests for any new or changed endpoints; update test scripts if response shapes change.
 - Any inline code comments or JSDoc on public interfaces that are now outdated.
 
 The documentation must reflect the code as shipped, not the code as it was before your change.
