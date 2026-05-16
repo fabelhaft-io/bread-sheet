@@ -5,7 +5,6 @@ import { apiLimiter } from './middlewares/rateLimit.js';
 import userRoutes from './routes/userRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import ratingRoutes from './routes/ratingRoutes.js';
-import itemRoutes from './routes/itemRoutes.js';
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:8081').split(',');
 
@@ -26,7 +25,6 @@ app.get('/', (_req, res) => {
 app.use('/api/users', userRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/ratings', ratingRoutes);
-app.use('/api/items', itemRoutes);
 
 // Global error handler (must be last)
 app.use(errorHandler);
