@@ -19,37 +19,37 @@ export interface ExtractedLabel {
 const ENERGY_KCAL_PATTERNS: RegExp[] = [
   // "1234 kJ / 295 kcal": skip the kJ value explicitly so [^\d\n]* between
   // the two numbers stays mutually exclusive with \d+ (no backtracking).
-  /^\s*(?:energy|energie|brennwert)[^\d\n]*\d+(?:[.,]\d+)?\s*k[Jj][^\d\n]*(\d+(?:[.,]\d+)?)\s*kcal/im,
+  /^[ \t]*(?:energy|energie|brennwert)[^\d\n]*\d+(?:[.,]\d+)?[ \t]*k[Jj][^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*kcal/im,
   // "295 kcal" (kcal-only, no leading kJ value)
-  /^\s*(?:energy|energie|brennwert)[^\d\n]*(\d+(?:[.,]\d+)?)\s*kcal/im,
+  /^[ \t]*(?:energy|energie|brennwert)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*kcal/im,
 ];
 
 const CARBS_PATTERNS: RegExp[] = [
   // [^\d\n]* is disjoint from \d+ so there is no ambiguous split to backtrack over.
-  /^\s*(?:carbohydrates?|kohlenhydrate|glucides?)[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^[ \t]*(?:carbohydrates?|kohlenhydrate|glucides?)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const FAT_PATTERNS: RegExp[] = [
-  /^\s*(?:total\s+)?fat\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*fett\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*matières?\s+grasses?\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^[ \t]*(?:total[ \t]+)?fat\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*fett\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*matières?[ \t]+grasses?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const PROTEIN_PATTERNS: RegExp[] = [
-  /^\s*proteine?\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^[ \t]*proteine?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   // 'ß' is not \w so \b doesn't apply — use a lookahead instead
-  /^\s*eiweiß(?=\s|[:\-]|$)[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*protéines?\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^[ \t]*eiweiß(?=[ \t]|[:\-]|$)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*protéines?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const SALT_PATTERNS: RegExp[] = [
-  /^\s*salt\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*salz\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*sel\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^[ \t]*salt\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*salz\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*sel\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const SERVING_SIZE_PATTERNS: RegExp[] = [
-  /(?:serving\s+size|portionsgröße|portion(?:ierung)?)\s*[:\-]?\s*(\d+(?:[.,]\d+)?\s*(?:g|ml|oz))/im,
+  /(?:serving[ \t]+size|portionsgröße|portion(?:ierung)?)[ \t]*[:\-]?[ \t]*(\d+(?:[.,]\d+)?[ \t]*(?:g|ml|oz))/im,
 ];
 
 function parseDecimal(s: string): number {
@@ -73,7 +73,7 @@ function matchString(text: string, patterns: RegExp[]): string | null {
 }
 
 function extractIngredients(text: string): string | null {
-  const HEADER_RE = /^\s*(?:ingredients?|zutaten)\s*[:\-]?\s*/im;
+  const HEADER_RE = /^[ \t]*(?:ingredients?|zutaten)[ \t]*[:\-]?[ \t]*/im;
   const match = HEADER_RE.exec(text);
   if (!match) return null;
 
