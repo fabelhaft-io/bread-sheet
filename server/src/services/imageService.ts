@@ -1,48 +1,46 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import sharp from "sharp";
-import { v4 as uuidv4 } from "uuid";
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import sharp from 'sharp';
+import { v4 as uuidv4 } from 'uuid';
 
-// The AWS SDK will automatically use the environment variables
-// (AWS_ENDPOINT_URL, AWS_REGION, etc.) set in docker-compose.yml
-// to connect to LocalStack instead of the real AWS.
 const s3Client = new S3Client({});
 
-const BUCKET_NAME = "breadsheet-images-local"; // This must match the bucket name in your terraform/s3.tf
+export type ImageKind = 'product' | 'label';
+
+const RESIZE_CONFIG: Record<ImageKind, { maxDim: number; quality: number }> = { // In-Sync with App Client!
+  product: { maxDim: 1200, quality: 85 },
+  label:   { maxDim: 1600, quality: 90 },
+};
 
 /**
- * Resizes an image buffer, uploads it to the S3 bucket, and returns the URL.
- * This function is designed to work with LocalStack for local development.
- *
- * @param imageBuffer The raw buffer of the image to process.
- * @returns The public URL of the uploaded image.
+ * Resize an image buffer to the kind-appropriate dimensions, convert to JPEG,
+ * upload to S3 under `submissions/<uuid>.jpg`, and return the public URL.
  */
-export async function resizeAndUploadImage(imageBuffer: Buffer): Promise<string> {
-  console.log("Resizing image...");
+export async function uploadImageToS3(
+  buffer: Buffer,
+  kind: ImageKind,
+): Promise<string> {
+  const bucket = process.env.S3_BUCKET_NAME;
+  if (!bucket) throw new Error('FATAL: S3_BUCKET_NAME environment variable is required.');
 
-  // 1. Resize the image using the 'sharp' library.
-  // You can define multiple standard sizes (e.g., thumbnail, medium, large).
-  const resizedBuffer = await sharp(imageBuffer)
-    .resize({ width: 800 }) // Example: resize to 800px width, maintaining aspect ratio
-    .jpeg({ quality: 85 })   // Convert to JPEG with 85% quality
+  const { maxDim, quality } = RESIZE_CONFIG[kind];
+
+  const resized = await sharp(buffer)
+    .resize({ width: maxDim, height: maxDim, fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality })
     .toBuffer();
 
-  const imageKey = `${uuidv4()}.jpg`;
-  console.log(`Uploading resized image to S3 with key: ${imageKey}`);
+  const key = `submissions/${uuidv4()}.jpg`;
 
-  // 2. Upload the resized buffer to S3.
-  const command = new PutObjectCommand({
-    Bucket: BUCKET_NAME,
-    Key: imageKey,
-    Body: resizedBuffer,
-    ContentType: "image/jpeg",
-  });
+  await s3Client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: resized,
+      ContentType: 'image/jpeg',
+    }),
+  );
 
-  await s3Client.send(command);
-
-  // 3. Construct and return the public URL for the object in LocalStack.
-  const endpointUrl = process.env.AWS_ENDPOINT_URL || `http://localhost:4566`;
-  const imageUrl = `${endpointUrl}/${BUCKET_NAME}/${imageKey}`;
-
-  console.log(`Image uploaded successfully: ${imageUrl}`);
-  return imageUrl;
+  const endpoint = process.env.AWS_ENDPOINT_URL;
+  if (!endpoint) throw new Error('FATAL: AWS_ENDPOINT_URL environment variable is required.');
+  return `${endpoint}/${bucket}/${key}`;
 }

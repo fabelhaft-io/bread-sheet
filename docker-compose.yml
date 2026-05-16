@@ -60,6 +60,7 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - localstack_data:/var/lib/localstack
+      - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-buckets.sh:ro
 
 volumes:
   db_data:

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { fileTypeFromBuffer } from 'file-type';
 import prisma from '../db.js';
 import {
   createSubmittedProduct,
@@ -7,12 +8,22 @@ import {
   ProductPendingByAnotherUserError,
   ProductPreviouslyRejectedError,
 } from '../services/productService.js';
+import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
 import logger from '../logger.js';
-import {AuthRequest} from "../middlewares/authMiddleware.js";
+import { AuthRequest } from '../middlewares/authMiddleware.js';
 import {
   SubmissionValidationError,
   validateProductSubmission,
 } from '../validators/productSubmissionValidator.js';
+
+const SUPPORTED_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/webp',
+  'image/png',
+  'image/gif',
+  'image/tiff',
+  'image/avif',
+]);
 
 // Barcodes are EAN-8, UPC-A (12 digits), or EAN-13 — all numeric.
 const BARCODE_RE = /^\d{8,13}$/;
@@ -46,6 +57,35 @@ export const getProductByBarcode = async (req: Request, res: Response, next: Nex
   } catch (error) {
     logger.error(error);
     next(error);
+  }
+};
+
+// POST /api/products/upload-image
+export const uploadImage = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'image_required' });
+    }
+
+    const kind = req.body.kind as string;
+    if (kind !== 'product' && kind !== 'label') {
+      return res.status(400).json({ error: 'invalid_kind' });
+    }
+
+    // Detect format from magic bytes — don't trust the client Content-Type.
+    const detected = await fileTypeFromBuffer(req.file.buffer);
+    if (!detected || !SUPPORTED_MIME_TYPES.has(detected.mime)) {
+      return res.status(415).json({ error: 'unsupported_format' });
+    }
+
+    const url = await uploadImageToS3(req.file.buffer, kind as ImageKind);
+    res.json({ url });
+  } catch (err) {
+    next(err);
   }
 };
 
