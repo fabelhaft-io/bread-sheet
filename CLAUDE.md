@@ -82,7 +82,7 @@ Keep business logic in these modules — route files stay UI-only.
 **Middleware stack** (in order in `app.ts`):
 1. Rate limiting: `apiLimiter` (100 req/15min) on `/api/*`, `authLimiter` (10 req/hr) on auth endpoints
 2. `requireAuth` — verifies Supabase Bearer token, injects `user` into `req` (including `isAnonymous` flag derived from the JWT `is_anonymous` claim)
-3. `requireRegistered` — composable second-layer guard for contribution routes; rejects anonymous sessions with `403 { error: 'Registration required' }`. Applied after `requireAuth` on `POST /api/products` (and, when shipped, on `POST /api/products/extract-label` and the verify endpoints).
+3. `requireRegistered` — composable second-layer guard for contribution routes; rejects anonymous sessions with `403 { error: 'Registration required' }`. Applied after `requireAuth` on `POST /api/products`, `POST /api/products/extract-label`, and both `POST`/`DELETE /api/products/:barcode/verify`.
 4. Controllers handle request/response
 5. `errorHandler` — centralized error middleware
 
@@ -92,7 +92,7 @@ Keep business logic in these modules — route files stay UI-only.
 
 ### Data Model (Prisma schema at `server/prisma/schema.prisma`)
 
-Core models: `User`, `Product` (barcode/brand/image), `Rating` (taste score 0–10 in 0.5 steps + optional comment), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `Item`.
+Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`), `Rating` (taste score 0–10 in 0.5 steps + optional comment), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED).
 
 ### Auth Flow
 

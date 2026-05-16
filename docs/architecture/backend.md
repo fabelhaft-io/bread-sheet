@@ -58,7 +58,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?` | One rating per user per product |
 | `Group` | `id`, `name`, `inviteCode` | Invite code is unique |
 | `GroupMember` | `userId`, `groupId`, `role` | `role`: `ADMIN \| MEMBER` |
-| `ProductVerification` | `userId`, `barcode`, `createdAt` | Composite PK `(userId, barcode)`; 2 needed to promote to `VERIFIED` |
+| `ProductVerification` | `productId`, `userId`, `vote`, `createdAt` | `@@unique([productId, userId])`; 2 net-approvals flip to `VERIFIED`; 2 net-rejections flip to `REJECTED` |
 | `ProductEdit` | `id`, `barcode`, `authorUserId`, `originalValues` (JSON), `proposedChanges` (JSON), `status` | `status`: `PENDING \| APPLIED \| REJECTED \| EXPIRED` |
 | `ProductEditVote` | `editId`, `userId`, `vote` | `vote`: `APPROVE \| REJECT`; composite unique `(editId, userId)` |
 | `ProductEditDismissal` | `editId`, `userId` | Persists reviewer dismissals server-side |
@@ -73,13 +73,13 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/products/:barcode` | Any | Fetch product (Open Food Facts fallback on miss) |
+| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. |
 | `POST` | `/products/upload-image` | Auth | Multipart image → sharp resize → S3 upload; returns `{ url }` |
 | `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text (T5) or label image (T6, 501) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
 | `PATCH` | `/products/:barcode` | Registered | Correct a `PENDING_REVIEW` product (resets verifications) |
-| `POST` | `/products/:barcode/verify` | Registered, non-submitter | Cast approval verification |
-| `DELETE` | `/products/:barcode/verify` | Registered | Retract own verification |
+| `POST` | `/products/:barcode/verify` | Registered, non-submitter | Cast `APPROVE` vote; 2 net-approvals → `VERIFIED` |
+| `DELETE` | `/products/:barcode/verify` | Registered, non-submitter | Cast `REJECT` vote; 2 net-rejections → `REJECTED` |
 | `POST` | `/products/:barcode/edits` | Registered | Propose edit to `VERIFIED` product |
 | `GET` | `/products/:barcode/edits/pending` | Registered | Fetch pending edit + diff for reviewer |
 | `POST` | `/products/edits/:editId/votes` | Registered, non-author | Vote `APPROVE` or `REJECT` on an edit |
@@ -138,6 +138,21 @@ Submission flow for the Add Product screen (P5-002/P5-003):
 A Prisma `P2002` (unique-violation race on `barcode`) is caught at the service boundary and translated to `ProductPendingByAnotherUserError` so the controller's 409 mapping handles it uniformly.
 
 The 422 body shape (`{ error, reason, field }`) is a wire contract with the client — the Add Product form keys field-level inline errors off `field`.
+
+---
+
+## Peer Verification (`POST` / `DELETE /api/products/:barcode/verify`)
+
+Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerificationService.ts`, which runs inside a single Prisma transaction:
+
+1. **Fetch** the `Product` by barcode — `404` if not found.
+2. **Guard** — `409` if status is not `PENDING_REVIEW`; `403` if the caller is the original submitter.
+3. **Upsert** a `ProductVerification` row (`productId_userId` compound key) — a caller who already voted simply changes their vote.
+4. **Recount** all votes for the product.
+5. **Threshold flip** — if approvals ≥ 2 and approvals > rejections → `VERIFIED`; if rejections ≥ 2 and rejections > approvals → `REJECTED`. Otherwise status unchanged.
+6. Return `{ verifications: <approval count> }`.
+
+`DELETE /products/:barcode/verify` casts a `REJECT` vote (it does **not** retract a prior approval — it is an overloaded REJECT channel).
 
 ---
 

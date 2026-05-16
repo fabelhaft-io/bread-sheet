@@ -187,7 +187,7 @@ User History
 - [ ] Product display photo uploads to S3; URL is included in the submission payload. *(client sends to `POST /api/products/upload-image`; backend endpoint pending P5-003)*
 - [ ] On successful submission, the user is navigated to the product screen showing the PENDING_REVIEW state and a confirmation toast. *(client navigates; backend `POST /api/products` shipped via P5-003/T3 — full end-to-end still depends on P5-003/T4 image upload)*
 - [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(client handles 422 — server-side plausibility checks pending P5-003)*
-- [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx` shipped; depends on `unverified` + `submittedByUserId` in GET response — pending P5-003)*
+- [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx` shipped; `unverified` + `submittedByUserId` in GET response shipped in P5-003/T8)*
 - [x] The submitter of a product does not see the reviewer banner for their own submission.
 
 **Implementation status (client skeleton, 2026-04-17):**
@@ -195,7 +195,7 @@ User History
 - Business logic lives in `features/products/` (`api.ts`, `extract.ts`, `ocr.ts`, `image-picker.ts`, `image-processing.ts`, `constants.ts`, `types.ts`) — screens stay UI-only per the `features/` convention.
 - `MIN_OCR_LENGTH = 50` is exported from `features/products/constants.ts`; the backend (P5-003) must reference the same value.
 - Native modules (`@react-native-ml-kit/text-recognition`, `expo-image-picker`, `expo-image-manipulator`) are consumed via guarded `require()` so jest-expo tests pass without them. The user must install them and rebuild the native client before the full flow works end-to-end.
-- `POST /api/products` — shipped (P5-003/T3). `POST /api/products/upload-image` — shipped (P5-003/T4). `POST /api/products/extract-label` text path — shipped (P5-003/T5). Image path returns `501` (pending T6). `POST/DELETE /api/products/:barcode/verify` — pending T7.
+- `POST /api/products` — shipped (P5-003/T3). `POST /api/products/upload-image` — shipped (P5-003/T4). `POST /api/products/extract-label` text path — shipped (P5-003/T5). Image path returns `501` (pending T6). `POST/DELETE /api/products/:barcode/verify` — shipped (P5-003/T7). `GET /api/products/:barcode` `unverified`/`submittedByUserId`/`submission` augmentation — shipped (P5-003/T8).
 
 ### [TICKET-P5-003] Backend: Label Extraction, Submission, & Peer Verification
 **Goal:** Provide three backend capabilities: (1) structure nutritional data from on-device OCR text (primary) or a label image (fallback); (2) validate and normalise incoming images server-side; (3) accept product submissions from registered users and gate promotion to `VERIFIED` behind peer review by a second registered user.
@@ -257,10 +257,10 @@ User History
 - [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
 - [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(deferred — T3 ships schema validation only; AI plausibility deferred to a follow-up ticket)*
 - [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — see above)*
-- [ ] `POST /products/:barcode/verify` records a verification from a registered non-submitter; returns `403` if the caller is the submitter.
-- [ ] After 2 distinct verifications, the product is automatically promoted to `VERIFIED` and the OFF sync is enqueued.
-- [ ] `DELETE /products/:barcode/verify` removes the caller's verification if the threshold has not yet been reached.
-- [ ] `PENDING_REVIEW` products return `unverified: true` in the response and are hidden from anonymous users.
+- [x] `POST /products/:barcode/verify` casts an `APPROVE` vote from a registered non-submitter; returns `403` if the caller is the submitter. *(P5-003/T7)*
+- [ ] After 2 net-approvals the product is automatically promoted to `VERIFIED`; OFF sync is enqueued. *(threshold flip shipped in T7; OFF sync enqueue deferred to P5-004)*
+- [x] `DELETE /products/:barcode/verify` casts a `REJECT` vote (non-submitter only); 2 net-rejections flip status to `REJECTED`. *(P5-003/T7 — overloaded REJECT channel, not a retraction)*
+- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8)*
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
 ### [TICKET-P5-004] Open Food Facts Contribution Sync

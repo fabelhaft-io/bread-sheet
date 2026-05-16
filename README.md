@@ -95,6 +95,8 @@ In IntelliJ / WebStorm you can open a WSL2 terminal directly:
         DATABASE_URL="postgresql://admin:password@localhost:5432/breadsheet"
         SUPABASE_URL=https://<your-project-ref>.supabase.co
         SUPABASE_PUBLISHABLE_DEFAULT_KEY=<your-anon-key>
+        VISION_MODE=mock                              # 'mock' | 'live' — required, no default
+        # GOOGLE_APPLICATION_CREDENTIALS=/path/to/wif-config.json  # required for VISION_MODE=live
         ```
 
     * Create a `./bread-sheet-app/.env` file:
