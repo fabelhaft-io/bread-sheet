@@ -17,31 +17,35 @@ export interface ExtractedLabel {
 // matching the parent-nutrient patterns.
 
 const ENERGY_KCAL_PATTERNS: RegExp[] = [
-  // Lazy .*? skips a leading kJ value when the format is "1234 kJ / 295 kcal"
-  /^\s*(?:energy|energie|brennwert).*?(\d+(?:[.,]\d+)?)\s*kcal/im,
+  // "1234 kJ / 295 kcal": skip the kJ value explicitly so [^\d\n]* between
+  // the two numbers stays mutually exclusive with \d+ (no backtracking).
+  /^\s*(?:energy|energie|brennwert)[^\d\n]*\d+(?:[.,]\d+)?\s*k[Jj][^\d\n]*(\d+(?:[.,]\d+)?)\s*kcal/im,
+  // "295 kcal" (kcal-only, no leading kJ value)
+  /^\s*(?:energy|energie|brennwert)[^\d\n]*(\d+(?:[.,]\d+)?)\s*kcal/im,
 ];
 
 const CARBS_PATTERNS: RegExp[] = [
-  /^\s*(?:carbohydrates?|kohlenhydrate|glucides?).*?(\d+(?:[.,]\d+)?)\s*g\b/im,
+  // [^\d\n]* is disjoint from \d+ so there is no ambiguous split to backtrack over.
+  /^\s*(?:carbohydrates?|kohlenhydrate|glucides?)[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
 ];
 
 const FAT_PATTERNS: RegExp[] = [
-  /^\s*(?:total\s+)?fat\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*fett\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*matières?\s+grasses?\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*(?:total\s+)?fat\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*fett\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*matières?\s+grasses?\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
 ];
 
 const PROTEIN_PATTERNS: RegExp[] = [
-  /^\s*proteine?\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*proteine?\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
   // 'ß' is not \w so \b doesn't apply — use a lookahead instead
-  /^\s*eiweiß(?=\s|[:\-]|$).*?(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*protéines?\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*eiweiß(?=\s|[:\-]|$)[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*protéines?\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
 ];
 
 const SALT_PATTERNS: RegExp[] = [
-  /^\s*salt\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*salz\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
-  /^\s*sel\b.*?(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*salt\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*salz\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
+  /^\s*sel\b[^\d\n]*(\d+(?:[.,]\d+)?)\s*g\b/im,
 ];
 
 const SERVING_SIZE_PATTERNS: RegExp[] = [
