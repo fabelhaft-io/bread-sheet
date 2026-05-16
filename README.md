@@ -129,6 +129,39 @@ In IntelliJ / WebStorm you can open a WSL2 terminal directly:
     * **Server:** Inside `/server`: `npm run db:deploy` if database changed or needs initialization, afterwards `npm run dev`
     * **Client:** `npx expo start` (inside `/bread-sheet-app`)
 
+### Using Google Cloud Vision locally (`VISION_MODE=live`)
+
+By default `VISION_MODE=mock` is set in `server/.env`, which returns a fixed sample response for any label image — no GCP credentials needed. To test against the real Vision API:
+
+1. **Install the Google Cloud SDK** — [cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install)
+
+2. **Create local Application Default Credentials (ADC)**
+    ```bash
+    gcloud auth application-default login
+    ```
+    A browser window opens; authenticate with your Google account. Credentials are written to `~/.config/gcloud/application_default_credentials.json` and picked up automatically by the server — no `GOOGLE_APPLICATION_CREDENTIALS` env var needed locally.
+
+3. **Enable the Vision API on your GCP project**
+    ```bash
+    gcloud services enable vision.googleapis.com --project=YOUR_PROJECT_ID
+    ```
+
+4. **Grant your account the Vision User role**
+    ```bash
+    gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+      --member="user:your-email@example.com" \
+      --role="roles/cloudvision.user"
+    ```
+
+5. **Switch the mode in `server/.env`**
+    ```env
+    VISION_MODE=live
+    ```
+
+> **Production note:** In production the server pod uses Workload Identity Federation (WIF). `GOOGLE_APPLICATION_CREDENTIALS` is set to a WIF credential config file mounted via a Kubernetes ConfigMap — no service account JSON key is stored anywhere.
+
+---
+
 ### Infrastructure (Terraform)
 
 To deploy the infrastructure locally to LocalStack:
