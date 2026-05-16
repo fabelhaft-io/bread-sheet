@@ -159,6 +159,8 @@ The 422 body shape (`{ error, reason, field }`) is a wire contract with the clie
 | `{ rawText: string }` (≥ `MIN_OCR_LENGTH = 50` chars) | Text path — hand-rolled regex parser (`labelExtractionService.ts`); English + German patterns | **Shipped (T5)** |
 | Multipart image | Vision path — Google Cloud Vision `documentTextDetection`, then reuses the same parser | **Pending (T6)** — returns `501` until implemented |
 
+**Authentication (`live` mode):** Uses Application Default Credentials (ADC) — no service account JSON key. In production the pod's `GOOGLE_APPLICATION_CREDENTIALS` env var points to a Workload Identity Federation credential config file (`type: external_account`) mounted from a ConfigMap. The Google auth library exchanges the pod's IRSA/OIDC token for a short-lived GCP access token automatically. For local `live` testing run `gcloud auth application-default login`.
+
 **Parser design (`labelExtractionService.ts`):**
 - All patterns use the `m` flag so `^` anchors to the start of each line, preventing sub-entry rows ("of which saturates", "davon Zucker") from matching the parent-nutrient patterns.
 - Decimal separators: both `.` (English) and `,` (German/European) are normalised to `.` before parsing.

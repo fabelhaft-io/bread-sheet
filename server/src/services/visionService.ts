@@ -11,18 +11,13 @@ function getMode(): 'mock' | 'live' | 'tesseract' {
 }
 
 // Lazily constructed and memoized — never instantiated in mock/tesseract mode.
+// Auth is handled entirely by ADC: in prod GOOGLE_APPLICATION_CREDENTIALS points
+// to a Workload Identity Federation credential config mounted via ConfigMap.
 let _client: ImageAnnotatorClient | null = null;
 
 function getVisionClient(): ImageAnnotatorClient {
   if (_client) return _client;
-  const credJson = process.env.GOOGLE_VISION_CREDENTIALS_JSON;
-  if (credJson) {
-    const credentials = JSON.parse(credJson) as Record<string, unknown>;
-    _client = new ImageAnnotatorClient({ credentials });
-  } else {
-    // Falls back to GOOGLE_APPLICATION_CREDENTIALS env var (ADC)
-    _client = new ImageAnnotatorClient();
-  }
+  _client = new ImageAnnotatorClient();
   return _client;
 }
 

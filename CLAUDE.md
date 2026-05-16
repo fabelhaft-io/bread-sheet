@@ -131,6 +131,11 @@ NODE_ENV=development
 DATABASE_URL="postgresql://admin:password@localhost:5432/breadsheet"
 SUPABASE_URL=...
 SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
+
+# Vision / OCR
+VISION_MODE=mock                          # mock | tesseract | live  (no default — must be explicit)
+# For live mode locally: run `gcloud auth application-default login` (ADC)
+# In prod: GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/wif-credentials.json (mounted ConfigMap)
 ```
 
 **Frontend (`bread-sheet-app/.env` or `app.config.js`):**
