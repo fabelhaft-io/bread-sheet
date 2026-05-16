@@ -122,8 +122,8 @@ describe('GET /api/products/:barcode', () => {
     expect(res.body.message).toMatch(/invalid barcode/i);
   });
 
-  it('returns the cached product from DB without calling OFF', async () => {
-    const product = { id: 1, barcode: VALID_BARCODE, name: 'Sourdough' };
+  it('returns the cached VERIFIED product with unverified: false', async () => {
+    const product = { id: 1, barcode: VALID_BARCODE, name: 'Sourdough', status: ProductStatus.VERIFIED };
     mockFindUnique.mockResolvedValue(product);
 
     const res = await request(app)
@@ -131,11 +131,11 @@ describe('GET /api/products/:barcode', () => {
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(product);
+    expect(res.body).toEqual({ ...product, unverified: false });
     expect(mockFetchFromOFF).not.toHaveBeenCalled();
   });
 
-  it('fetches from OFF, caches in DB, and returns the product', async () => {
+  it('fetches from OFF, caches in DB, and returns the product with unverified: false', async () => {
     const offData = {
       barcode: VALID_BARCODE,
       name: 'Ciabatta',
@@ -143,7 +143,7 @@ describe('GET /api/products/:barcode', () => {
       image: null,
       description: null,
     };
-    const saved = { id: 2, ...offData };
+    const saved = { id: 2, ...offData, status: ProductStatus.VERIFIED };
     mockFindUnique.mockResolvedValue(null);
     mockFetchFromOFF.mockResolvedValue(offData);
     mockCreate.mockResolvedValue(saved);
@@ -153,8 +153,89 @@ describe('GET /api/products/:barcode', () => {
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(saved);
+    expect(res.body).toEqual({ ...saved, unverified: false });
     expect(mockCreate).toHaveBeenCalledWith({ data: offData });
+  });
+
+  it('returns unverified: true and a submission block for a PENDING_REVIEW product', async () => {
+    const product = {
+      id: 'p1',
+      barcode: VALID_BARCODE,
+      name: 'Mystery Bread',
+      brand: 'Artisan',
+      image: 'https://s3/img.jpg',
+      description: null,
+      status: ProductStatus.PENDING_REVIEW,
+      submittedByUserId: 'user-42',
+      genericName: 'Bread',
+      energyKcal: 250,
+      carbohydrates: 45,
+      fat: 3,
+      protein: 8,
+      salt: 1,
+      servingSize: '50g',
+      ingredients: 'flour, water',
+    };
+    mockFindUnique.mockResolvedValue(product);
+
+    const res = await request(app)
+      .get(`/api/products/${VALID_BARCODE}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.unverified).toBe(true);
+    expect(res.body.submittedByUserId).toBe('user-42');
+    expect(res.body.submission).toMatchObject({
+      name: 'Mystery Bread',
+      brand: 'Artisan',
+      genericName: 'Bread',
+      energyKcal: 250,
+    });
+    expect(res.body.submission).not.toHaveProperty('productImageUrl');
+  });
+
+  it('returns 404 for a PENDING_REVIEW product when the caller is anonymous', async () => {
+    session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
+    mockFindUnique.mockResolvedValue({
+      id: 'p1',
+      barcode: VALID_BARCODE,
+      name: 'Mystery Bread',
+      status: ProductStatus.PENDING_REVIEW,
+      submittedByUserId: 'user-42',
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${VALID_BARCODE}`)
+      .set('Authorization', 'Bearer anon-token');
+
+    expect(res.status).toBe(404);
+    expect(mockFetchFromOFF).not.toHaveBeenCalled();
+  });
+
+  it('returns unverified: true without a submission block for a REJECTED product', async () => {
+    mockFindUnique.mockResolvedValue({
+      id: 'p1',
+      barcode: VALID_BARCODE,
+      name: 'Bad Bread',
+      status: ProductStatus.REJECTED,
+      submittedByUserId: 'user-42',
+      genericName: null,
+      energyKcal: null,
+      carbohydrates: null,
+      fat: null,
+      protein: null,
+      salt: null,
+      servingSize: null,
+      ingredients: null,
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${VALID_BARCODE}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.unverified).toBe(true);
+    expect(res.body.submission).toBeDefined();
   });
 
   it('returns 404 when OFF does not recognise the barcode', async () => {

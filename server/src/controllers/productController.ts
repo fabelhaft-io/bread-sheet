@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 import { fileTypeFromBuffer } from 'file-type';
 import prisma from '../db.js';
 import {
@@ -21,7 +21,7 @@ import {
   SubmissionValidationError,
   validateProductSubmission,
 } from '../validators/productSubmissionValidator.js';
-import { VerificationVote } from '../generated/prisma_client/enums.js';
+import { ProductStatus, VerificationVote } from '../generated/prisma_client/enums.js';
 
 const SUPPORTED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -36,7 +36,7 @@ const SUPPORTED_MIME_TYPES = new Set([
 const BARCODE_RE = /^\d{8,13}$/;
 
 // GET /api/products/:barcode
-export const getProductByBarcode = async (req: Request, res: Response, next: NextFunction) => {
+export const getProductByBarcode = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const barcode = req.params.barcode as string;
 
@@ -47,11 +47,34 @@ export const getProductByBarcode = async (req: Request, res: Response, next: Nex
     // 1. Check local cache first
     const cached = await prisma.product.findUnique({ where: { barcode } });
     if (cached) {
+      // PENDING_REVIEW products are invisible to anonymous callers
+      if (cached.status === ProductStatus.PENDING_REVIEW && req.user?.isAnonymous) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+
       logger.info(`Product cache hit: ${barcode}`);
-      return res.json(cached);
+      const unverified = cached.status !== ProductStatus.VERIFIED;
+      return res.json({
+        ...cached,
+        unverified,
+        ...(unverified && {
+          submission: {
+            name: cached.name,
+            brand: cached.brand,
+            genericName: cached.genericName,
+            energyKcal: cached.energyKcal,
+            carbohydrates: cached.carbohydrates,
+            fat: cached.fat,
+            protein: cached.protein,
+            salt: cached.salt,
+            servingSize: cached.servingSize,
+            ingredients: cached.ingredients,
+          },
+        }),
+      });
     }
 
-    // 2. Fetch from Open Food Facts
+    // 2. Fetch from Open Food Facts (always VERIFIED — came from the curated OFF catalogue)
     const data = await fetchFromOpenFoodFacts(barcode);
     if (!data) {
       return res.status(404).json({ message: 'Product not found' });
@@ -60,7 +83,7 @@ export const getProductByBarcode = async (req: Request, res: Response, next: Nex
     // 3. Cache in DB and return
     const product = await prisma.product.create({ data });
     logger.info(`Product fetched and cached: ${barcode}`);
-    res.json(product);
+    res.json({ ...product, unverified: false });
   } catch (error) {
     logger.error(error);
     next(error);
