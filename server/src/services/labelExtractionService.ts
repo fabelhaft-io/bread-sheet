@@ -49,7 +49,7 @@ const SALT_PATTERNS: RegExp[] = [
 ];
 
 const SERVING_SIZE_PATTERNS: RegExp[] = [
-  /(?:serving[ \t]+size|portionsgröße|portion(?:ierung)?)[ \t]*[:\-]?[ \t]*(\d+(?:[.,]\d+)?[ \t]*(?:g|ml|oz))/im,
+  /(?:serving[ \t]+size|portionsgröße|portion(?:ierung)?)[ \t]*(?:[:\-][ \t]*)?(\d+(?:[.,]\d+)?[ \t]*(?:g|ml|oz))/im,
 ];
 
 function parseDecimal(s: string): number {
@@ -79,7 +79,7 @@ function extractIngredients(text: string): string | null {
 
   const rest = text.slice(match.index + match[0].length);
 
-  const STOP_RE = /\n\s*\n|\n\s*(?:allergen|may contain|kann enthalten|nutritional|nährwert)/im;
+  const STOP_RE = /\n[ \t]*\n|\n[ \t]*(?:allergen|may contain|kann enthalten|nutritional|nährwert)/im;
   const stopMatch = STOP_RE.exec(rest);
   const raw = stopMatch ? rest.slice(0, stopMatch.index) : rest.slice(0, 500);
 

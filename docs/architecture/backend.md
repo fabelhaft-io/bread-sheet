@@ -170,6 +170,18 @@ Response always includes a `confidence: 'low' | 'medium' | 'high'` field. The cl
 
 ---
 
+## Environment Variable Policy
+
+**No inline defaults for runtime-behaviour variables.** All environment variables that control runtime behaviour must be read and validated in `server/src/configs/config.ts` at startup. If a required variable is absent or has an unexpected value the process must throw a descriptive error — never fall back silently to a local-dev default in application code.
+
+**Mode-style variables** (e.g. `VISION_MODE`) must be validated against an explicit allowlist (`'mock' | 'live' | 'tesseract'`). Any value outside the allowlist — including an absent value — is a startup error.
+
+**Local-dev values** belong in `.env` (git-ignored), not hardcoded in source.
+
+This rule exists because silent defaults produce invisible misconfiguration: a server that assumes `mock` mode when `VISION_MODE` is unset will return fixture data in production without any log or alert.
+
+---
+
 ## Background Jobs
 
 Runs as node-cron jobs inside the server process:

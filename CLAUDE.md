@@ -108,6 +108,20 @@ Local dev uses Docker Compose:
 
 Production runs on EKS (Terraform-provisioned) with ArgoCD for GitOps. Database migrations run as a Kubernetes Job or initContainer before the server pod starts.
 
+## Coding Conventions
+
+### Environment Variables — Fail Fast, No Inline Defaults
+
+Never use inline fallback values for environment variables that configure runtime behaviour (e.g. `process.env.VISION_MODE ?? 'mock'`). If a required variable is absent or invalid the process must throw at startup, not silently assume a local-dev default.
+
+**Why:** Silent defaults mask misconfiguration. A server that boots quietly in `mock` mode when `VISION_MODE` is unset will return stale fixture data in production without any log or error — the bug is invisible until someone notices wrong results. Failing fast surfaces the missing config immediately, at the place where it is owned.
+
+**How to apply:**
+- Read and validate all env vars in `server/src/configs/config.ts` at startup.
+- Throw a descriptive error if a required var is absent or has an unexpected value.
+- Mode-style vars (e.g. `VISION_MODE`) must be in an explicit allowlist; anything outside it is an error, not a fallback.
+- Local dev values belong in `.env` files (which are git-ignored), never hardcoded in source.
+
 ## Key Environment Variables
 
 **Server (`server/.env`):**
