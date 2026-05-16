@@ -185,7 +185,7 @@ User History
 - [x] All three fill modes work correctly (manual, pre-fill+edit, accept-all).
 - [x] Required-field validation prevents submission of incomplete data.
 - [ ] Product display photo uploads to S3; URL is included in the submission payload. *(client sends to `POST /api/products/upload-image`; backend endpoint pending P5-003)*
-- [ ] On successful submission, the user is navigated to the product screen showing the PENDING_REVIEW state and a confirmation toast. *(client navigates; backend `POST /api/products` pending P5-003)*
+- [ ] On successful submission, the user is navigated to the product screen showing the PENDING_REVIEW state and a confirmation toast. *(client navigates; backend `POST /api/products` shipped via P5-003/T3 — full end-to-end still depends on P5-003/T4 image upload)*
 - [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(client handles 422 — server-side plausibility checks pending P5-003)*
 - [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx` shipped; depends on `unverified` + `submittedByUserId` in GET response — pending P5-003)*
 - [x] The submitter of a product does not see the reviewer banner for their own submission.
@@ -245,7 +245,7 @@ User History
 - Add `plausibilityFlag: Boolean` to `Product` (default `false`) — set when AI considers data unusual but acceptable.
 - Add new model `ProductVerification`: `userId`, `barcode`, `createdAt` — composite unique key on `(userId, barcode)` to prevent duplicate votes.
 **Acceptance Criteria:**
-- [ ] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403`.
+- [ ] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403`. *(T3: `POST /products` shipped; extract-label pending T5/T6)*
 - [ ] Images larger than 8 MB are rejected with `413` before any processing occurs.
 - [ ] Images in unexpected formats are converted to JPEG via `sharp`; unsupported formats return `415`.
 - [ ] Format detection uses magic bytes, not `Content-Type`.
@@ -254,14 +254,14 @@ User History
 - [ ] `POST /products/extract-label` accepts raw OCR text and returns structured nutritional fields via Claude text API.
 - [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Claude vision inference.
 - [ ] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present.
-- [ ] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`.
-- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason.
-- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted.
+- [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
+- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(deferred — T3 ships schema validation only; AI plausibility deferred to a follow-up ticket)*
+- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — see above)*
 - [ ] `POST /products/:barcode/verify` records a verification from a registered non-submitter; returns `403` if the caller is the submitter.
 - [ ] After 2 distinct verifications, the product is automatically promoted to `VERIFIED` and the OFF sync is enqueued.
 - [ ] `DELETE /products/:barcode/verify` removes the caller's verification if the threshold has not yet been reached.
 - [ ] `PENDING_REVIEW` products return `unverified: true` in the response and are hidden from anonymous users.
-- [ ] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products.
+- [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
 ### [TICKET-P5-004] Open Food Facts Contribution Sync
 **Goal:** Automatically contribute user-verified product data back to the Open Food Facts (OFF) project using their write API, closing the loop between local submissions and the upstream open dataset.

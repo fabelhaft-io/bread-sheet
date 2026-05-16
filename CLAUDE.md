@@ -81,9 +81,10 @@ Keep business logic in these modules — route files stay UI-only.
 
 **Middleware stack** (in order in `app.ts`):
 1. Rate limiting: `apiLimiter` (100 req/15min) on `/api/*`, `authLimiter` (10 req/hr) on auth endpoints
-2. `requireAuth` — verifies Supabase Bearer token, injects `user` into `req`
-3. Controllers handle request/response
-4. `errorHandler` — centralized error middleware
+2. `requireAuth` — verifies Supabase Bearer token, injects `user` into `req` (including `isAnonymous` flag derived from the JWT `is_anonymous` claim)
+3. `requireRegistered` — composable second-layer guard for contribution routes; rejects anonymous sessions with `403 { error: 'Registration required' }`. Applied after `requireAuth` on `POST /api/products` (and, when shipped, on `POST /api/products/extract-label` and the verify endpoints).
+4. Controllers handle request/response
+5. `errorHandler` — centralized error middleware
 
 **Prisma client** is generated to a custom location: `src/generated/prisma_client`. Always import from there, not from `@prisma/client` directly.
 

@@ -112,6 +112,34 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 ---
 
+## Product Submission (`POST /api/products`)
+
+Submission flow for the Add Product screen (P5-002/P5-003):
+
+| Layer | File | Responsibility |
+|-------|------|----------------|
+| Route | `routes/productRoutes.ts` | `apiLimiter` → `requireAuth` → `requireRegistered` → `submitProduct` |
+| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageUrl` must contain `/submissions/`. Throws `SubmissionValidationError(field, message)`. AI plausibility is deferred to a follow-up ticket. |
+| Controller | `controllers/productController.ts` | Maps validator errors → `422 { error, reason, field }`; maps service errors → `409 { error: <code> }`; otherwise delegates and returns `201` (created) or `200` (updated own submission). |
+| Service | `services/productService.ts#createSubmittedProduct` | Single Prisma transaction encapsulating the resubmission branches below. |
+
+**Resubmission semantics** (`createSubmittedProduct`, keyed on `barcode`):
+
+| Existing row | Caller | Outcome |
+|--------------|--------|---------|
+| _none_ | — | `CREATE` → `PENDING_REVIEW`, `submittedByUserId = caller` (201) |
+| `VERIFIED` | any | `ProductAlreadyVerifiedError` → 409 `product_already_verified` |
+| `REJECTED` | original submitter | `ProductPreviouslyRejectedError` → 409 `product_previously_rejected` |
+| `REJECTED` | different user | `UPDATE` in place (preserves `Product.id` + ratings), `submittedByUserId = caller`, status → `PENDING_REVIEW`, prior `ProductVerification` rows deleted (200) |
+| `PENDING_REVIEW` | different user | `ProductPendingByAnotherUserError` → 409 `submission_pending` |
+| `PENDING_REVIEW` | same submitter | `UPDATE` fields, prior `ProductVerification` rows deleted, submitter unchanged (200) |
+
+A Prisma `P2002` (unique-violation race on `barcode`) is caught at the service boundary and translated to `ProductPendingByAnotherUserError` so the controller's 409 mapping handles it uniformly.
+
+The 422 body shape (`{ error, reason, field }`) is a wire contract with the client — the Add Product form keys field-level inline errors off `field`.
+
+---
+
 ## Image Processing
 
 1. **API (synchronous):** Validates raw upload (size gate: 8 MB max via `multer`; format detection via magic bytes). Converts non-JPEG/WebP to JPEG using `sharp` in `imageService.ts`. Rejects unsupported formats (`415`).
