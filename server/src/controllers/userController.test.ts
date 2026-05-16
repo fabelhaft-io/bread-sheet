@@ -16,6 +16,7 @@ vi.mock('../middlewares/authMiddleware.js', () => ({
     req.user = { id: 'user-1', email: 'test@test.com' };
     next();
   },
+  requireRegistered: (_req: any, _res: any, next: any) => next(),
 }));
 
 vi.mock('../middlewares/rateLimit.js', () => ({

@@ -3,7 +3,7 @@ import {
   requireAuth,
   requireRegistered,
 } from '../middlewares/authMiddleware.js';
-import { userLimiter } from '../middlewares/rateLimit.js';
+import { apiLimiter, userLimiter } from '../middlewares/rateLimit.js';
 import {
   getProductByBarcode,
   submitProduct,
@@ -12,6 +12,7 @@ import {
 const router = Router();
 
 router.get('/:barcode', requireAuth, userLimiter, getProductByBarcode);
-router.post('/products', requireAuth, requireRegistered, submitProduct);
+// submitProduct only works with registered users
+router.post('/', requireAuth, apiLimiter, requireRegistered, submitProduct);
 
 export default router;

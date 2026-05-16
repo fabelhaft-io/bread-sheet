@@ -23,6 +23,7 @@ vi.mock('../db.js', () => ({
 // level — mock it here to prevent createClient() from requiring a real Supabase URL.
 vi.mock('../middlewares/authMiddleware.js', () => ({
   requireAuth: (_req: any, _res: any, next: any) => next(),
+  requireRegistered: (_req: any, _res: any, next: any) => next(),
 }));
 
 vi.mock('../middlewares/rateLimit.js', () => ({

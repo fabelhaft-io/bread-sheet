@@ -301,6 +301,12 @@ User History
 
 ### [TICKET-P5-005] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.
+**Key design decisions (resolved 2026-05-16):**
+- **Everyone goes through the proposal flow for VERIFIED products, including the original submitter.** There is no special-case bypass for the user who originally created the product — once peer-verified, every change requires fresh peer review. The PENDING_REVIEW correction path (`PATCH /products/:barcode`) is the *only* shortcut, and it only applies while the product hasn't been verified yet.
+- **Ratings persist across edits.** When an edit is APPLIED, the `Product.id` is preserved, so all existing `Rating` rows continue to reference the same product. This is intentional — the same physical product is being described, just with corrected metadata; tasters' opinions remain valid.
+- **Track both original author and last modifier.** Keep `Product.submittedByUserId` pointing at whoever originally created the row (it never changes after creation). Add a new `Product.lastModifiedByUserId` that is updated whenever an edit is APPLIED. This gives audit clarity without losing original-author attribution.
+- **The "one pending edit per barcode" rule is enforced at the database layer**, not only by an API-level 409. See the partial unique index in the schema section.
+- **Ship the full proposal model in one go** — no smaller MVP cut. The `PATCH` reset-and-revote on PENDING_REVIEW is the only lite path; every change to a VERIFIED product goes through the explicit `ProductEdit` proposal.
 **Frontend — Edit entry point:**
 - On the Product Detail screen, show an **"Edit product"** icon/button for registered users. Hidden entirely for anonymous users (no tooltip, no disabled state — just absent).
 - If the product has `status: PENDING_REVIEW`, the button label changes to **"Correct this submission"** to signal the different intent. Tapping it still opens the same edit form pre-filled with current data, but the submit path is different (see backend section below).
@@ -332,10 +338,11 @@ User History
 - Reuses the P5-004 sync infrastructure. On `APPLIED`, enqueue an OFF update for the changed fields only (partial update via the OFF product write API). Image fields are re-uploaded to OFF if they changed.
 - Sync is idempotent — uses the barcode as the OFF product key, so repeated syncs update rather than duplicate.
 **Schema additions:**
+- Add to `Product`: `lastModifiedByUserId: String?` — references the user whose edit was most recently APPLIED. Set by the edit-resolution job at the moment a `ProductEdit` flips to APPLIED. Stays `null` until the first applied edit. `submittedByUserId` is intentionally left untouched on edit so the original-author attribution is preserved permanently.
 - New model `ProductEdit`: `id`, `barcode` (FK → Product), `authorUserId`, `originalValues` (JSON — snapshot of the product fields at submission time), `proposedChanges` (JSON — field name → new value), `status` (`PENDING | APPLIED | REJECTED | EXPIRED`), `createdAt`, `expiresAt`. Capturing `originalValues` at submission time ensures the diff screen always shows the correct baseline even if the product record changes later.
 - New model `ProductEditVote`: `id`, `editId` (FK → ProductEdit), `userId`, `vote` (`APPROVE | REJECT`), `createdAt`. Composite unique key on `(editId, userId)`.
 - New model `ProductEditDismissal`: `id`, `editId` (FK → ProductEdit), `userId`, `createdAt`. Composite unique key on `(editId, userId)`. Used to persist dismissals server-side across devices.
-- Constraint: only one `ProductEdit` with `status: PENDING` allowed per barcode at a time (enforced at DB level with a partial unique index).
+- **DB-level "one pending edit per barcode" constraint.** Add a partial unique index in the migration: `CREATE UNIQUE INDEX one_pending_edit_per_product ON "ProductEdit" ("barcode") WHERE "status" = 'PENDING';`. This is the source of truth — the API's 409 response is a friendly mirror, but the database refuses the second insert even if two requests race. Prisma can declare this via `@@unique` does not support partial conditions directly, so use a raw migration step (`prisma migrate dev` will accept hand-written SQL inside the migration file).
 **Acceptance Criteria:**
 - [ ] Registered users see an "Edit product" button on the Product Detail screen; anonymous users do not.
 - [ ] For `PENDING_REVIEW` products, the button label is "Correct this submission" and submitting calls `PATCH /products/:barcode` (reset path).
@@ -354,6 +361,10 @@ User History
 - [ ] Mixed votes (1–1) wait for a third voter rather than resolving early.
 - [ ] Pending edits with no votes after 30 days are expired by a cleanup job.
 - [ ] Verified edits are synced to OFF as updates to the existing product entry.
+- [ ] The original submitter of a VERIFIED product must use the same proposal flow as any other user — no bypass path exists.
+- [ ] When an edit is APPLIED, the existing `Rating` rows on the product remain attached and unchanged.
+- [ ] When an edit is APPLIED, `Product.lastModifiedByUserId` is set to the edit's `authorUserId`; `Product.submittedByUserId` is unchanged.
+- [ ] Attempting to create a second `PENDING` `ProductEdit` for the same barcode fails at the database level (partial unique index violation), not only at the API layer.
 
 ## Phase 6: Social
 

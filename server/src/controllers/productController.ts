@@ -1,7 +1,18 @@
 import { Request, Response, NextFunction } from 'express';
 import prisma from '../db.js';
-import { fetchFromOpenFoodFacts } from '../services/productService.js';
+import {
+  createSubmittedProduct,
+  fetchFromOpenFoodFacts,
+  ProductAlreadyVerifiedError,
+  ProductPendingByAnotherUserError,
+  ProductPreviouslyRejectedError,
+} from '../services/productService.js';
 import logger from '../logger.js';
+import {AuthRequest} from "../middlewares/authMiddleware.js";
+import {
+  SubmissionValidationError,
+  validateProductSubmission,
+} from '../validators/productSubmissionValidator.js';
 
 // Barcodes are EAN-8, UPC-A (12 digits), or EAN-13 — all numeric.
 const BARCODE_RE = /^\d{8,13}$/;
@@ -39,6 +50,35 @@ export const getProductByBarcode = async (req: Request, res: Response, next: Nex
 };
 
 // POST /api/products
-export const submitProduct = async (req: Request, res: Response, next: NextFunction) => {
+export const submitProduct = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const payload = validateProductSubmission(req.body);
+    const userId = req.user!.id; // this ony works for auth paths with registered users
 
+    const result = await createSubmittedProduct(payload, userId);
+    res.status(result.action === 'created' ? 201 : 200).json(result.product);
+
+  } catch (err) {
+    if (err instanceof SubmissionValidationError) {
+      return res.status(422).json({
+        error: err.message,
+        reason: err.message,
+        field: err.field,
+      });
+    }
+    if (err instanceof ProductPreviouslyRejectedError) {
+      return res.status(409).json({ error: err.code });
+    }
+    if (
+      err instanceof ProductAlreadyVerifiedError ||
+      err instanceof ProductPendingByAnotherUserError
+    ) {
+      return res.status(409).json({ error: err.code });
+    }
+    next(err); // anything unexpected goes to the central errorHandler
+  }
 };
