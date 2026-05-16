@@ -8,6 +8,12 @@ import {
   ProductPendingByAnotherUserError,
   ProductPreviouslyRejectedError,
 } from '../services/productService.js';
+import {
+  castVote,
+  ProductNotFoundError,
+  ProductNotPendingError,
+  SelfVerificationError,
+} from '../services/productVerificationService.js';
 import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
 import logger from '../logger.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
@@ -15,6 +21,7 @@ import {
   SubmissionValidationError,
   validateProductSubmission,
 } from '../validators/productSubmissionValidator.js';
+import { VerificationVote } from '../generated/prisma_client/enums.js';
 
 const SUPPORTED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -120,5 +127,39 @@ export const submitProduct = async (
       return res.status(409).json({ error: err.code });
     }
     next(err); // anything unexpected goes to the central errorHandler
+  }
+};
+
+// POST /api/products/:barcode/verify
+export const approveProduct = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const result = await castVote(req.params.barcode as string, req.user!.id, VerificationVote.APPROVE);
+    res.json({ verifications: result.verifications });
+  } catch (err) {
+    if (err instanceof ProductNotFoundError) return res.status(404).json({ error: err.code });
+    if (err instanceof ProductNotPendingError) return res.status(409).json({ error: err.code });
+    if (err instanceof SelfVerificationError) return res.status(403).json({ error: err.code });
+    next(err);
+  }
+};
+
+// DELETE /api/products/:barcode/verify  (DELETE = REJECT vote, not retraction)
+export const rejectProduct = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const result = await castVote(req.params.barcode as string, req.user!.id, VerificationVote.REJECT);
+    res.json({ verifications: result.verifications });
+  } catch (err) {
+    if (err instanceof ProductNotFoundError) return res.status(404).json({ error: err.code });
+    if (err instanceof ProductNotPendingError) return res.status(409).json({ error: err.code });
+    if (err instanceof SelfVerificationError) return res.status(403).json({ error: err.code });
+    next(err);
   }
 };

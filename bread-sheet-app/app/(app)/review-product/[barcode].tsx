@@ -17,7 +17,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSession } from '@/hooks/use-session';
 import { api } from '@/lib/api';
 
-import { approveProduct, retractVerification } from '@/features/products/api';
+import { approveProduct, rejectProduct } from '@/features/products/api';
 import type { ProductDetail } from '@/features/products/types';
 
 /**
@@ -97,7 +97,7 @@ export default function ReviewProductScreen() {
     setSubmitting('reject');
     setActionError(null);
     try {
-      await retractVerification(barcode);
+      await rejectProduct(barcode);
       goBackToProduct();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not record rejection.');

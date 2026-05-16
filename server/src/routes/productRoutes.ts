@@ -9,6 +9,8 @@ import {
   getProductByBarcode,
   submitProduct,
   uploadImage,
+  approveProduct,
+  rejectProduct,
 } from '../controllers/productController.js';
 import { extractLabel } from '../controllers/labelExtractionController.js';
 
@@ -45,5 +47,9 @@ router.post('/extract-label', requireAuth, apiLimiter, requireRegistered, extrac
 
 // submitProduct only works with registered users
 router.post('/', requireAuth, apiLimiter, requireRegistered, submitProduct);
+
+router.post('/:barcode/verify', requireAuth, apiLimiter, requireRegistered, approveProduct);
+// DELETE carries a REJECT vote — it does not retract an existing approval
+router.delete('/:barcode/verify', requireAuth, apiLimiter, requireRegistered, rejectProduct);
 
 export default router;

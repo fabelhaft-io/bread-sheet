@@ -102,10 +102,10 @@ export function approveProduct(barcode: string) {
 }
 
 /**
- * Retract a previous "looks correct" vote before the threshold is reached.
- * No-op on the server if the caller hasn't voted.
+ * Cast a "something looks wrong" vote. The DELETE method is the channel for
+ * REJECT votes — it does not retract an existing approval.
  */
-export function retractVerification(barcode: string) {
+export function rejectProduct(barcode: string) {
   return api.delete<{ verifications: number }>(
     `/api/products/${encodeURIComponent(barcode)}/verify`,
   );

@@ -26,7 +26,7 @@ jest.mock('@/lib/api', () => ({
 
 jest.mock('@/features/products/api', () => ({
   approveProduct: jest.fn(),
-  retractVerification: jest.fn(),
+  rejectProduct: jest.fn(),
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports

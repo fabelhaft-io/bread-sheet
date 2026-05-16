@@ -62,7 +62,7 @@ jest.mock('@/features/products/api', () => ({
   extractLabelFromText: jest.fn(),
   extractLabelFromImage: jest.fn(),
   approveProduct: jest.fn(),
-  retractVerification: jest.fn(),
+  rejectProduct: jest.fn(),
 }));
 
 jest.mock('@/features/products/image-picker', () => ({

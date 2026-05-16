@@ -216,7 +216,7 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 |------|---------------|
 | `constants.ts` | `MIN_OCR_LENGTH`, image size caps, JPEG quality targets — must match the backend contract defined in P5-003 |
 | `types.ts` | `ProductSubmission`, `ExtractedLabel`, `ProductDetail` — shared wire types |
-| `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `retractVerification` |
+| `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct` |
 | `ocr.ts` | `recogniseLabelText` — thin wrapper over `@react-native-ml-kit/text-recognition`, returns `{rawText, unavailable}` |
 | `image-picker.ts` | `captureImage` — camera or library, returns the raw URI |
 | `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError` |
