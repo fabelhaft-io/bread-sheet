@@ -170,6 +170,12 @@ Response always includes a `confidence: 'low' | 'medium' | 'high'` field. The cl
 
 ---
 
+## Manual API Testing
+
+A Postman collection covering every endpoint lives at `docs/postman/breadsheet.postman_collection.json` (with `breadsheet.postman_environment.json` for variables). Import both, fill in `supabaseUrl` / `supabaseAnonKey` / credentials, run the **Auth › Sign in with password** request once, and all subsequent requests will use the stored JWT automatically.
+
+---
+
 ## Environment Variable Policy
 
 **No inline defaults for runtime-behaviour variables.** All environment variables that control runtime behaviour must be read and validated in `server/src/configs/config.ts` at startup. If a required variable is absent or has an unexpected value the process must throw a descriptive error — never fall back silently to a local-dev default in application code.

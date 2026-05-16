@@ -151,6 +151,8 @@ Architecture and data documentation lives in `docs/architecture/`:
 | `infrastructure.md` | Terraform/AWS resources, Docker Compose local dev, GitOps deployment pipeline |
 | `data.md` | Data inventory, third-party flows, user content rights, GDPR obligations |
 
+Ad-hoc API testing: import `docs/postman/breadsheet.postman_collection.json` and the matching `breadsheet.postman_environment.json` into Postman. The collection covers every endpoint and pre-populates the Bearer token via the Supabase sign-in request.
+
 ## ADRs
 
 Architecture decisions are tracked in `docs/architecture-decision-records/`. Current ADRs:
