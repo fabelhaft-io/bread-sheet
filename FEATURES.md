@@ -255,7 +255,7 @@ User History
 - [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Google Cloud Vision inference. *(pending T6)*
 - [x] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present. *(text path T5; image path returns 501 until T6)*
 - [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
-- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(deferred — T3 ships schema validation only; AI plausibility deferred to a follow-up ticket)*
+- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(deferred — T3 ships schema validation only; AI plausibility for text and image (no dick-pics allowed) deferred to a follow-up ticket)*
 - [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — see above)*
 - [x] `POST /products/:barcode/verify` casts an `APPROVE` vote from a registered non-submitter; returns `403` if the caller is the submitter. *(P5-003/T7)*
 - [ ] After 2 net-approvals the product is automatically promoted to `VERIFIED`; OFF sync is enqueued. *(threshold flip shipped in T7; OFF sync enqueue deferred to P5-004)*
@@ -368,12 +368,19 @@ User History
 
 ## Phase 6: Social
 
-### [TICKET-P6-001] Group Management
-**Goal:** Enable private sharing contexts.
+### [TICKET-P6-001]  Add Product Categories
+Allow easy selection to see own votes in categories (e.g. what wine I liked, what cigars, what cocktails)
+
+### [TICKET-P6-002] Group Management
+**Goal:** Enable private sharing contexts. E.g., a household shares ratings for basic foods while enabling different opinios.
 **Logic:**
 - Users create a group -> generate shareable code.
 - Other users join via code.
 - Feed filtering: "My Groups" vs "Global".
+- Group votes: Show highest vote with member and average (if the same, don't show highest vote)
+- If you are part in a group and vote for a product - set default if always for group or private
+- If you join a group, select if you want to share no votes, all votes, some votes, select categories
+- If you are a member, in detail tab of group, share votes afterwards
 **Acceptance Criteria:**
 - [ ] User can create a group.
 - [ ] User can join a group with a code.
@@ -421,6 +428,13 @@ User History
 - [ ] All new authorization rules are covered by integration tests.
 
 # Future Plans and Ideas
+
+
+## Verify Registration Flow after use as anonymous user
+are local votes migrated correctly to user profile?
+
+## Ensure offline usability
+Snappy startup - cached user votes and products on device (in supermarkets the mobile connection is often poor)
 
 ## Release
 - Create Terms and Conditions

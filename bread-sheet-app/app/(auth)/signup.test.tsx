@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert } from 'react-native';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import SignUpScreen from './signup';
 import * as pendingReturnTo from '@/lib/pending-return-to';
@@ -51,15 +51,21 @@ describe('SignUpScreen — returnTo handling', () => {
     const { getByPlaceholderText, getByText } = render(<SignUpScreen />);
     fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
     fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
-    fireEvent.press(getByText('Sign Up'));
 
-    await waitFor(() => expect(mockedSignUp).toHaveBeenCalled());
+    // Use async act() so the full signUpWithEmail chain (including the
+    // await setPendingReturnTo → await signUp sequence) completes before
+    // we assert. A sync fireEvent.press + waitFor races with microtask
+    // resolution in CI environments and causes intermittent 5s timeouts.
+    await act(async () => {
+      fireEvent.press(getByText('Sign Up'));
+    });
 
     // Order: persist returnTo, THEN call signUp.
     expect(mockSetPending).toHaveBeenCalledWith('/product/0000000000001');
     const setOrder = mockSetPending.mock.invocationCallOrder[0];
     const signUpOrder = mockedSignUp.mock.invocationCallOrder[0];
     expect(setOrder).toBeLessThan(signUpOrder);
+    expect(mockedSignUp).toHaveBeenCalled();
   });
 
   it('does not persist anything when no returnTo is present', async () => {
