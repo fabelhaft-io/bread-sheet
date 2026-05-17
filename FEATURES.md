@@ -352,8 +352,11 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] User can create a group.
 - [ ] User can join a group with a code.
 - [ ] Ratings can be filtered by group context.
+- 
+### [TICKET-P6-004] User Scenario - Supermarket Lookup
+- If rating (personal or group) is already given, show not a rating screen but a rating overview (personal, groups (same logic, highest with user, and median))
 
-### [TICKET-P6-003] Open Food Facts Contribution Sync
+### [TICKET-P6-005] Open Food Facts Contribution Sync
 **Goal:** Automatically contribute user-verified product data back to the Open Food Facts (OFF) project using their write API, closing the loop between local submissions and the upstream open dataset.
 **Logic:**
 - Sync is triggered when a product or edit reaches `VERIFIED` status via peer review (not at submission time — plausibility checks gate quality, but peer approval gates OFF contribution).
