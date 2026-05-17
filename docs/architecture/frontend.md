@@ -232,3 +232,16 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 - the caller is not the submitter (`submittedByUserId !== session.user.id`)
 
 The reviewer screen renders every submitted field — including `null` values, shown as "Not provided" — so the reviewer can judge completeness. "Looks correct" calls `POST /api/products/:barcode/verify`; "Something looks wrong" calls `DELETE /api/products/:barcode/verify` (reused as the "no" vote channel).
+
+---
+
+## Product Detail & Rating (`app/(app)/product/[barcode].tsx`)
+
+The product screen does two GETs in parallel on mount:
+
+1. `GET /api/products/:barcode` — load-blocking. A `404` flips the screen to the "Product not found" state (P5-001).
+2. `GET /api/ratings/me/:barcode` — issued only for registered users. **Any failure (including the `404` that means "not rated yet") degrades silently to "no existing rating"** so an outage on this optional lookup never blocks the product screen.
+
+When the rating lookup returns a row, the slider and comment field are pre-populated with the existing values, the section title flips from "How does it taste?" to "Your rating", and the submit button reads "Update Rating" instead of "Submit Rating". The success screen mirrors the same wording ("Rating Updated!" vs "Rating Submitted!").
+
+Submission always calls `POST /api/ratings`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven entirely off whether the pre-load fetch found an existing rating.

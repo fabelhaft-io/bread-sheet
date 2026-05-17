@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 
 const mockProductFindUnique = vi.hoisted(() => vi.fn());
-const mockRatingCreate = vi.hoisted(() => vi.fn());
+const mockRatingUpsert = vi.hoisted(() => vi.fn());
 const mockRatingFindMany = vi.hoisted(() => vi.fn());
+const mockRatingFindUnique = vi.hoisted(() => vi.fn());
 
 vi.mock('../db.js', () => ({
   default: {
     product: { findUnique: mockProductFindUnique },
     rating: {
-      create: mockRatingCreate,
+      upsert: mockRatingUpsert,
       findMany: mockRatingFindMany,
+      findUnique: mockRatingFindUnique,
     },
   },
 }));
@@ -36,7 +38,8 @@ const PRODUCT = { id: 10, barcode: '1234567890123', name: 'Rye Bread' };
 describe('POST /api/ratings', () => {
   beforeEach(() => {
     mockProductFindUnique.mockReset();
-    mockRatingCreate.mockReset();
+    mockRatingUpsert.mockReset();
+    mockRatingFindUnique.mockReset();
   });
 
   it('returns 400 when barcode is missing', async () => {
@@ -88,10 +91,11 @@ describe('POST /api/ratings', () => {
     expect(res.status).toBe(404);
   });
 
-  it('creates a rating and returns 201 with the rating body', async () => {
+  it('creates a new rating and returns 201 when none existed yet', async () => {
     const rating = { id: 1, userId: 'user-1', productId: 10, taste: 7.5, score: 7.5, comment: null, product: PRODUCT };
     mockProductFindUnique.mockResolvedValue(PRODUCT);
-    mockRatingCreate.mockResolvedValue(rating);
+    mockRatingFindUnique.mockResolvedValue(null);
+    mockRatingUpsert.mockResolvedValue(rating);
 
     const res = await request(app)
       .post('/api/ratings')
@@ -100,27 +104,56 @@ describe('POST /api/ratings', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.id).toBe(1);
+    expect(mockRatingUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_productId: { userId: 'user-1', productId: 10 } },
+      }),
+    );
+  });
+
+  it('updates the existing rating in place and returns 200 on re-rating', async () => {
+    const updated = { id: 1, userId: 'user-1', productId: 10, taste: 9, score: 9, comment: 'Better than I thought', product: PRODUCT };
+    mockProductFindUnique.mockResolvedValue(PRODUCT);
+    mockRatingFindUnique.mockResolvedValue({ id: 1 });
+    mockRatingUpsert.mockResolvedValue(updated);
+
+    const res = await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ barcode: '1234567890123', taste: 9, comment: 'Better than I thought' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.taste).toBe(9);
+    // Same row updated — no second insert
+    expect(mockRatingUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ taste: 9, score: 9, comment: 'Better than I thought' }),
+      }),
+    );
   });
 
   it('stores score equal to taste', async () => {
     mockProductFindUnique.mockResolvedValue(PRODUCT);
-    mockRatingCreate.mockResolvedValue({ id: 2, score: 8.5, product: PRODUCT });
+    mockRatingFindUnique.mockResolvedValue(null);
+    mockRatingUpsert.mockResolvedValue({ id: 2, score: 8.5, product: PRODUCT });
 
     await request(app)
       .post('/api/ratings')
       .set('Authorization', 'Bearer token')
       .send({ barcode: '1234567890123', taste: 8.5 });
 
-    expect(mockRatingCreate).toHaveBeenCalledWith(
+    expect(mockRatingUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ taste: 8.5, score: 8.5 }),
+        create: expect.objectContaining({ taste: 8.5, score: 8.5 }),
+        update: expect.objectContaining({ taste: 8.5, score: 8.5 }),
       })
     );
   });
 
   it('accepts taste at the boundaries (0 and 10)', async () => {
     mockProductFindUnique.mockResolvedValue(PRODUCT);
-    mockRatingCreate.mockResolvedValue({ id: 3, taste: 0, score: 0, product: PRODUCT });
+    mockRatingFindUnique.mockResolvedValue(null);
+    mockRatingUpsert.mockResolvedValue({ id: 3, taste: 0, score: 0, product: PRODUCT });
 
     const resMin = await request(app)
       .post('/api/ratings')
@@ -128,7 +161,7 @@ describe('POST /api/ratings', () => {
       .send({ barcode: '1234567890123', taste: 0 });
     expect(resMin.status).toBe(201);
 
-    mockRatingCreate.mockResolvedValue({ id: 4, taste: 10, score: 10, product: PRODUCT });
+    mockRatingUpsert.mockResolvedValue({ id: 4, taste: 10, score: 10, product: PRODUCT });
     const resMax = await request(app)
       .post('/api/ratings')
       .set('Authorization', 'Bearer token')
@@ -138,16 +171,18 @@ describe('POST /api/ratings', () => {
 
   it('includes an optional comment when provided', async () => {
     mockProductFindUnique.mockResolvedValue(PRODUCT);
-    mockRatingCreate.mockResolvedValue({ id: 5, comment: 'Tasty!', product: PRODUCT });
+    mockRatingFindUnique.mockResolvedValue(null);
+    mockRatingUpsert.mockResolvedValue({ id: 5, comment: 'Tasty!', product: PRODUCT });
 
     await request(app)
       .post('/api/ratings')
       .set('Authorization', 'Bearer token')
       .send({ barcode: '1234567890123', taste: 9, comment: 'Tasty!' });
 
-    expect(mockRatingCreate).toHaveBeenCalledWith(
+    expect(mockRatingUpsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ comment: 'Tasty!' }),
+        create: expect.objectContaining({ comment: 'Tasty!' }),
+        update: expect.objectContaining({ comment: 'Tasty!' }),
       })
     );
   });
@@ -178,5 +213,47 @@ describe('GET /api/ratings/product/:barcode', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(ratings);
+  });
+});
+
+describe('GET /api/ratings/me/:barcode', () => {
+  beforeEach(() => {
+    mockProductFindUnique.mockReset();
+    mockRatingFindUnique.mockReset();
+  });
+
+  it('returns 404 when the product does not exist', async () => {
+    mockProductFindUnique.mockResolvedValue(null);
+    const res = await request(app)
+      .get('/api/ratings/me/1234567890123')
+      .set('Authorization', 'Bearer token');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when the caller has not rated this product', async () => {
+    mockProductFindUnique.mockResolvedValue(PRODUCT);
+    mockRatingFindUnique.mockResolvedValue(null);
+    const res = await request(app)
+      .get('/api/ratings/me/1234567890123')
+      .set('Authorization', 'Bearer token');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns the caller’s rating when one exists', async () => {
+    const rating = { id: 'r1', userId: 'user-1', productId: 10, taste: 6, score: 6, comment: null };
+    mockProductFindUnique.mockResolvedValue(PRODUCT);
+    mockRatingFindUnique.mockResolvedValue(rating);
+
+    const res = await request(app)
+      .get('/api/ratings/me/1234567890123')
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(rating);
+    expect(mockRatingFindUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId_productId: { userId: 'user-1', productId: 10 } },
+      }),
+    );
   });
 });

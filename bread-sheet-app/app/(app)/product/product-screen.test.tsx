@@ -70,6 +70,24 @@ const { ApiError, api } = require('@/lib/api') as typeof import('@/lib/api');
 const mockApiGet = api.get as jest.Mock;
 const mockApiPost = api.post as jest.Mock;
 
+/**
+ * The product screen now issues two parallel GETs on load:
+ *  - GET /api/products/:barcode
+ *  - GET /api/ratings/me/:barcode (registered users only)
+ *
+ * Tests that don't care about the existing-rating path can call this to
+ * stub the product response and have the /me/:barcode call resolve to a
+ * 404 (= "no rating yet").
+ */
+function mockProductAndNoExistingRating(product: unknown) {
+  mockApiGet.mockImplementation((path: string) => {
+    if (path.startsWith('/api/ratings/me/')) {
+      return Promise.reject(new ApiError(404, 'No rating yet', {}));
+    }
+    return Promise.resolve(product);
+  });
+}
+
 describe('ProductScreen — product-not-found state', () => {
   beforeEach(() => {
     mockRouter.push.mockClear();
@@ -133,7 +151,7 @@ describe('ProductScreen — product-not-found state', () => {
   });
 
   it('renders the product normally on a 2xx response — no regression for known products', async () => {
-    mockApiGet.mockResolvedValue({
+    mockProductAndNoExistingRating({
       id: 'p1',
       barcode: '0000000000001',
       name: 'Sourdough Loaf',
@@ -159,7 +177,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       isAnonymous: false,
       isLoading: false,
     });
-    mockApiGet.mockResolvedValue({
+    mockProductAndNoExistingRating({
       id: 'p1',
       barcode: '0000000000001',
       name: 'Mystery bread',
@@ -184,7 +202,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       isAnonymous: false,
       isLoading: false,
     });
-    mockApiGet.mockResolvedValue({
+    mockProductAndNoExistingRating({
       id: 'p1',
       barcode: '0000000000001',
       name: 'My bread',
@@ -205,7 +223,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       isAnonymous: true,
       isLoading: false,
     });
-    mockApiGet.mockResolvedValue({
+    mockProductAndNoExistingRating({
       id: 'p1',
       barcode: '0000000000001',
       name: 'Mystery bread',
@@ -226,7 +244,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       isAnonymous: false,
       isLoading: false,
     });
-    mockApiGet.mockResolvedValue({
+    mockProductAndNoExistingRating({
       id: 'p1',
       barcode: '0000000000001',
       name: 'Sourdough',
@@ -250,7 +268,7 @@ describe('ProductScreen — rating submission errors', () => {
       isAnonymous: true,
       isLoading: false,
     });
-    mockApiGet.mockResolvedValue({
+    mockProductAndNoExistingRating({
       id: 'p1',
       barcode: '0000000000001',
       name: 'Sourdough Loaf',
@@ -283,5 +301,90 @@ describe('ProductScreen — rating submission errors', () => {
     await findByText('Sourdough Loaf');
     fireEvent.press(getByText('Submit Rating'));
     await findByText(/taste must be between/i);
+  });
+});
+
+describe('ProductScreen — existing rating pre-fill', () => {
+  const PRODUCT = {
+    id: 'p1',
+    barcode: '0000000000001',
+    name: 'Sourdough Loaf',
+    brand: 'Artisan',
+    image: null,
+    description: null,
+  };
+
+  beforeEach(() => {
+    mockApiGet.mockReset();
+    mockApiPost.mockReset();
+    mockUseSession.mockReset();
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'u1', is_anonymous: false } },
+      isAnonymous: false,
+      isLoading: false,
+    });
+  });
+
+  it('pre-populates the slider and comment from the user’s existing rating and shows "Update Rating"', async () => {
+    mockApiGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/ratings/me/')) {
+        return Promise.resolve({ id: 'r1', taste: 8, comment: 'Solid loaf' });
+      }
+      return Promise.resolve(PRODUCT);
+    });
+
+    const { findByText, queryByText } = render(<ProductScreen />);
+
+    await findByText('Sourdough Loaf');
+    // Submit-button copy reflects the update intent
+    await findByText('Update Rating');
+    expect(queryByText('Submit Rating')).toBeNull();
+    // Slider badge shows the pre-filled score (one decimal place for whole numbers)
+    await findByText('8.0');
+  });
+
+  it('shows the "Submit Rating" button when the user has no existing rating', async () => {
+    mockProductAndNoExistingRating(PRODUCT);
+    const { findByText, queryByText } = render(<ProductScreen />);
+    await findByText('Submit Rating');
+    expect(queryByText('Update Rating')).toBeNull();
+  });
+
+  it('shows "Rating Updated!" on the success screen after re-rating', async () => {
+    mockApiGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/ratings/me/')) {
+        return Promise.resolve({ id: 'r1', taste: 6, comment: null });
+      }
+      return Promise.resolve(PRODUCT);
+    });
+    mockApiPost.mockResolvedValue({ id: 'r1', taste: 6 });
+
+    const { findByText, getByText } = render(<ProductScreen />);
+    await findByText('Update Rating');
+    fireEvent.press(getByText('Update Rating'));
+    await findByText(/Rating Updated!/i);
+  });
+
+  it('skips the /me/:barcode lookup for anonymous users', async () => {
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'guest', is_anonymous: true } },
+      isAnonymous: true,
+      isLoading: false,
+    });
+    mockApiGet.mockImplementation((path: string) => {
+      if (path.startsWith('/api/ratings/me/')) {
+        // If this ever fires for an anonymous user, the test must fail —
+        // we don't want to spam the backend with auth'd lookups for guests.
+        throw new Error('Anonymous users must not call /api/ratings/me/:barcode');
+      }
+      return Promise.resolve(PRODUCT);
+    });
+    const { findByText } = render(<ProductScreen />);
+    await findByText('Submit Rating');
+    // Asserting the /me call did NOT happen
+    const meCalls = mockApiGet.mock.calls.filter((args) =>
+      typeof args[0] === 'string' && args[0].startsWith('/api/ratings/me/'),
+    );
+    expect(meCalls).toHaveLength(0);
   });
 });

@@ -289,7 +289,7 @@
       "name": "Ratings",
       "item": [
         {
-          "name": "Create rating",
+          "name": "Create or update rating",
           "request": {
             "method": "POST",
             "header": [
@@ -304,7 +304,21 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "ratings"]
             },
-            "description": "Create a rating for a product the caller has already fetched. `taste` is a Float in `[0, 10]` on 0.5 increments. 404 if the product isn't cached locally — run **Get product by barcode** first."
+            "description": "Upsert the caller's rating for a product. `taste` is a Float in `[0, 10]` on 0.5 increments.\n\n**Response:**\n- `201 Created` — first rating for this `(user, product)` pair\n- `200 OK` — the caller's existing rating was overwritten in place (same `id`, `createdAt` preserved, `updatedAt` advanced)\n- `404` — the product isn't cached locally yet (run **Get product by barcode** first)\n- `400` — validation error (missing fields, taste out of range, taste not on a 0.5 boundary)\n\nThe DB has `@@unique([userId, productId])`, so calling this endpoint repeatedly only ever produces one row per `(user, product)` pair."
+          },
+          "response": []
+        },
+        {
+          "name": "Get my rating for product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/ratings/me/{{barcode}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ratings", "me", "{{barcode}}"]
+            },
+            "description": "Returns the authenticated caller's rating for the given product, or `404` if they haven't rated it yet. Used by the product screen to pre-populate the slider and comment field on a return visit so the user can update rather than duplicate.\n\n**Errors:**\n- `404` — product not found in the local cache, **or** product exists but the caller has not rated it (the client treats both cases as \"no existing rating to pre-fill\")."
           },
           "response": []
         },

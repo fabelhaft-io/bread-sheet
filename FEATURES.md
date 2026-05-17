@@ -263,43 +263,10 @@ User History
 - [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8)*
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
-### [TICKET-P5-004] Open Food Facts Contribution Sync
-**Goal:** Automatically contribute user-verified product data back to the Open Food Facts (OFF) project using their write API, closing the loop between local submissions and the upstream open dataset.
-**Logic:**
-- Sync is triggered when a product or edit reaches `VERIFIED` status via peer review (not at submission time — plausibility checks gate quality, but peer approval gates OFF contribution).
-- Sync runs as a **node-cron scheduled job inside the existing `server/` process**, polling every 5 minutes for queued items. This keeps the infra simple for now; the job can be extracted to a Lambda later without changing the queue contract.
-- **New product sync:**
-  1. Fetch all `VERIFIED` products with `offSyncStatus: QUEUED`.
-  2. Submit to the OFF Product Add API (`POST https://world.openfoodfacts.org/cgi/product_jqm2.pl`) using the registered OFF bot account.
-  3. Upload product image to OFF's image endpoint.
-  4. On success: set `offSyncStatus: SYNCED`, store `offProductUrl`.
-  5. On failure: increment `offSyncAttempts`, set `offRetryAt` (exponential back-off). After 5 failures: set `offSyncStatus: FAILED` and notify the submitter **in-app** (not email — keeps the notification infrastructure simple and consistent with the rest of the app).
-- **Edit sync (triggered when a `ProductEdit` reaches `status: APPLIED`):**
-  1. Fetch the `ProductEdit` record and its `proposedChanges` JSON.
-  2. Submit only the changed fields to OFF using the same product write API (partial update — OFF uses the barcode to identify the existing entry and merges the provided fields).
-  3. Re-upload image to OFF only if `productImageUrl` is in `proposedChanges`.
-  4. Same retry and failure logic as new product sync; failure notification goes to the edit author.
-- Image assets (product photo) are pushed to OFF's image upload endpoint; the label photo is never stored or sent.
-- All sync activity is idempotent — re-running on the same barcode updates the existing OFF entry rather than creating a duplicate.
-**Schema additions to `Product`:**
-- `offSyncStatus`: `QUEUED | SYNCING | SYNCED | FAILED`
-- `offSyncAttempts: Int`
-- `offRetryAt: DateTime?`
-- `offProductUrl: String?`
-**Notes:**
-- OFF requires an account with edit rights; credentials stored in server env vars (`OFF_USERNAME`, `OFF_PASSWORD`).
-- Respect OFF's rate limits (no more than ~100 writes/hour for bot accounts).
-- All sync activity should be idempotent — re-running on the same product must not create duplicates (use barcode as the OFF product key).
-**Acceptance Criteria:**
-- [ ] Products promoted to `VERIFIED` via peer review are automatically submitted to Open Food Facts.
-- [ ] Peer-verified product edits (from P5-005) are synced to OFF as updates to the existing product entry, not as new submissions.
-- [ ] Product images are uploaded to OFF alongside structured data.
-- [ ] Sync failures retry with exponential back-off and cap at 5 attempts.
-- [ ] After 5 failed attempts, the product is marked `REJECTED` and the submitter is notified.
-- [ ] Sync is idempotent — re-submitting the same barcode to OFF does not create a duplicate entry.
-- [ ] `OFF_USERNAME` and `OFF_PASSWORD` are stored in env vars, never hard-coded.
+### [TICKET-P5-004] Anonymous users
+**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. Minor Frontend fix: Rating screen should be one full screen with no scroll column (currently on iOS it is slightly too high)
 
-### [TICKET-P5-005] Product Editing & Peer-Review of Changes
+### [TICKET-P5-006] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.
 **Key design decisions (resolved 2026-05-16):**
 - **Everyone goes through the proposal flow for VERIFIED products, including the original submitter.** There is no special-case bypass for the user who originally created the product — once peer-verified, every change requires fresh peer review. The PENDING_REVIEW correction path (`PATCH /products/:barcode`) is the *only* shortcut, and it only applies while the product hasn't been verified yet.
@@ -386,6 +353,42 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] User can join a group with a code.
 - [ ] Ratings can be filtered by group context.
 
+### [TICKET-P6-003] Open Food Facts Contribution Sync
+**Goal:** Automatically contribute user-verified product data back to the Open Food Facts (OFF) project using their write API, closing the loop between local submissions and the upstream open dataset.
+**Logic:**
+- Sync is triggered when a product or edit reaches `VERIFIED` status via peer review (not at submission time — plausibility checks gate quality, but peer approval gates OFF contribution).
+- Sync runs as a **node-cron scheduled job inside the existing `server/` process**, polling every 5 minutes for queued items. This keeps the infra simple for now; the job can be extracted to a Lambda later without changing the queue contract.
+- **New product sync:**
+    1. Fetch all `VERIFIED` products with `offSyncStatus: QUEUED`.
+    2. Submit to the OFF Product Add API (`POST https://world.openfoodfacts.org/cgi/product_jqm2.pl`) using the registered OFF bot account.
+    3. Upload product image to OFF's image endpoint.
+    4. On success: set `offSyncStatus: SYNCED`, store `offProductUrl`.
+    5. On failure: increment `offSyncAttempts`, set `offRetryAt` (exponential back-off). After 5 failures: set `offSyncStatus: FAILED` and notify the submitter **in-app** (not email — keeps the notification infrastructure simple and consistent with the rest of the app).
+- **Edit sync (triggered when a `ProductEdit` reaches `status: APPLIED`):**
+    1. Fetch the `ProductEdit` record and its `proposedChanges` JSON.
+    2. Submit only the changed fields to OFF using the same product write API (partial update — OFF uses the barcode to identify the existing entry and merges the provided fields).
+    3. Re-upload image to OFF only if `productImageUrl` is in `proposedChanges`.
+    4. Same retry and failure logic as new product sync; failure notification goes to the edit author.
+- Image assets (product photo) are pushed to OFF's image upload endpoint; the label photo is never stored or sent.
+- All sync activity is idempotent — re-running on the same barcode updates the existing OFF entry rather than creating a duplicate.
+  **Schema additions to `Product`:**
+- `offSyncStatus`: `QUEUED | SYNCING | SYNCED | FAILED`
+- `offSyncAttempts: Int`
+- `offRetryAt: DateTime?`
+- `offProductUrl: String?`
+  **Notes:**
+- OFF requires an account with edit rights; credentials stored in server env vars (`OFF_USERNAME`, `OFF_PASSWORD`).
+- Respect OFF's rate limits (no more than ~100 writes/hour for bot accounts).
+- All sync activity should be idempotent — re-running on the same product must not create duplicates (use barcode as the OFF product key).
+  **Acceptance Criteria:**
+- [ ] Products promoted to `VERIFIED` via peer review are automatically submitted to Open Food Facts.
+- [ ] Peer-verified product edits (from P5-005) are synced to OFF as updates to the existing product entry, not as new submissions.
+- [ ] Product images are uploaded to OFF alongside structured data.
+- [ ] Sync failures retry with exponential back-off and cap at 5 attempts.
+- [ ] After 5 failed attempts, the product is marked `REJECTED` and the submitter is notified.
+- [ ] Sync is idempotent — re-submitting the same barcode to OFF does not create a duplicate entry.
+- [ ] `OFF_USERNAME` and `OFF_PASSWORD` are stored in env vars, never hard-coded.
+
 ## Phase 7: Auth Enhancements
 
 ### [TICKET-P7-001] Social Login Providers (Google, Apple)
@@ -428,10 +431,6 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] All new authorization rules are covered by integration tests.
 
 # Future Plans and Ideas
-
-
-## Verify Registration Flow after use as anonymous user
-are local votes migrated correctly to user profile?
 
 ## Ensure offline usability
 Snappy startup - cached user votes and products on device (in supermarkets the mobile connection is often poor)

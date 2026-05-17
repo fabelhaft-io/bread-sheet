@@ -117,7 +117,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 |-------|-----------|-------|
 | `User` | `id`, `email?`, `username`, `avatarUrl` | `id` mirrors the Supabase user UUID |
 | `Product` | `barcode` (PK), `name`, `brand`, `imageUrl`, `status`, `submittedByUserId?` | `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED` |
-| `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?` | One rating per user per product |
+| `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?`, `createdAt`, `updatedAt` | `@@unique([userId, productId])` — one rating per user per product; resubmission upserts the existing row (`createdAt` preserved, `updatedAt` advances) |
 | `Group` | `id`, `name`, `inviteCode` | Invite code is unique |
 | `GroupMember` | `userId`, `groupId`, `role` | `role`: `ADMIN \| MEMBER` |
 | `ProductVerification` | `productId`, `userId`, `vote`, `createdAt` | `@@unique([productId, userId])`; 2 net-approvals flip to `VERIFIED`; 2 net-rejections flip to `REJECTED` |
@@ -166,11 +166,13 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | `POST` | `/groups/join` | Registered | Join group by invite code |
 | `DELETE` | `/groups/:id/members/:userId` | Admin | Remove member |
 
-### Auth / Ratings
+### Ratings
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/ratings` | Any | Submit or update a rating |
+| `POST` | `/ratings` | Auth | Upsert the caller's rating for a product. `201` on first submission, `200` on update of an existing `(userId, productId)` row. |
+| `GET` | `/ratings/me/:barcode` | Auth | Return the caller's rating for a product, or `404` if they haven't rated it yet. Used by the product screen to pre-populate the form on a return visit. |
+| `GET` | `/ratings/product/:barcode` | Auth | All ratings for a product (most recent first) with author id / username / avatar. |
 | `DELETE` | `/ratings/:id` | Owner | Delete own rating |
 
 ---

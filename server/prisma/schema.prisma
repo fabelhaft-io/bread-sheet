@@ -64,12 +64,18 @@ model Rating {
   taste     Float    // Taste rating on a 0–10 scale with 0.5 increments
   comment   String?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   userId    String
   user      User     @relation(fields: [userId], references: [id])
-  
+
   productId String
   product   Product  @relation(fields: [productId], references: [id])
+
+  // One rating per user per product. Re-rating upserts the existing row,
+  // so `createdAt` stays as the first submission and `updatedAt` tracks
+  // the latest edit.
+  @@unique([userId, productId])
 }
 
 model ProductVerification {

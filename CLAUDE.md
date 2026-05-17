@@ -95,7 +95,7 @@ Keep business logic in these modules — route files stay UI-only.
 
 ### Data Model (Prisma schema at `server/prisma/schema.prisma`)
 
-Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`), `Rating` (taste score 0–10 in 0.5 steps + optional comment), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED).
+Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`), `Rating` (taste score 0–10 in 0.5 steps + optional comment; `@@unique([userId, productId])` — one rating per user per product; resubmissions upsert the existing row), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED).
 
 ### Auth Flow
 

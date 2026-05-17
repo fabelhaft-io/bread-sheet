@@ -36,6 +36,12 @@ interface Product {
   submittedByUserId?: string | null;
 }
 
+interface UserRating {
+  id: string;
+  taste: number;
+  comment: string | null;
+}
+
 // ─── Taste Score Colour ───────────────────────────────────────────────────────
 // Interpolates amber → green as score rises 0 → 10
 function scoreColor(score: number): string {
@@ -319,6 +325,7 @@ export default function ProductScreen() {
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const [existingRating, setExistingRating] = useState<UserRating | null>(null);
   const [taste, setTaste] = useState(5);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -329,12 +336,30 @@ export default function ProductScreen() {
     let cancelled = false;
     setNotFound(false);
     setLoadError(null);
-    api.get<Product>(`/api/products/${barcode}`)
+
+    // Fetch the product and the caller's existing rating in parallel. Anonymous
+    // sessions don't have a persistent rating to fetch yet (P5-004), so skip the
+    // /me lookup for them. Any failure on the rating lookup (404 "not rated yet"
+    // or otherwise) degrades to "no existing rating" so it never blocks the
+    // product screen — the user can still submit a fresh rating.
+    const productReq = api.get<Product>(`/api/products/${barcode}`);
+    const ratingReq: Promise<UserRating | null> = isAnonymous
+      ? Promise.resolve(null)
+      : api
+          .get<UserRating>(`/api/ratings/me/${barcode}`)
+          .catch(() => null);
+
+    productReq
       .then((data) => {
-        if (!cancelled) {
-          setProduct(data);
-          addRecentProduct({ barcode: data.barcode, name: data.name, brand: data.brand, image: data.image });
-        }
+        if (cancelled) return;
+        setProduct(data);
+        addRecentProduct({ barcode: data.barcode, name: data.name, brand: data.brand, image: data.image });
+        return ratingReq.then((rating) => {
+          if (cancelled || !rating) return;
+          setExistingRating(rating);
+          setTaste(rating.taste);
+          setComment(rating.comment ?? '');
+        });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -346,7 +371,7 @@ export default function ProductScreen() {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [addRecentProduct, barcode]);
+  }, [addRecentProduct, barcode, isAnonymous]);
 
   const handleSubmit = useCallback(async () => {
     if (!product || submitting) return;
@@ -365,6 +390,8 @@ export default function ProductScreen() {
       setSubmitting(false);
     }
   }, [product, taste, comment, submitting]);
+
+  const isUpdate = existingRating !== null;
 
   if (loading) {
     return (
@@ -438,7 +465,9 @@ export default function ProductScreen() {
     return (
       <ThemedView style={styles.center}>
         <Text style={styles.successIcon}>🎉</Text>
-        <ThemedText type="title" style={styles.successTitle}>Rating Submitted!</ThemedText>
+        <ThemedText type="title" style={styles.successTitle}>
+          {isUpdate ? 'Rating Updated!' : 'Rating Submitted!'}
+        </ThemedText>
         <ThemedText style={styles.successSubtitle}>
           You gave it a {taste % 1 === 0 ? taste.toFixed(1) : taste}/10 for taste.
         </ThemedText>
@@ -505,8 +534,14 @@ export default function ProductScreen() {
       <View style={[styles.divider, { backgroundColor: colors.icon + '33' }]} />
 
       <View style={styles.ratingSection}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>How does it taste?</ThemedText>
-        <ThemedText style={styles.sectionHint}>Drag the slider or use − / + to set your score.</ThemedText>
+        <ThemedText type="subtitle" style={styles.sectionTitle}>
+          {isUpdate ? 'Your rating' : 'How does it taste?'}
+        </ThemedText>
+        <ThemedText style={styles.sectionHint}>
+          {isUpdate
+            ? 'You rated this already — adjust the score or comment to update.'
+            : 'Drag the slider or use − / + to set your score.'}
+        </ThemedText>
 
         <TasteSlider value={taste} onChange={setTaste} />
 
@@ -541,7 +576,9 @@ export default function ProductScreen() {
           {submitting ? (
             <ActivityIndicator color={colors.background} size="small" />
           ) : (
-            <Text style={[styles.buttonText, { color: colors.background }]}>Submit Rating</Text>
+            <Text style={[styles.buttonText, { color: colors.background }]}>
+              {isUpdate ? 'Update Rating' : 'Submit Rating'}
+            </Text>
           )}
         </TouchableOpacity>
       </View>
