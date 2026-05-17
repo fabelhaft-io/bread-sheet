@@ -205,6 +205,7 @@ On web, confirmation dialogs use `window.confirm` (Alert.alert buttons are unsup
 - **`isAnonymous`** from `useSession()` is the canonical way to branch UI between guest and registered users — do not inspect `session.user` directly in screens.
 - **Email validation** is centralised in `features/auth/` — do not duplicate in screens.
 - **Native-optional modules** used by the product-submission flow (`@react-native-ml-kit/text-recognition`, `expo-image-picker`, `expo-image-manipulator`, `expo-file-system/legacy`) are loaded via guarded `require()` inside `features/products/`. This keeps jest-expo tests free of native shims and lets the UI gracefully fall back to manual entry if the runtime bundle doesn't ship the module.
+- **Colocated `*.test.tsx` files** under `app/` are excluded from the Metro bundle by `metro.config.js` (`resolver.blockList`). Without this, Expo Router's `require.context` would register them as routes and try to bundle `@testing-library/react-native` for the native runtime, which fails because it imports Node's `console`. Jest doesn't go through Metro, so tests still run via `npm test`.
 
 ---
 
