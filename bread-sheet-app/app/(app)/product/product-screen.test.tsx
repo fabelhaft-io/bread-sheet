@@ -68,6 +68,7 @@ jest.mock('@/lib/api', () => {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { ApiError, api } = require('@/lib/api') as typeof import('@/lib/api');
 const mockApiGet = api.get as jest.Mock;
+const mockApiPost = api.post as jest.Mock;
 
 describe('ProductScreen — product-not-found state', () => {
   beforeEach(() => {
@@ -119,10 +120,15 @@ describe('ProductScreen — product-not-found state', () => {
     });
   });
 
-  it('shows a generic error (not the not-found UI) on non-404 failures', async () => {
-    mockApiGet.mockRejectedValue(new ApiError(500, 'Server exploded', {}));
-    const { findByText, queryByTestId } = render(<ProductScreen />);
-    await findByText('Server exploded');
+  it('shows a friendly generic message (not the raw server error, not the not-found UI) on non-404 failures', async () => {
+    // Server returns a verbose internal message — the screen must replace it
+    // with safe, user-facing copy so we never expose internals on iOS.
+    mockApiGet.mockRejectedValue(
+      new ApiError(500, 'PrismaClientKnownRequestError: FK constraint Rating_userId_fkey', {}),
+    );
+    const { findByText, queryByText, queryByTestId } = render(<ProductScreen />);
+    await findByText(/Could not load this product/i);
+    expect(queryByText(/Prisma|FK constraint|userId/i)).toBeNull();
     expect(queryByTestId('product-not-found')).toBeNull();
   });
 
@@ -231,5 +237,51 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     const { findByText, queryByTestId } = render(<ProductScreen />);
     await findByText('Sourdough');
     expect(queryByTestId('review-product-banner')).toBeNull();
+  });
+});
+
+describe('ProductScreen — rating submission errors', () => {
+  beforeEach(() => {
+    mockApiGet.mockReset();
+    mockApiPost.mockReset();
+    mockUseSession.mockReset();
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'guest', is_anonymous: true } },
+      isAnonymous: true,
+      isLoading: false,
+    });
+    mockApiGet.mockResolvedValue({
+      id: 'p1',
+      barcode: '0000000000001',
+      name: 'Sourdough Loaf',
+      brand: 'Artisan',
+      image: null,
+      description: null,
+    });
+  });
+
+  it('shows the friendly "Could not submit your rating" copy on a 500 — never the raw Prisma message', async () => {
+    mockApiPost.mockRejectedValue(
+      new ApiError(
+        500,
+        'PrismaClientKnownRequestError: Foreign key constraint failed on the field: `Rating_userId_fkey`',
+        {},
+      ),
+    );
+    const { findByText, queryByText, getByText } = render(<ProductScreen />);
+    await findByText('Sourdough Loaf');
+    fireEvent.press(getByText('Submit Rating'));
+    await findByText(/Could not submit your rating/i);
+    expect(queryByText(/Prisma|Rating_userId_fkey|Foreign key/i)).toBeNull();
+  });
+
+  it('forwards the validator copy on a 400 (server-controlled message is safe to show)', async () => {
+    mockApiPost.mockRejectedValue(
+      new ApiError(400, 'taste must be between 0 and 10 in 0.5 increments', {}),
+    );
+    const { findByText, getByText } = render(<ProductScreen />);
+    await findByText('Sourdough Loaf');
+    fireEvent.press(getByText('Submit Rating'));
+    await findByText(/taste must be between/i);
   });
 });

@@ -71,7 +71,9 @@ Keep business logic in these modules — route files stay UI-only.
 
 **Native-optional dependencies** (`@react-native-ml-kit/text-recognition`, `expo-image-picker`, `expo-image-manipulator`) used by `features/products/` are loaded via guarded `require()`. Tests (jest-expo) pass without them; the runtime must install them for the full flow to work end-to-end.
 
-**HTTP client:** `lib/api.ts` exposes a thin typed wrapper around `fetch`. Errors surface as an `ApiError` class carrying the HTTP `status` and parsed `body`, so route files can branch on status codes (e.g. `instanceof ApiError && err.status === 404`) without re-parsing messages.
+**HTTP client:** `lib/api.ts` exposes a thin typed wrapper around `fetch`. Errors surface as an `ApiError` class carrying the HTTP `status` and parsed `body`, so route files can branch on status codes (e.g. `instanceof ApiError && err.status === 404`) without re-parsing messages. The wrapper extracts an error message from either `body.message` or `body.error` (the two shapes the backend uses).
+
+**User-facing error copy:** `lib/format-error.ts` exposes `formatApiError(err, fallback?)`. Screens that surface caught errors to the user must run them through this helper rather than displaying `err.message` directly. The helper maps each HTTP status class to safe copy — 401 → "Your session has expired…", 403 → server message (validators write safe copy here), 404 → "We could not find what you were looking for.", 429 → rate-limit copy, **5xx → fallback copy only (never the raw server message)**. This is the single chokepoint preventing internal errors (Prisma stack traces, FK constraint names) from being rendered on screen.
 
 **Pending return-to:** `lib/pending-return-to.ts` persists a single deep-link destination on disk via `expo-file-system/legacy`. This survives the cold app restart triggered by email magic links. The signup screen writes it before kicking off auth; `app/_layout.tsx` reads + clears it on the post-signin redirect.
 
@@ -80,11 +82,12 @@ Keep business logic in these modules — route files stay UI-only.
 **Pattern:** Routes → Controllers → Services → Database (MVC)
 
 **Middleware stack** (in order in `app.ts`):
-1. Rate limiting: `apiLimiter` (100 req/15min) on `/api/*`, `authLimiter` (10 req/hr) on auth endpoints
-2. `requireAuth` — verifies Supabase Bearer token, injects `user` into `req` (including `isAnonymous` flag derived from the JWT `is_anonymous` claim)
-3. `requireRegistered` — composable second-layer guard for contribution routes; rejects anonymous sessions with `403 { error: 'Registration required' }`. Applied after `requireAuth` on `POST /api/products`, `POST /api/products/extract-label`, and both `POST`/`DELETE /api/products/:barcode/verify`.
-4. Controllers handle request/response
-5. `errorHandler` — centralized error middleware
+1. `requestLogger` — emits one structured `request:start` (debug) and one `request:finish` (info/warn/error depending on status) line per request with `method`, `path`, `status`, `durationMs`, `userId`, `isAnonymous`, `ip`, and `x-request-id` (when supplied). Mounted before rate-limiting so even throttled requests are recorded.
+2. Rate limiting: `apiLimiter` (100 req/15min) on `/api/*`, `authLimiter` (10 req/hr) on auth endpoints
+3. `requireAuth` — verifies Supabase Bearer token, injects `user` into `req` (including `isAnonymous` flag derived from the JWT `is_anonymous` claim)
+4. `requireRegistered` — composable second-layer guard for contribution routes; rejects anonymous sessions with `403 { error: 'Registration required' }`. Applied after `requireAuth` on `POST /api/products`, `POST /api/products/extract-label`, and both `POST`/`DELETE /api/products/:barcode/verify`.
+5. Controllers handle request/response
+6. `errorHandler` — centralized error middleware with a two-channel design. **Server side:** logs full detail (stack, Prisma `code`, `meta`, original message, path, method, userId) via winston. **Client side:** sanitized JSON body of shape `{ message, code? }`. 5xx errors and unknown Prisma errors collapse to a generic message (`"Something went wrong on our end. Please try again."`); the original `err.message` is only forwarded when the status is 4xx and the error does not set `expose: false`. Known Prisma codes are mapped to safe copy: `P2002` → 409 `unique_violation`, `P2003` → 409 `foreign_key_violation`, `P2025` → 404 `not_found`. The `AppError` interface exposes `status`, `code?`, and `expose?` for controllers that want stricter sanitisation.
 
 **Prisma client** is generated to a custom location: `src/generated/prisma_client`. Always import from there, not from `@prisma/client` directly.
 
@@ -131,6 +134,11 @@ NODE_ENV=development
 DATABASE_URL="postgresql://admin:password@localhost:5432/breadsheet"
 SUPABASE_URL=...
 SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
+
+# Logging
+# LOG_LEVEL overrides the default (debug in dev, info in prod, warn in test).
+# Useful values: error | warn | info | http | verbose | debug | silly
+LOG_LEVEL=debug
 
 # Vision / OCR
 VISION_MODE=mock                          # mock | tesseract | live  (no default — must be explicit)

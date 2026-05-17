@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { errorHandler } from './middlewares/errorHandler.js';
 import { apiLimiter } from './middlewares/rateLimit.js';
+import { requestLogger } from './middlewares/requestLogger.js';
 import userRoutes from './routes/userRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import ratingRoutes from './routes/ratingRoutes.js';
@@ -12,6 +13,10 @@ const app = express();
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json());
+
+// Request logging — emits a structured line per request including method,
+// path, status, duration, and (when auth has run) the userId.
+app.use(requestLogger);
 
 // Rate limiting
 app.use('/api', apiLimiter);

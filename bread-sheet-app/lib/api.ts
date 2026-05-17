@@ -38,10 +38,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const message =
-      (body && typeof body === 'object' && 'message' in body && typeof (body as { message: unknown }).message === 'string'
-        ? (body as { message: string }).message
-        : null) ?? `Request failed with status ${res.status}`;
+    // The backend uses two shapes for error bodies:
+    //   - `{ message: string }` from the global errorHandler
+    //   - `{ error: string }` from middlewares (auth, rate-limit)
+    // Either one is treated as the server-side message; if neither is present
+    // we fall back to a status-derived label.
+    const fromBody =
+      body && typeof body === 'object'
+        ? (typeof (body as { message?: unknown }).message === 'string'
+            ? (body as { message: string }).message
+            : typeof (body as { error?: unknown }).error === 'string'
+              ? (body as { error: string }).error
+              : null)
+        : null;
+    const message = fromBody ?? `Request failed with status ${res.status}`;
     throw new ApiError(res.status, message, body);
   }
 

@@ -446,3 +446,11 @@ Snappy startup - cached user votes and products on device (in supermarkets the m
 ## User Engagement
 - Create User Role "Moderator" which can review multiple products in a row
 
+## Non-ISBN Products
+- Enable user to rate more general products without a explicit code (e.g. not food)
+
+## Search by name
+- Enable users to search for products by name instead of isbn code
+
+## Pro Users can set own pictures
+- Low Prio, enable users to replace picture with a better one (at least for themselfs)

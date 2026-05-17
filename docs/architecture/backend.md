@@ -33,17 +33,79 @@ Applied in order in `app.ts`:
 
 | Order | Middleware | Scope | Purpose |
 |-------|-----------|-------|---------|
-| 1 | `apiLimiter` | `POST /api/*` | 100 req / 15 min — broad API rate limit |
-| 2 | `authLimiter` | auth endpoints | 10 req / hr — tighter limit on auth routes |
-| 3 | `requireAuth` | protected routes | Validates Supabase Bearer JWT; injects `req.user` |
-| 4 | `requireRegistered` | contribution routes | Checks `is_anonymous !== true`; rejects guests with `403` |
-| 5 | `requireSelf(param)` | user-scoped routes | Compares `req.user.id` to route param; `403` on mismatch |
-| 6 | `requireGroupMember` | group routes | Verifies `GroupMember` record exists; `403` if not |
-| 7 | `requireGroupAdmin` | group admin routes | Same as above + asserts `role === 'ADMIN'` |
-| 8 | Controllers | — | Handle request, call service, send response |
-| 9 | `errorHandler` | global | Centralised error formatting; maps known errors to HTTP status codes |
+| 1 | `requestLogger` | global | Structured per-request log (`request:start` + `request:finish`) including method, path, status, duration, userId, isAnonymous, IP, and `x-request-id` |
+| 2 | `apiLimiter` | `POST /api/*` | 100 req / 15 min — broad API rate limit |
+| 3 | `authLimiter` | auth endpoints | 10 req / hr — tighter limit on auth routes |
+| 4 | `requireAuth` | protected routes | Validates Supabase Bearer JWT; injects `req.user` |
+| 5 | `requireRegistered` | contribution routes | Checks `is_anonymous !== true`; rejects guests with `403` |
+| 6 | `requireSelf(param)` | user-scoped routes | Compares `req.user.id` to route param; `403` on mismatch |
+| 7 | `requireGroupMember` | group routes | Verifies `GroupMember` record exists; `403` if not |
+| 8 | `requireGroupAdmin` | group admin routes | Same as above + asserts `role === 'ADMIN'` |
+| 9 | Controllers | — | Handle request, call service, send response |
+| 10 | `errorHandler` | global | Two-channel sanitiser — full detail to logs, generic copy to client |
 
-Authorization guards (5–7) are composable and applied at the **router layer**, not inside controllers.
+Authorization guards (6–8) are composable and applied at the **router layer**, not inside controllers.
+
+---
+
+## Logging
+
+A single winston logger (`src/logger.ts`) drives all server output. Levels are chosen automatically by `NODE_ENV` and can be overridden with the `LOG_LEVEL` env var:
+
+| `NODE_ENV` | Default level | Console output? |
+|------------|---------------|-----------------|
+| `production` | `info` | — file transports only (`combined.log`, `error.log`) |
+| `test` | `warn` | — keeps the vitest output clean |
+| anything else | `debug` | yes — colorised, timestamped, printf-style |
+
+**Request logging.** `middlewares/requestLogger.ts` emits two structured lines per request:
+
+- `request:start` (debug) when the request first hits the middleware — useful for spotting hangs that never reach `finish`.
+- `request:finish` (info / warn / error depending on status) on the response `finish` event. The payload is:
+  ```ts
+  { method, path, status, durationMs, userId?, isAnonymous?, ip, requestId? }
+  ```
+  `userId` / `isAnonymous` are populated when `requireAuth` has already run for that request, which lets you grep the log for everything one user did. `requestId` is taken from the `x-request-id` header if the caller sets one.
+
+Operationally this means a single rating attempt by an anonymous user produces lines like:
+
+```
+12:31:47.103 debug request:start {"method":"POST","path":"/api/ratings","ip":"::ffff:192.168.1.4"}
+12:31:47.198 error unhandled error in request {"method":"POST","path":"/api/ratings","status":500,"userId":"anon-1","isAnonymous":true,"errorName":"PrismaClientKnownRequestError","prismaCode":"P2003","stack":"…"}
+12:31:47.199 error request:finish {"method":"POST","path":"/api/ratings","status":500,"durationMs":96,"userId":"anon-1","isAnonymous":true,"ip":"::ffff:192.168.1.4"}
+```
+
+…while the client only ever sees `{ message: "A referenced item does not exist yet. Please refresh and try again.", code: "foreign_key_violation" }`.
+
+---
+
+## Error Handling
+
+The global `errorHandler` has a strict two-channel design that keeps internal detail server-side:
+
+1. **Server log channel** — winston `error` for 5xx, `warn` for handled 4xx. Payload includes the path, method, userId, error name, original message, Prisma `code` and `meta` (if any), and the full stack.
+2. **Client response channel** — JSON body of shape `{ message: string, code?: string }`. The `message` is **never** the original `err.message` for 5xx responses; it is a fixed, generic string. For 4xx, the original message is forwarded unless the caller explicitly sets `expose: false` on the error.
+
+**Prisma error mapping.** Any Prisma error (`PrismaClientKnownRequestError`, `PrismaClientValidationError`, `PrismaClientUnknownRequestError`, `PrismaClientInitializationError`, `PrismaClientRustPanicError`) is detected by `err.name` and translated:
+
+| Prisma code | Status | Client `code` | Client `message` |
+|-------------|--------|---------------|------------------|
+| `P2002` | 409 | `unique_violation` | `That item already exists.` |
+| `P2003` | 409 | `foreign_key_violation` | `A referenced item does not exist yet. Please refresh and try again.` |
+| `P2025` | 404 | `not_found` | `Not found.` |
+| _anything else_ | 500 | — | `Something went wrong on our end. Please try again.` |
+
+The `P2003` mapping catches the common "anonymous user rates a product before `POST /api/users/sync` has run" case — the client now sees a recoverable message instead of a raw Prisma constraint dump.
+
+**`AppError` interface** for controllers that want to throw structured errors:
+
+```ts
+interface AppError extends Error {
+  status?: number;   // HTTP status; defaults to 500
+  expose?: boolean;  // forward err.message to client? defaults to true for 4xx, false for 5xx
+  code?: string;     // optional machine-readable code (e.g. "product_already_verified")
+}
+```
 
 ---
 

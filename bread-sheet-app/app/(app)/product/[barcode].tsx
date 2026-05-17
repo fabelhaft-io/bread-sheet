@@ -19,6 +19,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { ApiError, api } from '@/lib/api';
+import { formatApiError } from '@/lib/format-error';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
 
@@ -340,7 +341,7 @@ export default function ProductScreen() {
         if (err instanceof ApiError && err.status === 404) {
           setNotFound(true);
         } else {
-          setLoadError(err instanceof Error ? err.message : 'Failed to load product');
+          setLoadError(formatApiError(err, 'Could not load this product. Please try again.'));
         }
       })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -359,7 +360,7 @@ export default function ProductScreen() {
       });
       setSubmitted(true);
     } catch (err: unknown) {
-      setSubmitError(err instanceof Error ? err.message : 'Failed to submit rating');
+      setSubmitError(formatApiError(err, 'Could not submit your rating. Please try again.'));
     } finally {
       setSubmitting(false);
     }

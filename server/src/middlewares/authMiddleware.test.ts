@@ -85,12 +85,16 @@ describe('requireAuth', () => {
     expect(req.user).toEqual({ id: 'user-789', email: 'other@example.com', isAnonymous: true });
   });
 
-  it('returns 500 when an unexpected error is thrown', async () => {
-    mockGetUser.mockRejectedValue(new Error('network failure'));
+  it('returns 500 with a generic (non-leaky) message when an unexpected error is thrown', async () => {
+    mockGetUser.mockRejectedValue(new Error('network failure: secret-internal-host:5432'));
     const { req, res, next } = makeReqResNext('Bearer some-token');
+    req.originalUrl = '/api/ratings';
     await requireAuth(req, res, next);
     expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Internal server error during authentication' });
+    const body = (res.json as any).mock.calls[0][0];
+    expect(body.error).toBeTypeOf('string');
+    // The original verifier error text must never make it into the response.
+    expect(body.error).not.toMatch(/network failure|secret-internal-host/);
     expect(next).not.toHaveBeenCalled();
   });
 });

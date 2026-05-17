@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import logger from '../logger.js';
 
 // Initialize Supabase client
 // Ensure these are in your server/.env file
@@ -54,10 +55,16 @@ export const requireAuth = async (
 
     next();
   } catch (err) {
-    console.error('Auth Middleware Error:', err);
+    logger.error('Auth middleware error', {
+      errorName: (err as Error).name,
+      errorMessage: (err as Error).message,
+      stack: (err as Error).stack,
+      path: req.originalUrl,
+    });
+    // Generic message — never echo the verifier internals back to the caller.
     res
       .status(500)
-      .json({ error: 'Internal server error during authentication' });
+      .json({ error: 'Authentication failed. Please try again.' });
   }
 };
 
