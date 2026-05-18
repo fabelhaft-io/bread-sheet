@@ -264,7 +264,8 @@ User History
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
 ### [TICKET-P5-004] Anonymous users
-**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. Minor Frontend fix: Rating screen should be one full screen with no scroll column (currently on iOS it is slightly too high)
+**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. 
+Minor Frontend fix: Screens should be if possible one full screen with no scroll column (currently on iOS it is slightly too high on rating screen and product submission)
 
 ### [TICKET-P5-006] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.
