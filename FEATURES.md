@@ -438,6 +438,9 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 ## Ensure offline usability
 Snappy startup - cached user votes and products on device (in supermarkets the mobile connection is often poor)
 
+## Tracing id and Idempotency
+Help tracing the path of requests to different systems with tracing and span ids, detect duplicated requests with idempotency keys
+
 ## Release
 - Create Terms and Conditions
 - Create Data Protection Documentation
