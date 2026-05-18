@@ -22,7 +22,7 @@ export async function captureImage(source: CaptureSource): Promise<CaptureResult
     const perm = await mod.requestCameraPermissionsAsync();
     if (!perm.granted) return { uri: null };
     const result = await mod.launchCameraAsync({
-      mediaTypes: mod.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: false,
       quality: 1,
     });
@@ -32,7 +32,7 @@ export async function captureImage(source: CaptureSource): Promise<CaptureResult
   const perm = await mod.requestMediaLibraryPermissionsAsync();
   if (!perm.granted) return { uri: null };
   const result = await mod.launchImageLibraryAsync({
-    mediaTypes: mod.MediaTypeOptions.Images,
+    mediaTypes: ['images'],
     allowsEditing: false,
     quality: 1,
   });
@@ -51,7 +51,6 @@ function unpack(result: ImagePickerResultLike): CaptureResult {
 }
 
 type ImagePickerModule = {
-  MediaTypeOptions: { Images: unknown };
   requestCameraPermissionsAsync: () => Promise<{ granted: boolean }>;
   requestMediaLibraryPermissionsAsync: () => Promise<{ granted: boolean }>;
   launchCameraAsync: (opts: unknown) => Promise<ImagePickerResultLike>;

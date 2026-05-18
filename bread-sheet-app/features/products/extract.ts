@@ -27,6 +27,13 @@ export type ExtractionOutcome =
 export async function extractFromLabelImage(imageUri: string): Promise<ExtractionOutcome> {
   const ocr = await recogniseLabelText(imageUri);
 
+  const trimmedLen = ocr.rawText.trim().length;
+  console.log(
+    `[extract] on-device OCR — unavailable=${ocr.unavailable} length=${trimmedLen} threshold=${MIN_OCR_LENGTH} path=${
+      !ocr.unavailable && trimmedLen >= MIN_OCR_LENGTH ? 'text' : 'image-fallback'
+    }\n--- rawText ---\n${ocr.rawText.slice(0, 1000)}\n--- end rawText ---`,
+  );
+
   if (!ocr.unavailable && ocr.rawText.trim().length >= MIN_OCR_LENGTH) {
     try {
       const data = await extractLabelFromText(ocr.rawText);
