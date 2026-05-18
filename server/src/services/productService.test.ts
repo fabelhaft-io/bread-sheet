@@ -133,6 +133,14 @@ describe('fetchFromOpenFoodFacts', () => {
       'Open Food Facts API error: 503',
     );
   });
+
+  it('returns null (does not throw) when OFF returns HTTP 404 for an unknown barcode', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValue(makeResponse({}, false, 404)),
+    );
+    await expect(fetchFromOpenFoodFacts('4016548067272')).resolves.toBeNull();
+  });
 });
 
 const VALID_INPUT: ProductSubmissionInput = {

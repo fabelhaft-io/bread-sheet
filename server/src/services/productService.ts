@@ -33,6 +33,11 @@ export async function fetchFromOpenFoodFacts(
     },
   );
 
+  // OFF returns 404 when the barcode is not in its catalogue. That's an expected
+  // outcome — surface it as `null` so the caller can fall through to the
+  // user-submission flow. Other non-OK statuses (5xx, etc.) are genuine failures.
+  if (res.status === 404) return null;
+
   if (!res.ok) {
     throw new Error(
       `Open Food Facts API error: ${res.status} ${res.statusText}`,
