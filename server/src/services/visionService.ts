@@ -1,5 +1,6 @@
 import { ImageAnnotatorClient } from '@google-cloud/vision';
 import path from 'path';
+import logger from '../logger.js';
 
 const VALID_VISION_MODES = ['mock', 'live', 'tesseract'] as const;
 type VisionMode = (typeof VALID_VISION_MODES)[number];
@@ -51,7 +52,9 @@ async function ocrMock(_buffer: Buffer): Promise<string> {
 async function ocrLive(buffer: Buffer): Promise<string> {
   const client = getVisionClient();
   const [result] = await client.documentTextDetection({ image: { content: buffer } });
-  return result.fullTextAnnotation?.text ?? '';
+  const text = result.fullTextAnnotation?.text ?? '';
+  logger.debug('vision:ocrLive raw text', { length: text.length, text });
+  return text;
 }
 
 async function ocrTesseract(buffer: Buffer): Promise<string> {
