@@ -236,9 +236,22 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
 | Input | Path | Status |
 |-------|------|--------|
 | `{ rawText: string }` (≥ `MIN_OCR_LENGTH = 50` chars) | Text path — hand-rolled regex parser (`labelExtractionService.ts`); English + German patterns | **Shipped (T5)** |
-| Multipart image | Vision path — Google Cloud Vision `documentTextDetection`, then reuses the same parser | **Pending (T6)** — returns `501` until implemented |
+| Multipart image | Image path — implementation chosen by `VISION_MODE` (see below) | **Shipped** |
 
-**Authentication (`live` mode):** Uses Application Default Credentials (ADC) — no service account JSON key. In production the pod's `GOOGLE_APPLICATION_CREDENTIALS` env var points to a Workload Identity Federation credential config file (`type: external_account`) mounted from a ConfigMap. The Google auth library exchanges the pod's IRSA/OIDC token for a short-lived GCP access token automatically. For local `live` testing run `gcloud auth application-default login`.
+**Image-path modes (`VISION_MODE`):**
+
+| Mode | Pipeline | Notes |
+|------|----------|-------|
+| `mock` | Returns a fixed `MOCK_OCR_TEXT` string → regex parser | Dev/test default |
+| `tesseract` | Local `tesseract` binary OCR → regex parser | Offline fallback |
+| `live` | Google Cloud Vision `documentTextDetection` (ADC) → regex parser | Cheap, deterministic, fragile to multi-column layouts |
+| `llm` | Gemini 2.5 Flash multimodal call → JSON conforming to `ExtractedLabel` schema | Handles column layouts and multi-language by understanding the image directly; requires `GEMINI_API_KEY` |
+
+The controller (`labelExtractionController.ts`) branches on `getVisionMode()`: `llm` calls `extractLabelWithLlm(buffer, mimeType)` and returns its result directly; every other mode flows through `ocrLabelImage` → `extractFromText`.
+
+**Authentication (`live` mode):** Uses Application Default Credentials (ADC) — no service account JSON key. In production the pod's `GOOGLE_APPLICATION_CREDENTIALS` env var points to a Workload Identity Federation credential config file (`type: external_account`) mounted from a ConfigMap. The Google auth library exchanges the pod's IRSA/OIDC token for a short-lived GCP access token automatically. For local `live` testing run `gcloud auth application-default login` and then `gcloud auth application-default set-quota-project <project>` (Vision requires an ADC quota project).
+
+**Authentication (`llm` mode):** `GEMINI_API_KEY` only — issued from Google AI Studio. The `@google/genai` SDK uses it directly; no GCP project / ADC plumbing required. Schema validation is enforced by Gemini's `responseSchema` + `responseMimeType: 'application/json'`, so the controller can `JSON.parse` the response and cast to `ExtractedLabel` without further validation. The full Gemini response is logged at `debug` level (`vision:llm raw response`).
 
 **Parser design (`labelExtractionService.ts`):**
 - All patterns use the `m` flag so `^` anchors to the start of each line, preventing sub-entry rows ("of which saturates", "davon Zucker") from matching the parent-nutrient patterns.
@@ -261,7 +274,7 @@ A Postman collection covering every endpoint lives at `docs/postman/breadsheet.p
 
 **No inline defaults for runtime-behaviour variables.** All environment variables that control runtime behaviour must be read and validated in `server/src/configs/config.ts` at startup. If a required variable is absent or has an unexpected value the process must throw a descriptive error — never fall back silently to a local-dev default in application code.
 
-**Mode-style variables** (e.g. `VISION_MODE`) must be validated against an explicit allowlist (`'mock' | 'live' | 'tesseract'`). Any value outside the allowlist — including an absent value — is a startup error.
+**Mode-style variables** (e.g. `VISION_MODE`) must be validated against an explicit allowlist (`'mock' | 'live' | 'tesseract' | 'llm'`). Any value outside the allowlist — including an absent value — is a startup error. Conditional secrets that a mode requires (e.g. `GEMINI_API_KEY` when `VISION_MODE=llm`) are also validated at startup in `config.ts`.
 
 **Local-dev values** belong in `.env` (git-ignored), not hardcoded in source.
 

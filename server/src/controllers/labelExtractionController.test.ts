@@ -4,6 +4,10 @@ import request from 'supertest';
 // ── labelExtractionService / visionService mocks ─────────────────────────────
 const mockExtractFromText = vi.hoisted(() => vi.fn());
 const mockOcrLabelImage = vi.hoisted(() => vi.fn());
+const mockExtractLabelWithLlm = vi.hoisted(() => vi.fn());
+const mockGetVisionMode = vi.hoisted(() =>
+  vi.fn<() => 'mock' | 'live' | 'tesseract' | 'llm'>(() => 'live'),
+);
 // Controls whether the multer mock populates req.file for this test run.
 const injectFile = vi.hoisted(() => ({ buffer: null as Buffer | null }));
 
@@ -13,6 +17,11 @@ vi.mock('../services/labelExtractionService.js', () => ({
 
 vi.mock('../services/visionService.js', () => ({
   ocrLabelImage: mockOcrLabelImage,
+  getVisionMode: mockGetVisionMode,
+}));
+
+vi.mock('../services/labelExtractionLlmService.js', () => ({
+  extractLabelWithLlm: mockExtractLabelWithLlm,
 }));
 
 // ── Auth / rate-limit stubs ──────────────────────────────────────────────────
@@ -111,6 +120,9 @@ describe('POST /api/products/extract-label', () => {
   beforeEach(() => {
     mockExtractFromText.mockReset();
     mockOcrLabelImage.mockReset();
+    mockExtractLabelWithLlm.mockReset();
+    mockGetVisionMode.mockReset();
+    mockGetVisionMode.mockReturnValue('live');
     injectFile.buffer = null;
     session.user = { id: 'user-1', email: 'test@test.com', isAnonymous: false };
   });
@@ -208,6 +220,27 @@ describe('POST /api/products/extract-label', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('image_required');
+    expect(mockOcrLabelImage).not.toHaveBeenCalled();
+    expect(mockExtractFromText).not.toHaveBeenCalled();
+  });
+
+  it('routes multipart uploads to the LLM extractor when VISION_MODE=llm', async () => {
+    mockGetVisionMode.mockReturnValue('llm');
+    injectFile.buffer = Buffer.from('fake-image-bytes');
+    mockExtractLabelWithLlm.mockResolvedValue(FAKE_LABEL);
+
+    const res = await request(app)
+      .post('/api/products/extract-label')
+      .set('Authorization', 'Bearer token')
+      .set('Content-Type', 'multipart/form-data; boundary=----boundary')
+      .send('------boundary--');
+
+    expect(res.status).toBe(200);
+    expect(res.body.energyKcal).toBe(295);
+    expect(mockExtractLabelWithLlm).toHaveBeenCalledWith(
+      injectFile.buffer,
+      'image/jpeg',
+    );
     expect(mockOcrLabelImage).not.toHaveBeenCalled();
     expect(mockExtractFromText).not.toHaveBeenCalled();
   });

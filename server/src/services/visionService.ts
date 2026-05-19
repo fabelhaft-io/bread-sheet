@@ -2,14 +2,14 @@ import { ImageAnnotatorClient } from '@google-cloud/vision';
 import path from 'path';
 import logger from '../logger.js';
 
-const VALID_VISION_MODES = ['mock', 'live', 'tesseract'] as const;
-type VisionMode = (typeof VALID_VISION_MODES)[number];
+const VALID_VISION_MODES = ['mock', 'live', 'tesseract', 'llm'] as const;
+export type VisionMode = (typeof VALID_VISION_MODES)[number];
 
-function getMode(): VisionMode {
+export function getVisionMode(): VisionMode {
   const m = process.env.VISION_MODE;
   if (!m) {
     throw new Error(
-      'Missing required environment variable: VISION_MODE. Valid values: mock | live | tesseract',
+      'Missing required environment variable: VISION_MODE. Valid values: mock | live | tesseract | llm',
     );
   }
   if (!VALID_VISION_MODES.includes(m as VisionMode)) {
@@ -84,11 +84,13 @@ async function ocrTesseract(buffer: Buffer): Promise<string> {
 }
 
 export async function ocrLabelImage(buffer: Buffer): Promise<string> {
-  switch (getMode()) {
+  switch (getVisionMode()) {
     case 'live':
       return ocrLive(buffer);
     case 'tesseract':
       return ocrTesseract(buffer);
+    case 'llm':
+      throw new Error('ocrLabelImage must not be called in llm mode — use extractLabelWithLlm');
     default:
       return ocrMock(buffer);
   }

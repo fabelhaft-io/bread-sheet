@@ -1,7 +1,8 @@
 import { Response, NextFunction } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
 import { extractFromText } from '../services/labelExtractionService.js';
-import { ocrLabelImage } from '../services/visionService.js';
+import { extractLabelWithLlm } from '../services/labelExtractionLlmService.js';
+import { getVisionMode, ocrLabelImage } from '../services/visionService.js';
 
 const MIN_OCR_LENGTH = 50;
 
@@ -15,6 +16,10 @@ export const extractLabel = async (
     if (req.is('multipart/form-data')) {
       if (!req.file) {
         return res.status(400).json({ error: 'image_required' });
+      }
+      if (getVisionMode() === 'llm') {
+        const label = await extractLabelWithLlm(req.file.buffer, req.file.mimetype);
+        return res.json(label);
       }
       const rawText = await ocrLabelImage(req.file.buffer);
       return res.json(extractFromText(rawText));

@@ -140,10 +140,12 @@ SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
 # Useful values: error | warn | info | http | verbose | debug | silly
 LOG_LEVEL=debug
 
-# Vision / OCR
-VISION_MODE=mock                          # mock | tesseract | live  (no default — must be explicit)
-# For live mode locally: run `gcloud auth application-default login` (ADC)
+# Vision / OCR / structured extraction
+VISION_MODE=mock                          # mock | tesseract | live | llm  (no default — must be explicit)
+# For `live` (Google Cloud Vision OCR) locally: run `gcloud auth application-default login` (ADC)
 # In prod: GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/wif-credentials.json (mounted ConfigMap)
+# For `llm` (Gemini multimodal — image → ExtractedLabel JSON in one call):
+GEMINI_API_KEY=...                        # required only when VISION_MODE=llm
 ```
 
 **Frontend (`bread-sheet-app/.env` or `app.config.js`):**
