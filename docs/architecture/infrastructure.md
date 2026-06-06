@@ -19,7 +19,7 @@ docker compose --profile app-dev up -d
 | Service | Port | Purpose |
 |---------|------|---------|
 | PostgreSQL 18-Alpine | 5432 | Primary database (`admin:password@localhost:5432/breadsheet`) |
-| LocalStack | 4566 | AWS service emulation (S3, Lambda, IAM, STS) |
+| LocalStack | 4566 | AWS service emulation (S3, Lambda, IAM, STS, SQS) |
 | Server (app-dev profile) | 3000 | API server with hot-reload via nodemon |
 
 LocalStack allows developers to test S3 uploads and Lambda triggers without an AWS account or cost.
@@ -32,7 +32,7 @@ cd server/lambda/imageResizer
 npm install
 npm run build   # outputs dist/bundle/ (JS + sharp Linux x64 binary)
 cd ../../..
-terraform -chdir=terraform apply
+terraform -chdir=terraform apply -var-file=terraform/environments/local.tfvars
 ```
 
 The build script installs the Linux x64 variant of sharp into `dist/bundle/node_modules/` regardless of the host OS, producing a Lambda-compatible artifact.
@@ -41,10 +41,14 @@ The build script installs the Linux x64 variant of sharp into `dist/bundle/node_
 
 ## Cloud Infrastructure (Terraform)
 
-`terraform/` is the single source of truth for all AWS resources. Apply via CI or manually:
+`terraform/` is the single source of truth for all AWS resources. Environment-specific variables are in `terraform/environments/`. Apply via CI or manually:
 
 ```sh
-cd terraform && terraform apply
+# Local (LocalStack)
+terraform -chdir=terraform apply -var-file=environments/local.tfvars
+
+# Production
+terraform -chdir=terraform apply -var-file=environments/production.tfvars
 ```
 
 ### Resources provisioned
