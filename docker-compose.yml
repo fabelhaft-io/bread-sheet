@@ -53,7 +53,7 @@ services:
     ports:
       - "4566:4566" # Gateway port for all services
     environment:
-      - SERVICES=s3,lambda,iam,sts
+      - SERVICES=s3,lambda,iam,sts,sqs
       - DEBUG=1
       - DOCKER_HOST=unix:///var/run/docker.sock # Required for Lambda execution
       - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}

@@ -54,7 +54,7 @@ resource "aws_lambda_function" "image_resizer" {
   function_name    = "image-resizer"
   role             = aws_iam_role.image_resizer.arn
   handler          = "index.handler"
-  runtime          = "nodejs20.x"
+  runtime          = "nodejs24.x"
   timeout          = 30
   memory_size      = 512
 

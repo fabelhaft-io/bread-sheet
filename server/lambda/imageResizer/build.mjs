@@ -5,7 +5,7 @@
  * the sharp native binary under node_modules/. Terraform's `archive_file` data
  * source zips this directory into dist/imageResizer.zip.
  *
- * Sharp requires a Linux x64 binary when targeting Lambda (Node.js 20 runtime).
+ * Sharp requires a Linux x64 binary when targeting Lambda (Node.js 24 runtime).
  * This script installs the correct binary into dist/bundle/node_modules before
  * bundling. Run this on any OS — npm handles the cross-platform install.
  *
@@ -16,7 +16,7 @@
  */
 
 import { build } from 'esbuild';
-import { rmSync, mkdirSync, cpSync, existsSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdirSync, existsSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
 const bundleDir = 'dist/bundle';
@@ -32,7 +32,7 @@ await build({
   entryPoints: ['src/index.ts'],
   bundle: true,
   platform: 'node',
-  target: 'node20',
+  target: 'node24',
   external: ['@aws-sdk/*', 'sharp'],
   outfile: `${bundleDir}/index.js`,
   format: 'cjs',
@@ -45,8 +45,11 @@ writeFileSync(
   `${bundleDir}/package.json`,
   JSON.stringify({ dependencies: { sharp: '0.34.0' } }),
 );
+// Sharp 0.33+ ships prebuilt binaries via optional dependencies. npm filters
+// which optional deps to install based on --os / --cpu / --libc. Lambda's
+// Node.js 24 runtime is Linux x64 glibc.
 execSync(
-  'npm install --platform=linux --arch=x64 --target=20.14.0 sharp',
+  'npm install --os=linux --cpu=x64 --libc=glibc sharp',
   { cwd: bundleDir, stdio: 'inherit' },
 );
 rmSync(`${bundleDir}/package.json`);
