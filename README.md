@@ -87,24 +87,42 @@ In IntelliJ / WebStorm you can open a WSL2 terminal directly:
 
     This project requires a [Supabase](https://supabase.com) project for authentication. Create a free project at supabase.com, then find your **Project URL** and **anon/public key** under **Project Settings → API**. Additionally enable anonymous login for the project.
 
-    * Create a `./server/.env` file:
+    Each package ships an `.env.example` file — copy it and fill in the placeholders:
 
-        ```env
-        PORT=3000
-        NODE_ENV=development
-        DATABASE_URL="postgresql://admin:password@localhost:5432/breadsheet"
-        SUPABASE_URL=https://<your-project-ref>.supabase.co
-        SUPABASE_PUBLISHABLE_DEFAULT_KEY=<your-anon-key>
-        VISION_MODE=mock                              # 'mock' | 'live' — required, no default
-        # GOOGLE_APPLICATION_CREDENTIALS=/path/to/wif-config.json  # required for VISION_MODE=live
-        ```
+    ```bash
+    cp server/.env.example server/.env
+    cp bread-sheet-app/.env.example bread-sheet-app/.env
+    cp .env.example .env          # root — LocalStack auth token
+    ```
 
-    * Create a `./bread-sheet-app/.env` file:
+    **`server/.env`** — backend API:
 
-        ```env
-        EXPO_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
-        EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=<your-anon-key>
-        ```
+    | Variable | Description |
+    |----------|-------------|
+    | `PORT` | Port the Express server listens on (default `3000`) |
+    | `NODE_ENV` | Runtime environment (`development` / `production` / `test`) |
+    | `DATABASE_URL` | PostgreSQL connection string — matches the Docker Compose service |
+    | `SUPABASE_URL` | Your Supabase project URL (Project Settings → API) |
+    | `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Supabase anon/public key (same settings page) |
+    | `AWS_ENDPOINT_URL` | LocalStack endpoint for S3/Lambda emulation (`http://localhost:4566` locally) |
+    | `S3_BUCKET_NAME` | S3 bucket where product images are stored |
+    | `VISION_MODE` | OCR backend: `mock` (fixture), `tesseract` (local), `live` (Google Vision), `llm` (Gemini) — **required, no default** |
+    | `LOG_LEVEL` | Winston log verbosity (`error` / `warn` / `info` / `debug` / …) |
+    | `DEBUG` | Set `true` to enable extra debug output |
+
+    **`bread-sheet-app/.env`** — Expo frontend:
+
+    | Variable | Description |
+    |----------|-------------|
+    | `EXPO_PUBLIC_SUPABASE_URL` | Same Supabase project URL as the server |
+    | `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Same Supabase anon/public key |
+    | `EXPO_PUBLIC_API_URL` | Base URL the app uses to reach the backend (e.g. your LAN IP + port when running locally) |
+
+    **`.env`** — root (Docker Compose / LocalStack):
+
+    | Variable | Description |
+    |----------|-------------|
+    | `LOCALSTACK_AUTH_TOKEN` | Auth token for the LocalStack Pro container |
 
 5. **Development with Docker**
 

@@ -25,10 +25,26 @@ The build script installs the Linux x64 variant of `sharp` regardless of host OS
 docker compose up -d        # Postgres on :5432, LocalStack on :4566
 ```
 
+**One-time AWS CLI profile setup** — run once, then all `aws` commands below use `--profile localstack` instead of a long `--endpoint-url` flag:
+
+```sh
+aws configure --profile localstack
+# AWS Access Key ID:     test
+# AWS Secret Access Key: test
+# Default region name:   us-east-1
+# Default output format: (leave blank)
+```
+
+Then add the endpoint to `~/.aws/config` under `[profile localstack]`:
+
+```ini
+endpoint_url = http://localhost:4566
+```
+
 Sanity-check that LocalStack created the bucket:
 
 ```sh
-aws --endpoint-url=http://localhost:4566 s3 ls s3://breadsheet-images-local
+aws --profile localstack s3 ls s3://breadsheet-images-local
 ```
 
 ---
@@ -61,7 +77,7 @@ terraform -chdir=terraform init
 # Shows a "plan" diff (what will be created / changed / destroyed) and asks
 # you to type `yes` to apply it. On the very first run, expect ~7 resources
 # to be created.
-terraform -chdir=terraform apply
+terraform -chdir=terraform apply -var-file=environments/local.tfvars
 ```
 
 `terraform apply` is **idempotent** — re-running it when nothing changed produces "No changes". When you rebuild the Lambda bundle (`npm run build`), the `source_code_hash` changes, and the next `apply` will redeploy just the function code without touching IAM, the bucket, or the DLQ.
@@ -70,17 +86,17 @@ terraform -chdir=terraform apply
 
 ```sh
 # Lambda registered?
-aws --endpoint-url=http://localhost:4566 lambda list-functions \
+aws --profile localstack lambda list-functions \
   --query 'Functions[].FunctionName'
 # Expect: ["image-resizer"]
 
 # Bucket notification wired up?
-aws --endpoint-url=http://localhost:4566 s3api get-bucket-notification-configuration \
+aws --profile localstack s3api get-bucket-notification-configuration \
   --bucket breadsheet-images-local
 # Expect: a LambdaFunctionConfigurations entry with prefix "raw/"
 
 # DLQ exists?
-aws --endpoint-url=http://localhost:4566 sqs list-queues
+aws --profile localstack sqs list-queues
 # Expect: a URL ending in /image-resizer-dlq
 ```
 
@@ -88,11 +104,11 @@ aws --endpoint-url=http://localhost:4566 sqs list-queues
 
 ```sh
 # Re-read the current state from LocalStack (useful if you restarted Docker)
-terraform -chdir=terraform refresh
+terraform -chdir=terraform refresh -var-file=environments/local.tfvars
 
 # Nuke everything and re-apply from scratch (LocalStack only — never run this in prod)
-terraform -chdir=terraform destroy
-terraform -chdir=terraform apply
+terraform -chdir=terraform destroy -var-file=environments/local.tfvars
+terraform -chdir=terraform apply -var-file=environments/local.tfvars
 ```
 
 A full `docker compose down -v` wipes LocalStack's state volume, after which you'll need to delete `terraform/terraform.tfstate*` (Terraform thinks the resources still exist) and re-run `init` + `apply`.
@@ -144,7 +160,7 @@ Run the Supabase sign-in request first to populate the Bearer token. Then walk t
 
 ### 6.2 — Verify Lambda fired
 ```sh
-aws --endpoint-url=http://localhost:4566 s3 ls s3://breadsheet-images-local/processed/
+aws --profile localstack s3 ls s3://breadsheet-images-local/processed/
 ```
 The resized object should appear shortly after upload. Open the returned URL in a browser to confirm.
 
@@ -190,15 +206,15 @@ Walk the Add Product flow end-to-end against the local server: barcode → image
 
 ```sh
 # List raw uploads
-aws --endpoint-url=http://localhost:4566 s3 ls s3://breadsheet-images-local/raw/product/
-aws --endpoint-url=http://localhost:4566 s3 ls s3://breadsheet-images-local/raw/label/
+aws --profile localstack s3 ls s3://breadsheet-images-local/raw/product/
+aws --profile localstack s3 ls s3://breadsheet-images-local/raw/label/
 
 # List processed (Lambda output)
-aws --endpoint-url=http://localhost:4566 s3 ls s3://breadsheet-images-local/processed/
+aws --profile localstack s3 ls s3://breadsheet-images-local/processed/
 
 # Inspect DB
 cd server && npx prisma studio
 
 # Tail Lambda logs
-aws --endpoint-url=http://localhost:4566 logs tail /aws/lambda/breadsheet-image-resizer --follow
+aws --profile localstack logs tail /aws/lambda/breadsheet-image-resizer --follow
 ```
