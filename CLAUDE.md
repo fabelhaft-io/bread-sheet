@@ -91,7 +91,7 @@ Keep business logic in these modules — route files stay UI-only.
 
 **Prisma client** is generated to a custom location: `src/generated/prisma_client`. Always import from there, not from `@prisma/client` directly.
 
-**Image processing:** `services/imageService.ts` uses `sharp` for resizing; files stored in S3 (LocalStack locally).
+**Image processing:** `services/imageService.ts` converts uploads to JPEG (format normalisation) and stores the raw file in S3 at `raw/{kind}/{uuid}.jpg`, returning the predicted `processed/{uuid}.jpg` URL immediately. A Lambda function (triggered by S3 `ObjectCreated` events on the `raw/` prefix) handles the definitive resize (1200 px for product photos, 1600 px for label images) and writes to `processed/`. The S3 bucket and Lambda are provisioned in `terraform/`; LocalStack emulates both locally.
 
 ### Data Model (Prisma schema at `server/prisma/schema.prisma`)
 

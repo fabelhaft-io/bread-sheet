@@ -137,7 +137,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 |--------|------|------|-------------|
 | `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. |
 | `POST` | `/products/upload-image` | Auth | Multipart image → sharp resize → S3 upload; returns `{ url }` |
-| `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text (T5) or label image (T6, 501) |
+| `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/tesseract/live/llm) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
 | `PATCH` | `/products/:barcode` | Registered | Correct a `PENDING_REVIEW` product (resets verifications) |
 | `POST` | `/products/:barcode/verify` | Registered, non-submitter | Cast `APPROVE` vote; 2 net-approvals → `VERIFIED` |
@@ -184,7 +184,7 @@ Submission flow for the Add Product screen (P5-002/P5-003):
 | Layer | File | Responsibility |
 |-------|------|----------------|
 | Route | `routes/productRoutes.ts` | `apiLimiter` → `requireAuth` → `requireRegistered` → `submitProduct` |
-| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageUrl` must contain `/submissions/`. Throws `SubmissionValidationError(field, message)`. AI plausibility is deferred to a follow-up ticket. |
+| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageUrl` must contain `/processed/` (i.e. must be a server-issued URL from `POST /products/upload-image`). Throws `SubmissionValidationError(field, message)`. AI plausibility is deferred to a follow-up ticket. |
 | Controller | `controllers/productController.ts` | Maps validator errors → `422 { error, reason, field }`; maps service errors → `409 { error: <code> }`; otherwise delegates and returns `201` (created) or `200` (updated own submission). |
 | Service | `services/productService.ts#createSubmittedProduct` | Single Prisma transaction encapsulating the resubmission branches below. |
 

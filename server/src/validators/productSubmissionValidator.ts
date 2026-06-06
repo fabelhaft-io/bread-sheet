@@ -70,7 +70,7 @@ export function validateProductSubmission(
     'productImageUrl',
     1024,
   );
-  if (!productImageUrl.includes('/submissions/')) {
+  if (!productImageUrl.includes('/processed/')) {
     throw new SubmissionValidationError(
       'productImageUrl',
       'productImageUrl must be a server-issued upload URL',

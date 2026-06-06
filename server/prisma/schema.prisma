@@ -55,6 +55,8 @@ model Product {
   servingSize         String?
   ingredients         String?
 
+  plausibilityFlag    Boolean  @default(false)
+
   verifications       ProductVerification[]
 }
 

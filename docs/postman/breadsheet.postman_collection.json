@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b8e5d3c1-9f4a-4e2b-8a7d-1c6f0d4a2e90",
     "name": "BreadSheet API",
-    "description": "REST API for the BreadSheet backend (Node.js / Express).\n\n## Setup\n\n1. Import the matching environment file `breadsheet.postman_environment.json` and select it.\n2. Set `supabaseUrl` and `supabaseAnonKey` in the environment to your Supabase project values.\n3. Run **Auth › Sign in with password** (or **Auth › Sign in anonymously**) once — the test script stores the JWT in `accessToken` automatically. All subsequent requests use it via the collection-level Bearer auth.\n4. Use the requests under **Users / Products / Ratings** as needed.\n\n## Variables\n\n| Variable | Purpose |\n|----------|---------|\n| `baseUrl` | API root (default `http://localhost:3000`) |\n| `accessToken` | Supabase JWT — set automatically by Auth requests |\n| `supabaseUrl` | Supabase project URL |\n| `supabaseAnonKey` | Supabase publishable/anon key |\n| `email` / `password` | Credentials used by the sign-in request |\n| `barcode` | Sample barcode used by Products / Ratings requests |\n| `productImageUrl` | Server-issued upload URL (must include `/submissions/`) — set by **Upload image** |\n",
+    "description": "REST API for the BreadSheet backend (Node.js / Express).\n\n## Setup\n\n1. Import the matching environment file `breadsheet.postman_environment.json` and select it.\n2. Set `supabaseUrl` and `supabaseAnonKey` in the environment to your Supabase project values.\n3. Run **Auth › Sign in with password** (or **Auth › Sign in anonymously**) once — the test script stores the JWT in `accessToken` automatically. All subsequent requests use it via the collection-level Bearer auth.\n4. Use the requests under **Users / Products / Ratings** as needed.\n\n## Variables\n\n| Variable | Purpose |\n|----------|---------|\n| `baseUrl` | API root (default `http://localhost:3000`) |\n| `accessToken` | Supabase JWT — set automatically by Auth requests |\n| `supabaseUrl` | Supabase project URL |\n| `supabaseAnonKey` | Supabase publishable/anon key |\n| `email` / `password` | Credentials used by the sign-in request |\n| `barcode` | Sample barcode used by Products / Ratings requests |\n| `productImageUrl` | Server-issued upload URL (must include `/processed/`) — set by **Upload image** |\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -231,7 +231,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "products", "extract-label"]
             },
-            "description": "Parses raw OCR text into structured nutritional fields. Requires a registered (non-anonymous) user.\n\nMust be at least 50 characters. Multipart image submissions currently return 501."
+            "description": "Parses raw OCR text into structured nutritional fields. Requires a registered (non-anonymous) user.\n\nText path: send `{ rawText: string }` (min 50 chars) as JSON. Image path: send multipart with `image` field — pipeline chosen by server `VISION_MODE` (mock/tesseract/live/llm)."
           },
           "response": []
         },
@@ -251,7 +251,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "products"]
             },
-            "description": "Submit a new product in `PENDING_REVIEW` state. Registered users only.\n\n- 201 on first submission\n- 200 on resubmission (own pending product or another user's rejected product)\n- 422 with `{ error, reason, field }` on validation failure\n- 409 with `{ error: 'product_already_verified' | 'product_previously_rejected' | 'submission_pending' }` on conflicts\n\n`productImageUrl` must include `/submissions/` — populate it by running **Upload image** first."
+            "description": "Submit a new product in `PENDING_REVIEW` state. Registered users only.\n\n- 201 on first submission\n- 200 on resubmission (own pending product or another user's rejected product)\n- 422 with `{ error, reason, field }` on validation failure\n- 409 with `{ error: 'product_already_verified' | 'product_previously_rejected' | 'submission_pending' }` on conflicts\n\n`productImageUrl` must include `/processed/` — populate it by running **Upload image** first."
           },
           "response": []
         },

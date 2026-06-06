@@ -15,7 +15,7 @@ const VALID_PAYLOAD = {
   protein: 8,
   salt: 1.2,
   servingSize: '50g',
-  productImageUrl: 'https://s3.example.com/submissions/abc.jpg',
+  productImageUrl: 'https://s3.example.com/processed/abc.jpg',
   ingredients: 'Flour, water, salt, yeast',
 };
 
@@ -48,7 +48,7 @@ describe('validateProductSubmission', () => {
         protein: null,
         salt: null,
         servingSize: null,
-        productImageUrl: 'https://s3.example.com/submissions/abc.jpg',
+        productImageUrl: 'https://s3.example.com/processed/abc.jpg',
         ingredients: null,
       });
       expect(result.brand).toBeNull();
@@ -60,7 +60,7 @@ describe('validateProductSubmission', () => {
       const result = validateProductSubmission({
         barcode: '1234567890123',
         name: 'Sourdough',
-        productImageUrl: 'https://s3.example.com/submissions/abc.jpg',
+        productImageUrl: 'https://s3.example.com/processed/abc.jpg',
       });
       expect(result.brand).toBeNull();
       expect(result.energyKcal).toBeNull();
@@ -221,7 +221,7 @@ describe('validateProductSubmission', () => {
       }
     });
 
-    it('throws when productImageUrl does not contain /submissions/', () => {
+    it('throws when productImageUrl does not contain /processed/', () => {
       try {
         validateProductSubmission({
           ...VALID_PAYLOAD,

@@ -24,6 +24,19 @@ docker compose --profile app-dev up -d
 
 LocalStack allows developers to test S3 uploads and Lambda triggers without an AWS account or cost.
 
+**Lambda build (required before `terraform apply`):**
+The image-resizer Lambda is a TypeScript package at `server/lambda/imageResizer/`. Terraform's `archive_file` data source reads the compiled output from `dist/bundle/`, so the Lambda must be built before applying:
+
+```sh
+cd server/lambda/imageResizer
+npm install
+npm run build   # outputs dist/bundle/ (JS + sharp Linux x64 binary)
+cd ../../..
+terraform -chdir=terraform apply
+```
+
+The build script installs the Linux x64 variant of sharp into `dist/bundle/node_modules/` regardless of the host OS, producing a Lambda-compatible artifact.
+
 ---
 
 ## Cloud Infrastructure (Terraform)

@@ -6,14 +6,13 @@ const s3Client = new S3Client({});
 
 export type ImageKind = 'product' | 'label';
 
-const RESIZE_CONFIG: Record<ImageKind, { maxDim: number; quality: number }> = { // In-Sync with App Client!
-  product: { maxDim: 1200, quality: 85 },
-  label:   { maxDim: 1600, quality: 90 },
-};
-
 /**
- * Resize an image buffer to the kind-appropriate dimensions, convert to JPEG,
- * upload to S3 under `submissions/<uuid>.jpg`, and return the public URL.
+ * Convert image buffer to JPEG (format normalisation only — no resize), upload to
+ * `raw/{kind}/{uuid}.jpg`, and return the predicted `processed/{uuid}.jpg` URL.
+ *
+ * Resizing to the final dimension caps (1200 px product / 1600 px label) is
+ * handled asynchronously by the S3-triggered Lambda, which writes to `processed/`.
+ * The API returns the predicted URL immediately without waiting for the Lambda.
  */
 export async function uploadImageToS3(
   buffer: Buffer,
@@ -22,25 +21,25 @@ export async function uploadImageToS3(
   const bucket = process.env.S3_BUCKET_NAME;
   if (!bucket) throw new Error('FATAL: S3_BUCKET_NAME environment variable is required.');
 
-  const { maxDim, quality } = RESIZE_CONFIG[kind];
+  const endpoint = process.env.AWS_ENDPOINT_URL;
+  if (!endpoint) throw new Error('FATAL: AWS_ENDPOINT_URL environment variable is required.');
 
-  const resized = await sharp(buffer)
-    .resize({ width: maxDim, height: maxDim, fit: 'inside', withoutEnlargement: true })
-    .jpeg({ quality })
-    .toBuffer();
+  // Format normalisation: convert to JPEG so Lambda always receives a consistent
+  // input regardless of the original format (PNG, WebP, TIFF, etc.).
+  // Quality 95 preserves sufficient detail for Lambda's subsequent resize step.
+  const jpegBuffer = await sharp(buffer).jpeg({ quality: 95 }).toBuffer();
 
-  const key = `submissions/${uuidv4()}.jpg`;
+  const uuid = uuidv4();
+  const rawKey = `raw/${kind}/${uuid}.jpg`;
 
   await s3Client.send(
     new PutObjectCommand({
       Bucket: bucket,
-      Key: key,
-      Body: resized,
+      Key: rawKey,
+      Body: jpegBuffer,
       ContentType: 'image/jpeg',
     }),
   );
 
-  const endpoint = process.env.AWS_ENDPOINT_URL;
-  if (!endpoint) throw new Error('FATAL: AWS_ENDPOINT_URL environment variable is required.');
-  return `${endpoint}/${bucket}/${key}`;
+  return `${endpoint}/${bucket}/processed/${uuid}.jpg`;
 }

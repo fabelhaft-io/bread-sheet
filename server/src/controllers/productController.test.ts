@@ -94,7 +94,7 @@ const VALIDATED_PAYLOAD = {
   protein: 8,
   salt: 1.2,
   servingSize: '50g',
-  productImageUrl: 'https://s3.example.com/submissions/abc.jpg',
+  productImageUrl: 'https://s3.example.com/processed/abc.jpg',
   ingredients: 'Flour, water, salt, yeast',
 };
 
