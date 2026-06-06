@@ -1,0 +1,30 @@
+meta {
+  name: Get product by barcode
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/products/{{barcode}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Returns the product. On a local cache miss the server falls back to Open Food Facts and caches the result.
+
+  Response augmentation:
+  - All products include unverified: boolean.
+  - VERIFIED products: unverified: false.
+  - PENDING_REVIEW / REJECTED products: unverified: true, plus submittedByUserId and a submission object with nutritional fields.
+
+  Visibility:
+  - Anonymous callers receive 404 for PENDING_REVIEW products.
+  - Registered callers see PENDING_REVIEW products with full augmentation.
+
+  Errors: 400 (invalid barcode format), 404 (not found / hidden).
+}

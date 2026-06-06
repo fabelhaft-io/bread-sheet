@@ -1,0 +1,39 @@
+meta {
+  name: Upload image (product or label)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/products/upload-image
+  body: multipart-form
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:multipart-form {
+  image: @file()
+  kind: product
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const body = res.getBody();
+    if (body.url) {
+      bru.setEnvVar('productImageUrl', body.url);
+      console.log('productImageUrl set to', body.url);
+    }
+  }
+}
+
+docs {
+  Multipart upload. Returns { url } pointing at the eventual processed S3 location. The post-response script stores it as productImageUrl so Submit product can reuse it.
+
+  Set the image field to a JPEG / PNG / WebP / GIF / TIFF / AVIF file (8 MB hard cap).
+  Set kind to either 'product' or 'label'.
+
+  Failure codes: 400 (missing image / bad kind), 413 (over 8 MB), 415 (unsupported format).
+}

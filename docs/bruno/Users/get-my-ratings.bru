@@ -1,0 +1,19 @@
+meta {
+  name: Get my ratings
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/users/me/ratings
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Returns the authenticated user's rating history with product details, most recent first.
+}

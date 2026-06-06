@@ -1,0 +1,19 @@
+meta {
+  name: Sync user
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/users/sync
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Upserts the User row keyed by Supabase user id. Call once after sign-in. The body is empty — identity comes from the Bearer token.
+}

@@ -1,0 +1,19 @@
+meta {
+  name: Get ratings for product
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/ratings/product/{{barcode}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Returns all ratings for a product (most recent first), each with the author's id / username / avatar.
+}

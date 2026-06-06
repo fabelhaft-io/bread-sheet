@@ -166,7 +166,7 @@ Architecture and data documentation lives in `docs/architecture/`:
 | `infrastructure.md` | Terraform/AWS resources, Docker Compose local dev, GitOps deployment pipeline |
 | `data.md` | Data inventory, third-party flows, user content rights, GDPR obligations |
 
-Ad-hoc API testing: import `docs/postman/breadsheet.postman_collection.json` and the matching `breadsheet.postman_environment.json` into Postman. The collection covers every endpoint and pre-populates the Bearer token via the Supabase sign-in request.
+Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.usebruno.com/). Copy `docs/bruno/environments/.env.example` to `docs/bruno/environments/.env` and fill in your Supabase credentials. Run **Auth › Sign in with password** (or **Sign in anonymously**) once — the post-response script stores the JWT in `accessToken` automatically. All other requests use it via their bearer auth.
 
 ## ADRs
 
@@ -189,7 +189,7 @@ After any implementation, update all affected documentation files before finishi
 - **`README.md`** — update if setup steps, running instructions, or project structure change.
 - **`docs/architecture/`** — update the relevant file (`overview.md`, `frontend.md`, `backend.md`, `infrastructure.md`, or `data.md`) if the implementation changes anything in that file's scope.
 - **`docs/architecture-decision-records/`** — add a new ADR if the implementation introduces a significant architectural choice (new library, infrastructure pattern, auth approach, etc.).
-- **`docs/postman/breadsheet.postman_collection.json`** — add or update requests for any new or changed endpoints; update test scripts if response shapes change.
+- **`docs/bruno/`** — add or update `.bru` request files for any new or changed endpoints; update `script:post-response` blocks if response shapes change.
 - Any inline code comments or JSDoc on public interfaces that are now outdated.
 
 The documentation must reflect the code as shipped, not the code as it was before your change.

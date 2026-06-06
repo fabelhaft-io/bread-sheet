@@ -1,0 +1,32 @@
+meta {
+  name: Extract label from OCR text
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/products/extract-label
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "rawText": "Nutritional information per 100g\nEnergy 1234 kJ / 295 kcal\nFat 12.5 g\nCarbohydrates 30 g\nProtein 8 g\nSalt 0.5 g\nServing size: 30g\nIngredients: oats, sugar, sunflower oil, salt."
+  }
+}
+
+docs {
+  Parses raw OCR text into structured nutritional fields. Requires a registered (non-anonymous) user.
+
+  Text path: send { rawText: string } (min 50 chars) as JSON.
+  Image path: send multipart with image field — pipeline chosen by server VISION_MODE (mock/tesseract/live/llm).
+}

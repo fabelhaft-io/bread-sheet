@@ -1,0 +1,30 @@
+meta {
+  name: Reject product (cast REJECT vote)
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/api/products/{{barcode}}/verify
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Cast a REJECT vote on a PENDING_REVIEW product. Registered, non-submitter only.
+
+  This is not a vote retraction — it casts an active rejection. Once 2 net-rejections are recorded (rejections > approvals) the product status flips to REJECTED.
+  A caller who previously cast an APPROVE vote and calls this endpoint will have their vote changed to REJECT (upsert semantics).
+
+  Response: { verifications: <approval count> }
+
+  Errors:
+  - 401 — unauthenticated
+  - 403 — anonymous user or self-verification attempt ({ error: 'self_verification' })
+  - 404 — product not found ({ error: 'product_not_found' })
+  - 409 — product is not PENDING_REVIEW ({ error: 'product_not_pending' })
+}

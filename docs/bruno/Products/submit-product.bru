@@ -1,0 +1,47 @@
+meta {
+  name: Submit product
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/products
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "barcode": "{{barcode}}",
+    "name": "Sample Cereal",
+    "brand": "BreadSheet Test",
+    "genericName": "Breakfast cereal",
+    "energyKcal": 295,
+    "carbohydrates": 30,
+    "fat": 12.5,
+    "protein": 8,
+    "salt": 0.5,
+    "servingSize": "30g",
+    "productImageUrl": "{{productImageUrl}}",
+    "ingredients": "oats, sugar, sunflower oil, salt"
+  }
+}
+
+docs {
+  Submit a new product in PENDING_REVIEW state. Registered users only.
+
+  - 201 on first submission
+  - 200 on resubmission (own pending product or another user's rejected product)
+  - 422 with { error, reason, field } on validation failure
+  - 409 with { error: 'product_already_verified' | 'product_previously_rejected' | 'submission_pending' } on conflicts
+
+  productImageUrl must include /processed/ — populate it by running Upload image first.
+}
