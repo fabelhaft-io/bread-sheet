@@ -58,6 +58,11 @@ export async function processCaptureForUpload(
 
   // File size is best-effort — not every platform exposes it synchronously.
   const size = await safeFileSize(processedUri);
+
+  console.log(
+    `[image] processed capture — kind=${kind} resized=${manipulator ? 'yes' : 'no (module unavailable, original passed through)'} longestEdge=${longestEdge} quality=${quality} sizeBytes=${size ?? 'unknown'}`,
+  );
+
   if (size !== null && size > MAX_IMAGE_BYTES) {
     throw new ImageTooLargeError(size);
   }

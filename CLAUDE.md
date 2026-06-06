@@ -142,16 +142,26 @@ LOG_LEVEL=debug
 
 # Vision / OCR / structured extraction
 VISION_MODE=mock                          # mock | tesseract | live | llm  (no default — must be explicit)
-# For `live` (Google Cloud Vision OCR) locally: run `gcloud auth application-default login` (ADC)
+# For `live` (Google Cloud Vision OCR) locally: run `gcloud auth application-default login` on the
+# HOST machine (not inside Docker). docker-compose mounts the resulting ADC file into the container
+# at /root/.config/gcloud/application_default_credentials.json automatically.
 # In prod: GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/wif-credentials.json (mounted ConfigMap)
 # For `llm` (Gemini multimodal — image → ExtractedLabel JSON in one call):
 GEMINI_API_KEY=...                        # required only when VISION_MODE=llm
+
+# Deep link scheme used by GET /auth/callback to bounce users back into the app after email
+# verification. exp+breadsheet for Expo Go; breadsheet for a production build.
+APP_DEEP_LINK_SCHEME=exp+breadsheet
 ```
 
-**Frontend (`bread-sheet-app/.env` or `app.config.js`):**
+**Frontend (`bread-sheet-app/.env`):**
 ```
 EXPO_PUBLIC_SUPABASE_URL=...
 EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
+
+# URL of the server's /auth/callback endpoint. Supabase redirects here after email
+# verification; the server bounces the user into the app via the deep link scheme.
+EXPO_PUBLIC_AUTH_REDIRECT_URL=http://localhost:3000/auth/callback
 ```
 
 ## Documentation

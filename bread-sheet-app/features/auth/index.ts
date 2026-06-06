@@ -1,7 +1,12 @@
-import * as Linking from 'expo-linking';
 import { supabase } from '@/lib/supabase';
 
-const APP_REDIRECT = Linking.createURL('/');
+function getAuthRedirectUrl(): string {
+  const url = process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL;
+  if (!url) {
+    throw new Error('EXPO_PUBLIC_AUTH_REDIRECT_URL is required for email verification flows');
+  }
+  return url;
+}
 
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -16,11 +21,11 @@ export async function signInAsGuest() {
 }
 
 export async function signUp(email: string, password: string) {
-  return supabase.auth.signUp({ email, password, options: { emailRedirectTo: APP_REDIRECT } });
+  return supabase.auth.signUp({ email, password, options: { emailRedirectTo: getAuthRedirectUrl() } });
 }
 
 export async function upgradeAccount(email: string, password: string) {
-  return supabase.auth.updateUser({ email, password }, { emailRedirectTo: APP_REDIRECT });
+  return supabase.auth.updateUser({ email, password }, { emailRedirectTo: getAuthRedirectUrl() } );
 }
 
 export async function signOut() {

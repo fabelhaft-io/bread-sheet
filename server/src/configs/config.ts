@@ -24,6 +24,7 @@ interface Config {
   port: number;
   nodeEnv: string;
   visionMode: VisionMode;
+  appDeepLinkScheme: string;
 }
 
 const visionMode = readVisionMode();
@@ -33,10 +34,19 @@ if (visionMode === 'llm' && !process.env.GEMINI_API_KEY) {
   );
 }
 
+const appDeepLinkScheme = process.env.APP_DEEP_LINK_SCHEME;
+if (!appDeepLinkScheme) {
+  throw new Error(
+    'Missing required environment variable: APP_DEEP_LINK_SCHEME ' +
+    '(e.g. exp+breadsheet for Expo Go, breadsheet for production)',
+  );
+}
+
 const config: Config = {
   port: Number(process.env.PORT) || 3000,
   nodeEnv: process.env.NODE_ENV || 'development',
   visionMode,
+  appDeepLinkScheme,
 };
 
 export default config;

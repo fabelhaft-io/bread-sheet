@@ -221,8 +221,8 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 | `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct` |
 | `ocr.ts` | `recogniseLabelText` — thin wrapper over `@react-native-ml-kit/text-recognition`, returns `{rawText, unavailable}` |
 | `image-picker.ts` | `captureImage` — camera or library, returns the raw URI |
-| `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError` |
-| `extract.ts` | `extractFromLabelImage` — orchestrates OCR-then-backend: text path when OCR text ≥ `MIN_OCR_LENGTH`, image fallback otherwise, never throws |
+| `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError`. Logs one `[image]` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
+| `extract.ts` | `extractFromLabelImage` — orchestrates OCR-then-backend: text path when OCR text ≥ `MIN_OCR_LENGTH`, image fallback otherwise, never throws. Logs one `[extract]` line per attempt (OCR availability, text length, chosen path) |
 
 ### Reviewer flow
 

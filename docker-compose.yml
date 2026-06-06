@@ -34,6 +34,11 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_ENDPOINT_URL=http://localstack:4566 # Points AWS SDK to LocalStack
+      # Only used when VISION_MODE=live. Host credentials are mounted below.
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+      # Deep link scheme for the /auth/callback redirect page.
+      # Use exp+breadsheet for Expo Go, breadsheet for a production build.
+      - APP_DEEP_LINK_SCHEME=exp+breadsheet
     depends_on:
       db:
         condition: service_healthy
@@ -44,6 +49,8 @@ services:
       - ./server/src:/usr/src/app/src
       # Mount prisma directory to persist schema and migration changes
       - ./server/prisma:/usr/src/app/prisma
+      # Mount host ADC credentials for VISION_MODE=live (run 'gcloud auth application-default login' on the host first)
+      - ${APPDATA}/gcloud/application_default_credentials.json:/root/.config/gcloud/application_default_credentials.json:ro
     profiles:
       - app-dev
 

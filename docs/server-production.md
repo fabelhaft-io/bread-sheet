@@ -8,10 +8,11 @@
 - [ ] `ALLOWED_ORIGINS` — comma-separated list of production frontend origins (e.g. `https://app.breadsheet.com`). Currently defaults to `http://localhost:8081` which must not reach production
 - [ ] `NODE_ENV=production`
 - [ ] `PORT` — set if different from 3000
+- [ ] `APP_DEEP_LINK_SCHEME=breadsheet` — use the bare scheme for production builds (not `exp+breadsheet`, which is Expo Go only)
 
 ## Supabase
 
-- [ ]  Settings → Authentication → URL Configuration → Redirect URLs ▎Add breadsheet://** to the allowed list.
+- [ ] Settings → Authentication → URL Configuration → Redirect URLs — add `https://api.breadsheet.com/auth/callback` (the server's `/auth/callback` endpoint, not a custom scheme URL — Supabase rejects non-HTTP schemes)
 
 ## Database
 

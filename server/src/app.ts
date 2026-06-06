@@ -6,6 +6,7 @@ import { requestLogger } from './middlewares/requestLogger.js';
 import userRoutes from './routes/userRoutes.js';
 import productRoutes from './routes/productRoutes.js';
 import ratingRoutes from './routes/ratingRoutes.js';
+import config from './configs/config.js';
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:8081').split(',');
 
@@ -24,6 +25,24 @@ app.use('/api', apiLimiter);
 // Health check
 app.get('/', (_req, res) => {
   res.send('Bread Sheet API is running');
+});
+
+// Auth callback — Supabase redirects here after email verification.
+// We bounce the user into the app via the configured deep link scheme so that
+// exchangeCodeForSession() in the app can complete the PKCE flow.
+app.get('/auth/callback', (req, res) => {
+  const params = new URLSearchParams(req.query as Record<string, string>);
+  const deepLink = `${config.appDeepLinkScheme}:///auth/callback?${params.toString()}`;
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Opening BreadSheet…</title>
+  <script>window.location.href = ${JSON.stringify(deepLink)};</script>
+</head>
+<body>Opening BreadSheet… If the app does not open automatically, make sure Expo Go is running.</body>
+</html>`);
 });
 
 // Routes
