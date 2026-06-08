@@ -15,6 +15,8 @@ import {
   SelfVerificationError,
 } from '../services/productVerificationService.js';
 import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
+import { checkImage, type Verdict } from '../services/imagePlausibilityService.js';
+import { AbuseCategory } from '../generated/prisma_client/enums.js';
 import logger from '../logger.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
 import {
@@ -34,6 +36,17 @@ const SUPPORTED_MIME_TYPES = new Set([
 
 // Barcodes are EAN-8, UPC-A (12 digits), or EAN-13 — all numeric.
 const BARCODE_RE = /^\d{8,13}$/;
+
+// User-facing copy per rejection verdict. The model's own `reason` is kept
+// server-side (logs + moderation record) and never forwarded to the client —
+// for `abuse` especially, the client message is deliberately generic.
+const REJECTION_MESSAGES: Record<Exclude<Verdict, 'ok'>, string> = {
+  not_a_product:
+    "This doesn't look like a food product. Please photograph the product itself.",
+  unusable:
+    "We couldn't make out that photo. Try again in better light and a little closer.",
+  abuse: 'This image cannot be used.',
+};
 
 // GET /api/products/:barcode
 export const getProductByBarcode = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -112,7 +125,53 @@ export const uploadImage = async (
       return res.status(415).json({ error: 'unsupported_format' });
     }
 
+    // Plausibility / abuse gate. Runs on the in-memory buffer BEFORE the S3
+    // upload, so a rejected image is never persisted (no orphan objects).
+    const result = await checkImage(req.file.buffer, detected.mime, kind as ImageKind);
+
+    if (result.verdict !== 'ok') {
+      logger.info('image rejected by plausibility check', {
+        kind,
+        verdict: result.verdict,
+        category: result.category,
+        reason: result.reason,
+        userId: req.user?.id,
+      });
+
+      if (result.verdict === 'abuse') {
+        // Record a moderation flag against the uploader. Best-effort: never let a
+        // logging-table write failure mask the rejection the user must still see.
+        try {
+          await prisma.userAbuseFlag.create({
+            data: {
+              userId: req.user!.id,
+              category: (result.category ?? 'GRAPHIC') as AbuseCategory,
+              reason: result.reason,
+            },
+          });
+        } catch (flagErr) {
+          logger.error('failed to record UserAbuseFlag', { userId: req.user?.id, flagErr });
+        }
+      }
+
+      return res.status(422).json({
+        error: 'image_rejected',
+        reason: REJECTION_MESSAGES[result.verdict],
+      });
+    }
+
     const url = await uploadImageToS3(req.file.buffer, kind as ImageKind);
+
+    // Front-of-pack suggestions are only returned for product photos; the label
+    // slot has no use for them (its data comes from the extract-label flow).
+    if (kind === 'product') {
+      return res.json({
+        url,
+        name: result.name,
+        brand: result.brand,
+        genericName: result.genericName,
+      });
+    }
     res.json({ url });
   } catch (err) {
     next(err);

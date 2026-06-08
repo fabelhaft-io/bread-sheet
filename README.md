@@ -106,7 +106,9 @@ In IntelliJ / WebStorm you can open a WSL2 terminal directly:
     | `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Supabase anon/public key (same settings page) |
     | `AWS_ENDPOINT_URL` | LocalStack endpoint for S3/Lambda emulation (`http://localhost:4566` locally) |
     | `S3_BUCKET_NAME` | S3 bucket where product images are stored |
-    | `VISION_MODE` | OCR backend: `mock` (fixture), `tesseract` (local), `live` (Google Vision), `llm` (Gemini) — **required, no default** |
+    | `VISION_MODE` | OCR backend: `mock` (fixture), `live` (Google Vision), `llm` (Gemini) — **required, no default** |
+    | `PLAUSIBILITY_MODE` | Upload image plausibility / abuse gate: `mock` (accept all) or `gemini` (real check; needs `GEMINI_API_KEY`) — **required, no default** |
+    | `GEMINI_API_KEY` | Gemini API key — required when `VISION_MODE=llm` or `PLAUSIBILITY_MODE=gemini` |
     | `LOG_LEVEL` | Winston log verbosity (`error` / `warn` / `info` / `debug` / …) |
     | `DEBUG` | Set `true` to enable extra debug output |
 

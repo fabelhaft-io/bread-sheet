@@ -16,7 +16,8 @@ server/
 │   ├── middlewares/             # Express middleware (auth, rate limiting, error handler)
 │   ├── routes/                  # Route definitions — apply middleware, call controllers
 │   ├── services/                # Business logic and external integrations
-│   │   └── imageService.ts      # sharp-based format conversion; upload to S3 raw/ prefix
+│   │   ├── imageService.ts      # sharp-based format conversion; upload to S3 raw/ prefix
+│   │   └── imagePlausibilityService.ts # AI plausibility / abuse gate on uploads (Gemini)
 │   └── generated/
 │       └── prisma_client/       # Generated Prisma client — always import from here
 ├── prisma/
@@ -136,8 +137,8 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. |
-| `POST` | `/products/upload-image` | Auth | Multipart image → sharp resize → S3 upload; returns `{ url }` |
-| `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/tesseract/live/llm) |
+| `POST` | `/products/upload-image` | Auth | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ url, name, brand, genericName }`; for `kind=label` returns `{ url }` |
+| `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/live/llm) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
 | `PATCH` | `/products/:barcode` | Registered | Correct a `PENDING_REVIEW` product (resets verifications) |
 | `POST` | `/products/:barcode/verify` | Registered, non-submitter | Cast `APPROVE` vote; 2 net-approvals → `VERIFIED` |
@@ -184,7 +185,7 @@ Submission flow for the Add Product screen (P5-002/P5-003):
 | Layer | File | Responsibility |
 |-------|------|----------------|
 | Route | `routes/productRoutes.ts` | `apiLimiter` → `requireAuth` → `requireRegistered` → `submitProduct` |
-| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageUrl` must contain `/processed/` (i.e. must be a server-issued URL from `POST /products/upload-image`). Throws `SubmissionValidationError(field, message)`. AI plausibility is deferred to a follow-up ticket. |
+| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageUrl` must contain `/processed/` (i.e. must be a server-issued URL from `POST /products/upload-image`). Throws `SubmissionValidationError(field, message)`. The product image is plausibility-checked at upload time (P5-005, see Image Processing); nutritional-value plausibility (kcal ranges, macro sums) is still deferred to a follow-up ticket. |
 | Controller | `controllers/productController.ts` | Maps validator errors → `422 { error, reason, field }`; maps service errors → `409 { error: <code> }`; otherwise delegates and returns `201` (created) or `200` (updated own submission). |
 | Service | `services/productService.ts#createSubmittedProduct` | Single Prisma transaction encapsulating the resubmission branches below. |
 
@@ -222,10 +223,16 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
 
 ## Image Processing
 
-1. **API (synchronous):** Validates raw upload (size gate: 8 MB max via `multer`; format detection via magic bytes). Converts non-JPEG/WebP to JPEG using `sharp` in `imageService.ts`. Rejects unsupported formats (`415`).
-2. **Upload:** Uploads the validated JPEG to S3 at `raw/product/{uuid}.jpg` or `raw/label/{uuid}.jpg`.
-3. **Lambda (async):** S3 `ObjectCreated` event triggers the resize Lambda. Writes to `processed/{uuid}.jpg` with the appropriate dimension cap (1200 px product / 1600 px label).
-4. **Response:** API returns the predicted `processed/` URL immediately — does not wait for Lambda.
+1. **API (synchronous):** Validates raw upload (size gate: 8 MB max via `multer`; format detection via magic bytes). Rejects unsupported formats (`415`).
+2. **Plausibility / abuse gate (synchronous, P5-005):** `imagePlausibilityService.checkImage(buffer, mime, kind)` runs on the in-memory buffer **before** any S3 write. Gated by `PLAUSIBILITY_MODE` (`mock` accepts all; `gemini` runs a Gemini multimodal classification). Applies to **both** `product` and `label` uploads. Verdicts:
+   - `ok` → proceed. For `product` photos the same call also returns front-of-pack `name`/`brand`/`genericName` suggestions (returned to the client to pre-fill the Add Product form).
+   - `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.
+   - `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `category` `SEXUAL|GRAPHIC`, `reason`) is recorded server-side. The model's specific reason is never returned to the client.
+3. **Upload:** Converts the validated bytes to JPEG using `sharp` in `imageService.ts` and uploads to S3 at `raw/product/{uuid}.jpg` or `raw/label/{uuid}.jpg`.
+4. **Lambda (async):** S3 `ObjectCreated` event triggers the resize Lambda. Writes to `processed/{uuid}.jpg` with the appropriate dimension cap (1200 px product / 1600 px label).
+5. **Response:** API returns the predicted `processed/` URL immediately — does not wait for Lambda.
+
+Because the gate runs before the S3 write, a rejected image is never persisted (no orphan objects to reap).
 
 ---
 
@@ -243,7 +250,6 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
 | Mode | Pipeline | Notes |
 |------|----------|-------|
 | `mock` | Returns a fixed `MOCK_OCR_TEXT` string → regex parser | Dev/test default |
-| `tesseract` | Local `tesseract` binary OCR → regex parser | Offline fallback |
 | `live` | Google Cloud Vision `documentTextDetection` (ADC) → regex parser | Cheap, deterministic, fragile to multi-column layouts |
 | `llm` | Gemini 2.5 Flash multimodal call → JSON conforming to `ExtractedLabel` schema | Handles column layouts and multi-language by understanding the image directly; requires `GEMINI_API_KEY` |
 
@@ -276,7 +282,7 @@ A Postman collection covering every endpoint lives at `docs/postman/breadsheet.p
 
 **No inline defaults for runtime-behaviour variables.** All environment variables that control runtime behaviour must be read and validated in `server/src/configs/config.ts` at startup. If a required variable is absent or has an unexpected value the process must throw a descriptive error — never fall back silently to a local-dev default in application code.
 
-**Mode-style variables** (e.g. `VISION_MODE`) must be validated against an explicit allowlist (`'mock' | 'live' | 'tesseract' | 'llm'`). Any value outside the allowlist — including an absent value — is a startup error. Conditional secrets that a mode requires (e.g. `GEMINI_API_KEY` when `VISION_MODE=llm`) are also validated at startup in `config.ts`.
+**Mode-style variables** (e.g. `VISION_MODE` = `'mock' | 'live' | 'llm'`, `PLAUSIBILITY_MODE` = `'mock' | 'gemini'`) must be validated against an explicit allowlist. Any value outside the allowlist — including an absent value — is a startup error. Conditional secrets that a mode requires (e.g. `GEMINI_API_KEY` when `VISION_MODE=llm` or `PLAUSIBILITY_MODE=gemini`) are also validated at startup in `config.ts`.
 
 **Local-dev values** belong in `.env` (git-ignored), not hardcoded in source.
 

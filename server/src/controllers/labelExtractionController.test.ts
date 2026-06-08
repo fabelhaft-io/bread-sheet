@@ -6,7 +6,7 @@ const mockExtractFromText = vi.hoisted(() => vi.fn());
 const mockOcrLabelImage = vi.hoisted(() => vi.fn());
 const mockExtractLabelWithLlm = vi.hoisted(() => vi.fn());
 const mockGetVisionMode = vi.hoisted(() =>
-  vi.fn<() => 'mock' | 'live' | 'tesseract' | 'llm'>(() => 'live'),
+  vi.fn<() => 'mock' | 'live' | 'llm'>(() => 'live'),
 );
 // Controls whether the multer mock populates req.file for this test run.
 const injectFile = vi.hoisted(() => ({ buffer: null as Buffer | null }));

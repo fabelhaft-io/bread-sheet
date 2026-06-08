@@ -255,8 +255,8 @@ User History
 - [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Google Cloud Vision inference. *(pending T6)*
 - [x] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present. *(text path T5; image path returns 501 until T6)*
 - [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
-- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(deferred — T3 ships schema validation only; AI plausibility for text and image (no dick-pics allowed) deferred to a follow-up ticket)*
-- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — see above)*
+- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(image plausibility shipped in **P5-005** — the product/label photo is gated at upload time; nutritional-value plausibility for text submissions still deferred)*
+- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — nutritional-value flagging not yet implemented)*
 - [x] `POST /products/:barcode/verify` casts an `APPROVE` vote from a registered non-submitter; returns `403` if the caller is the submitter. *(P5-003/T7)*
 - [ ] After 2 net-approvals the product is automatically promoted to `VERIFIED`; OFF sync is enqueued. *(threshold flip shipped in T7; OFF sync enqueue deferred to P5-004)*
 - [x] `DELETE /products/:barcode/verify` casts a `REJECT` vote (non-submitter only); 2 net-rejections flip status to `REJECTED`. *(P5-003/T7 — overloaded REJECT channel, not a retraction)*
@@ -266,6 +266,27 @@ User History
 ### [TICKET-P5-004] Anonymous users
 **Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. 
 Minor Frontend fix: Screens should be if possible one full screen with no scroll column (currently on iOS it is slightly too high on rating screen and product submission)
+
+### [TICKET-P5-005] Product Image Plausibility & Abuse Gating
+**Goal:** Run an AI plausibility check on uploaded images so the app (1) rejects images that are not the expected subject (a chair, a pet, a selfie) with actionable feedback, (2) reads correct product identity (name/brand/generic name) off the product photo so the submission form pre-fills instead of showing confusingly empty fields, and (3) flags genuinely abusive uploads (sexual / graphic) server-side for moderation. Implementation plan: `docs/P5-005-implementation-plan.md`.
+**Where it runs:** Inside `POST /api/products/upload-image`, on the in-memory buffer **before** the S3 write — so a rejected image is never persisted (no orphan objects). Both `kind=product` and `kind=label` uploads are gated.
+**Provider / config:** New `imagePlausibilityService.ts` using Gemini multimodal, behind a dedicated `PLAUSIBILITY_MODE` env var (`mock | gemini`, no default — fail-fast). `mock` accepts all (local/test). Independent of `VISION_MODE`. (`tesseract` VISION_MODE was removed in this ticket.)
+**Verdict contract:**
+- `ok` → upload proceeds. For `product` photos the same call returns front-of-pack `name`/`brand`/`genericName` suggestions; these win those three fields over label OCR on the form (label fills them only if the photo left them blank). Nutrition fields still come from label extraction.
+- `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.
+- `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `category` `SEXUAL|GRAPHIC`, `reason`) is recorded server-side. The model's specific reason is never returned to the client.
+**Client:** Product photo is uploaded at capture time (not at submit) so rejection feedback and identity suggestions arrive before the review step; the submit step reuses the already-uploaded URL.
+**Schema:** New `AbuseCategory` enum + `UserAbuseFlag` model (`userId`, `category`, `reason?`, `createdAt`); `User.abuseFlags` relation. Record-only — a moderation dashboard / auto-ban threshold is a later ticket.
+**Acceptance Criteria:**
+- [x] A clearly non-product product photo is rejected (`422`) with actionable copy; nothing is written to S3.
+- [x] A blurry/unusable photo is rejected (`422`) advising a retake; nothing is written.
+- [x] A valid product photo returns `200` with `name`/`brand`/`genericName` suggestions and the `processed/` URL.
+- [x] Abusive content on **either** `kind=product` or `kind=label` returns `422` and records a `UserAbuseFlag` with the category; nothing is written to S3.
+- [x] Non-abusive rejections do not create a `UserAbuseFlag`.
+- [x] `PLAUSIBILITY_MODE` is validated at startup; `gemini` without `GEMINI_API_KEY` throws; an invalid value throws.
+- [x] The client pre-fills the form from the upload suggestions (photo wins name/brand/genericName) and surfaces rejection reasons inline with a retake affordance; submit reuses the uploaded URL.
+- [x] `tesseract` removed from `VISION_MODE`; no remaining references in code or docs (historical dated plan docs excepted).
+- [ ] Nutritional-value plausibility (kcal ranges, macro sums) on `POST /products` — still deferred to a follow-up.
 
 ### [TICKET-P5-006] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.

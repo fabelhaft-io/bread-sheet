@@ -1,15 +1,14 @@
 import { ImageAnnotatorClient } from '@google-cloud/vision';
-import path from 'path';
 import logger from '../logger.js';
 
-const VALID_VISION_MODES = ['mock', 'live', 'tesseract', 'llm'] as const;
+const VALID_VISION_MODES = ['mock', 'live', 'llm'] as const;
 export type VisionMode = (typeof VALID_VISION_MODES)[number];
 
 export function getVisionMode(): VisionMode {
   const m = process.env.VISION_MODE;
   if (!m) {
     throw new Error(
-      'Missing required environment variable: VISION_MODE. Valid values: mock | live | tesseract | llm',
+      'Missing required environment variable: VISION_MODE. Valid values: mock | live | llm',
     );
   }
   if (!VALID_VISION_MODES.includes(m as VisionMode)) {
@@ -20,7 +19,7 @@ export function getVisionMode(): VisionMode {
   return m as VisionMode;
 }
 
-// Lazily constructed and memoized — never instantiated in mock/tesseract mode.
+// Lazily constructed and memoized — never instantiated in mock mode.
 // Auth is handled entirely by ADC: in prod GOOGLE_APPLICATION_CREDENTIALS points
 // to a Workload Identity Federation credential config mounted via ConfigMap.
 let _client: ImageAnnotatorClient | null = null;
@@ -57,38 +56,10 @@ async function ocrLive(buffer: Buffer): Promise<string> {
   return text;
 }
 
-async function ocrTesseract(buffer: Buffer): Promise<string> {
-  const { execFile } = await import('child_process');
-  const { promisify } = await import('util');
-  const { tmpdir } = await import('os');
-  const { writeFileSync, readFileSync, unlinkSync } = await import('fs');
-
-  const execFileAsync = promisify(execFile);
-  const base = `vision-${Date.now()}`;
-  const tmpIn = path.join(tmpdir(), `${base}.jpg`);
-  const tmpOutBase = path.join(tmpdir(), base);
-
-  try {
-    writeFileSync(tmpIn, buffer);
-    await execFileAsync('tesseract', [tmpIn, tmpOutBase, '-l', 'eng+deu']);
-    return readFileSync(`${tmpOutBase}.txt`, 'utf-8');
-  } finally {
-    for (const f of [tmpIn, `${tmpOutBase}.txt`]) {
-      try {
-        unlinkSync(f);
-      } catch {
-        // ignore cleanup errors
-      }
-    }
-  }
-}
-
 export async function ocrLabelImage(buffer: Buffer): Promise<string> {
   switch (getVisionMode()) {
     case 'live':
       return ocrLive(buffer);
-    case 'tesseract':
-      return ocrTesseract(buffer);
     case 'llm':
       throw new Error('ocrLabelImage must not be called in llm mode — use extractLabelWithLlm');
     default:

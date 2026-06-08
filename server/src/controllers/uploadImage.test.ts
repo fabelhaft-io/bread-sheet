@@ -44,6 +44,25 @@ vi.mock('../services/imageService.js', () => ({
   uploadImageToS3: mockUploadImageToS3,
 }));
 
+// ── imagePlausibilityService mock ────────────────────────────────────────────
+const mockCheckImage = vi.hoisted(() => vi.fn());
+
+vi.mock('../services/imagePlausibilityService.js', () => ({
+  checkImage: mockCheckImage,
+}));
+
+function okVerdict(overrides: Record<string, unknown> = {}) {
+  return {
+    verdict: 'ok',
+    reason: 'looks fine',
+    category: null,
+    name: 'Detected Name',
+    brand: 'Detected Brand',
+    genericName: 'detected category',
+    ...overrides,
+  };
+}
+
 // ── Auth / rate-limit stubs ──────────────────────────────────────────────────
 const session = vi.hoisted(() => ({
   user: { id: 'user-1', email: 'test@test.com', isAnonymous: false } as
@@ -67,8 +86,13 @@ vi.mock('../middlewares/rateLimit.js', () => ({
 }));
 
 // ── Prisma stub (needed because app.ts loads all routes) ─────────────────────
+const mockAbuseFlagCreate = vi.hoisted(() => vi.fn());
+
 vi.mock('../db.js', () => ({
-  default: { product: { findUnique: vi.fn(), create: vi.fn() } },
+  default: {
+    product: { findUnique: vi.fn(), create: vi.fn() },
+    userAbuseFlag: { create: mockAbuseFlagCreate },
+  },
 }));
 
 vi.mock('../services/productService.js', async () => {
@@ -117,10 +141,14 @@ describe('POST /api/products/upload-image', () => {
     multerState.handler = (_req: any, _res: any, next: any) => next();
     mockFileTypeFromBuffer.mockReset();
     mockUploadImageToS3.mockReset();
+    mockCheckImage.mockReset();
+    mockAbuseFlagCreate.mockReset();
+    // Default: the plausibility check passes. Rejection tests override this.
+    mockCheckImage.mockResolvedValue(okVerdict());
     session.user = { id: 'user-1', email: 'test@test.com', isAnonymous: false };
   });
 
-  it('returns 200 with the S3 URL on a valid product image upload', async () => {
+  it('returns 200 with the S3 URL and photo suggestions on a valid product upload', async () => {
     stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'photo.jpg' });
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
     mockUploadImageToS3.mockResolvedValue(
@@ -134,6 +162,12 @@ describe('POST /api/products/upload-image', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.url).toContain('/processed/');
+    expect(res.body).toMatchObject({
+      name: 'Detected Name',
+      brand: 'Detected Brand',
+      genericName: 'detected category',
+    });
+    expect(mockCheckImage).toHaveBeenCalledWith(FAKE_JPEG, 'image/jpeg', 'product');
     expect(mockUploadImageToS3).toHaveBeenCalledWith(FAKE_JPEG, 'product');
   });
 
@@ -278,5 +312,107 @@ describe('POST /api/products/upload-image', () => {
 
     expect(res.status).toBe(401);
     expect(mockUploadImageToS3).not.toHaveBeenCalled();
+  });
+
+  // ── Plausibility / abuse gate (P5-005) ──────────────────────────────────────
+
+  it('returns 422 and does not upload when the photo is not a product', async () => {
+    stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'photo.jpg' });
+    mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
+    mockCheckImage.mockResolvedValue(okVerdict({ verdict: 'not_a_product', reason: 'a cat' }));
+
+    const res = await request(app)
+      .post('/api/products/upload-image')
+      .set('Authorization', 'Bearer token')
+      .field('kind', 'product');
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('image_rejected');
+    expect(res.body.reason).toBeTruthy();
+    expect(mockUploadImageToS3).not.toHaveBeenCalled();
+    expect(mockAbuseFlagCreate).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 advising a retake when the photo is unusable', async () => {
+    stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'photo.jpg' });
+    mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
+    mockCheckImage.mockResolvedValue(okVerdict({ verdict: 'unusable', reason: 'too blurry' }));
+
+    const res = await request(app)
+      .post('/api/products/upload-image')
+      .set('Authorization', 'Bearer token')
+      .field('kind', 'product');
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('image_rejected');
+    expect(mockUploadImageToS3).not.toHaveBeenCalled();
+    expect(mockAbuseFlagCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects abusive content, records a UserAbuseFlag, and does not upload', async () => {
+    stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'photo.jpg' });
+    mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
+    mockCheckImage.mockResolvedValue(
+      okVerdict({ verdict: 'abuse', category: 'SEXUAL', reason: 'explicit content' }),
+    );
+    mockAbuseFlagCreate.mockResolvedValue({ id: 'flag-1' });
+
+    const res = await request(app)
+      .post('/api/products/upload-image')
+      .set('Authorization', 'Bearer token')
+      .field('kind', 'product');
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('image_rejected');
+    // The specific abuse reason is never forwarded to the client.
+    expect(res.body.reason).not.toMatch(/explicit/i);
+    expect(mockUploadImageToS3).not.toHaveBeenCalled();
+    expect(mockAbuseFlagCreate).toHaveBeenCalledWith({
+      data: { userId: 'user-1', category: 'SEXUAL', reason: 'explicit content' },
+    });
+  });
+
+  it('gates abusive content on the label slot too', async () => {
+    stubMulterFile(
+      { buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'label.jpg' },
+      'label',
+    );
+    mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
+    mockCheckImage.mockResolvedValue(
+      okVerdict({ verdict: 'abuse', category: 'GRAPHIC', reason: 'graphic content' }),
+    );
+    mockAbuseFlagCreate.mockResolvedValue({ id: 'flag-2' });
+
+    const res = await request(app)
+      .post('/api/products/upload-image')
+      .set('Authorization', 'Bearer token')
+      .field('kind', 'label');
+
+    expect(res.status).toBe(422);
+    expect(mockUploadImageToS3).not.toHaveBeenCalled();
+    expect(mockAbuseFlagCreate).toHaveBeenCalledWith({
+      data: { userId: 'user-1', category: 'GRAPHIC', reason: 'graphic content' },
+    });
+  });
+
+  it('does not return photo suggestions for a valid label upload', async () => {
+    stubMulterFile(
+      { buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'label.jpg' },
+      'label',
+    );
+    mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
+    mockUploadImageToS3.mockResolvedValue(
+      'http://localhost:4566/breadsheet-images-local/processed/uuid.jpg',
+    );
+
+    const res = await request(app)
+      .post('/api/products/upload-image')
+      .set('Authorization', 'Bearer token')
+      .field('kind', 'label');
+
+    expect(res.status).toBe(200);
+    expect(res.body.url).toContain('/processed/');
+    expect(res.body.name).toBeUndefined();
+    expect(res.body.brand).toBeUndefined();
   });
 });

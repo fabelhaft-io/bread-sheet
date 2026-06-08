@@ -78,6 +78,17 @@ const EMPTY_FORM: FormState = {
 };
 
 /**
+ * Front-of-pack identity read off the product photo by the backend plausibility
+ * check (P5-005). Independent of (and more reliable than) the label OCR for
+ * name/brand, so it wins those fields — see `applyPhotoSuggestion`.
+ */
+interface PhotoSuggestion {
+  name: string | null;
+  brand: string | null;
+  genericName: string | null;
+}
+
+/**
  * Flatten an `ExtractedLabel` response (numbers + nulls) into the text-input
  * form state. `null` becomes `''` so `<TextInput>` receives a controlled
  * value. `0` is preserved so "zero sugar" products don't lose their data.
@@ -96,6 +107,22 @@ function hydrateForm(extracted: ExtractedLabel): FormState {
     salt: toText(extracted.salt),
     servingSize: extracted.servingSize ?? '',
     ingredients: extracted.ingredients ?? '',
+  };
+}
+
+/**
+ * Overlay the product-photo suggestions onto a form, with the photo winning
+ * name/brand/genericName. The label-derived value is kept only where the photo
+ * had nothing to offer. Applied across all fill modes because the front-of-pack
+ * identity is reliable regardless of how the label was read.
+ */
+function applyPhotoSuggestion(form: FormState, suggestion: PhotoSuggestion | null): FormState {
+  if (!suggestion) return form;
+  return {
+    ...form,
+    name: suggestion.name ?? form.name,
+    brand: suggestion.brand ?? form.brand,
+    genericName: suggestion.genericName ?? form.genericName,
   };
 }
 
@@ -171,6 +198,11 @@ function AddProductFlow({
   // ─── Flow state ───────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>('photos');
   const [productPhotoUri, setProductPhotoUri] = useState<string | null>(null);
+  // S3 URL returned by the upload-image endpoint at capture time; reused at
+  // submit so the photo is uploaded (and plausibility-checked) exactly once.
+  const [productImageUrl, setProductImageUrl] = useState<string | null>(null);
+  // Front-of-pack name/brand/genericName read off the product photo.
+  const [suggestion, setSuggestion] = useState<PhotoSuggestion | null>(null);
   const [labelPhotoUri, setLabelPhotoUri] = useState<string | null>(null);
   const [processingSlot, setProcessingSlot] = useState<'product' | 'label' | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
@@ -194,13 +226,39 @@ function AddProductFlow({
         setProcessingSlot(slot);
         const processed = await processCaptureForUpload(uri, slot);
         if (slot === 'product') {
+          // Upload the product photo now (not at submit) so the plausibility
+          // check can reject a bad photo immediately and the front-of-pack
+          // name/brand suggestions are available before the review step.
+          const {
+            data: { session: currentSession },
+          } = await supabase.auth.getSession();
+          const authHeader = currentSession
+            ? `Bearer ${currentSession.access_token}`
+            : null;
+
+          const uploaded = await uploadProductImage(processed.uri, 'product', authHeader);
           setProductPhotoUri(processed.uri);
+          setProductImageUrl(uploaded.url);
+          setSuggestion({
+            name: uploaded.name,
+            brand: uploaded.brand,
+            genericName: uploaded.genericName,
+          });
         } else {
           setLabelPhotoUri(processed.uri);
         }
       } catch (err) {
         if (err instanceof ImageTooLargeError) {
           setCaptureError(err.message);
+        } else if (err instanceof ApiError && err.status === 422) {
+          // Plausibility rejection (not a product / blurry / abusive). Surface the
+          // reason and clear any prior product photo so the user must re-capture.
+          setCaptureError(err.message);
+          if (slot === 'product') {
+            setProductPhotoUri(null);
+            setProductImageUrl(null);
+            setSuggestion(null);
+          }
         } else {
           setCaptureError('Could not use that photo. Please try again.');
         }
@@ -221,12 +279,15 @@ function AddProductFlow({
       setExtracted(outcome.data);
       setFillMode(outcome.data.confidence === 'low' ? 'manual' : 'prefill');
       setForm(
-        outcome.data.confidence === 'low' ? EMPTY_FORM : hydrateForm(outcome.data),
+        applyPhotoSuggestion(
+          outcome.data.confidence === 'low' ? EMPTY_FORM : hydrateForm(outcome.data),
+          suggestion,
+        ),
       );
     } else {
       setExtracted(null);
       setFillMode('manual');
-      setForm(EMPTY_FORM);
+      setForm(applyPhotoSuggestion(EMPTY_FORM, suggestion));
       if (outcome.reason === 'backend_error') {
         setExtractionError(
           'We could not read the label. You can still fill in the details by hand.',
@@ -234,27 +295,27 @@ function AddProductFlow({
       }
     }
     setStep('review');
-  }, [labelPhotoUri]);
+  }, [labelPhotoUri, suggestion]);
 
   const skipExtraction = useCallback(() => {
     setExtracted(null);
     setFillMode('manual');
-    setForm(EMPTY_FORM);
+    setForm(applyPhotoSuggestion(EMPTY_FORM, suggestion));
     setExtractionError(null);
     setStep('review');
-  }, []);
+  }, [suggestion]);
 
   // ─── Fill-mode switching ──────────────────────────────────────────────
   const applyFillMode = useCallback(
     (mode: FillMode) => {
       setFillMode(mode);
       if (mode === 'manual') {
-        setForm(EMPTY_FORM);
+        setForm(applyPhotoSuggestion(EMPTY_FORM, suggestion));
       } else if ((mode === 'prefill' || mode === 'accept') && extracted) {
-        setForm(hydrateForm(extracted));
+        setForm(applyPhotoSuggestion(hydrateForm(extracted), suggestion));
       }
     },
-    [extracted],
+    [extracted, suggestion],
   );
 
   // ─── Submit ───────────────────────────────────────────────────────────
@@ -291,21 +352,13 @@ function AddProductFlow({
       return;
     }
 
+    if (!productImageUrl) {
+      setSubmitError('The product photo is still uploading. Please wait a moment and try again.');
+      return;
+    }
+
     setStep('submitting');
     try {
-      const {
-        data: { session: currentSession },
-      } = await supabase.auth.getSession();
-      const authHeader = currentSession
-        ? `Bearer ${currentSession.access_token}`
-        : null;
-
-      const { url: productImageUrl } = await uploadProductImage(
-        productPhotoUri,
-        'product',
-        authHeader,
-      );
-
       const payload: ProductSubmission = {
         barcode: barcodeInput.trim(),
         name: form.name.trim(),
@@ -344,7 +397,7 @@ function AddProductFlow({
       }
       setStep('review');
     }
-  }, [productPhotoUri, canSubmit, form, barcodeInput, onSubmitted]);
+  }, [productPhotoUri, productImageUrl, canSubmit, form, barcodeInput, onSubmitted]);
 
   // ─── Rendering ────────────────────────────────────────────────────────
   if (step === 'extracting') {

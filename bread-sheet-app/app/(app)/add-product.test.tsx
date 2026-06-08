@@ -213,6 +213,40 @@ describe('AddProductScreen — flow progression', () => {
     expect(getByTestId('fill-mode-row')).toBeTruthy();
   });
 
+  it('surfaces a capture-time plausibility rejection in the photo slot', async () => {
+    productsApi.uploadProductImage.mockRejectedValueOnce(
+      new ApiError(422, "This doesn't look like a food product.", {
+        error: 'image_rejected',
+        reason: "This doesn't look like a food product.",
+      }),
+    );
+
+    const { getByTestId, findByTestId } = render(<AddProductScreen />);
+    fireEvent.press(getByTestId('product-photo-slot-camera'));
+
+    const err = await findByTestId('capture-error');
+    expect(err.props.children).toMatch(/food product/i);
+  });
+
+  it('pre-fills name/brand from the product-photo suggestions (photo wins)', async () => {
+    productsApi.uploadProductImage.mockResolvedValueOnce({
+      url: 'https://s3/mock.jpg',
+      name: 'Cola',
+      brand: 'Coca-Cola',
+      genericName: 'Soft drink',
+    });
+
+    const { getByTestId, findByTestId } = render(<AddProductScreen />);
+    fireEvent.press(getByTestId('product-photo-slot-camera'));
+    await waitFor(() => expect(productsApi.uploadProductImage).toHaveBeenCalled());
+
+    fireEvent.press(getByTestId('photos-skip'));
+
+    const nameField = await findByTestId('field-name');
+    expect(nameField.props.value).toBe('Cola');
+    expect(getByTestId('field-brand').props.value).toBe('Coca-Cola');
+  });
+
   it('surfaces a 422 plausibility error from submit as a field-level error', async () => {
     productsApi.submitProduct.mockRejectedValue(
       new ApiError(422, 'Implausible values', {

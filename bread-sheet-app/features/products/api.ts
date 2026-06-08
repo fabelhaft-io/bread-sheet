@@ -1,6 +1,19 @@
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 
 import type { ExtractedLabel, ProductSubmission } from './types';
+
+/**
+ * Result of a product-image upload. The backend runs an AI plausibility check
+ * before persisting the image and, for product photos, reads front-of-pack
+ * identity suggestions off the packaging (P5-005). A rejected image is never
+ * stored and surfaces as a 422 `ApiError`.
+ */
+export interface ProductImageUploadResult {
+  url: string;
+  name: string | null;
+  brand: string | null;
+  genericName: string | null;
+}
 
 /**
  * API helpers for the Add Product flow. Each function maps 1:1 to a backend
@@ -22,7 +35,7 @@ export async function uploadProductImage(
   imageUri: string,
   kind: 'product' | 'label',
   authHeader: string | null,
-): Promise<{ url: string }> {
+): Promise<ProductImageUploadResult> {
   const form = new FormData();
   form.append('kind', kind);
   form.append('image', {
@@ -37,9 +50,22 @@ export async function uploadProductImage(
     body: form,
   });
   if (!res.ok) {
-    throw new Error(`Image upload failed: ${res.status}`);
+    // Mirror lib/api's error contract so callers can branch on `.status === 422`
+    // and read the plausibility `reason` off `.body`, just like the JSON helpers.
+    const body = await res.json().catch(() => ({}));
+    const message =
+      (body && typeof body === 'object' && typeof (body as { reason?: unknown }).reason === 'string'
+        ? (body as { reason: string }).reason
+        : null) ?? `Image upload failed: ${res.status}`;
+    throw new ApiError(res.status, message, body);
   }
-  return res.json() as Promise<{ url: string }>;
+  const data = (await res.json()) as Partial<ProductImageUploadResult> & { url: string };
+  return {
+    url: data.url,
+    name: data.name ?? null,
+    brand: data.brand ?? null,
+    genericName: data.genericName ?? null,
+  };
 }
 
 /**

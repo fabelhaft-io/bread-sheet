@@ -93,9 +93,11 @@ Keep business logic in these modules — route files stay UI-only.
 
 **Image processing:** `services/imageService.ts` converts uploads to JPEG (format normalisation) and stores the raw file in S3 at `raw/{kind}/{uuid}.jpg`, returning the predicted `processed/{uuid}.jpg` URL immediately. A Lambda function (triggered by S3 `ObjectCreated` events on the `raw/` prefix) handles the definitive resize (1200 px for product photos, 1600 px for label images) and writes to `processed/`. The S3 bucket and Lambda are provisioned in `terraform/`; LocalStack emulates both locally.
 
+**Image plausibility / abuse gate (P5-005):** `services/imagePlausibilityService.ts` runs an AI check (Gemini multimodal, gated by `PLAUSIBILITY_MODE=mock|gemini`) inside `uploadImage` **before** the S3 write — so a rejected image is never persisted (no orphans). Both `kind=product` and `kind=label` uploads are gated. It returns one of four verdicts: `ok` (proceeds; for `product` also returns front-of-pack `name`/`brand`/`genericName` suggestions used to pre-fill the Add Product form), `not_a_product`/`unusable` (`422` with actionable copy, no record), or `abuse` (`422` with generic copy + a `UserAbuseFlag` row recording the `SEXUAL`/`GRAPHIC` category server-side). The specific abuse reason is never returned to the client.
+
 ### Data Model (Prisma schema at `server/prisma/schema.prisma`)
 
-Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`), `Rating` (taste score 0–10 in 0.5 steps + optional comment; `@@unique([userId, productId])` — one rating per user per product; resubmissions upsert the existing row), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED).
+Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`), `Rating` (taste score 0–10 in 0.5 steps + optional comment; `@@unique([userId, productId])` — one rating per user per product; resubmissions upsert the existing row), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED), `UserAbuseFlag` (`userId`, `category` `SEXUAL|GRAPHIC`, `reason?`; moderation record raised when an uploaded image is judged abusive — see the image plausibility gate).
 
 ### Auth Flow
 
@@ -141,13 +143,17 @@ SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
 LOG_LEVEL=debug
 
 # Vision / OCR / structured extraction
-VISION_MODE=mock                          # mock | tesseract | live | llm  (no default — must be explicit)
+VISION_MODE=mock                          # mock | live | llm  (no default — must be explicit)
 # For `live` (Google Cloud Vision OCR) locally: run `gcloud auth application-default login` on the
 # HOST machine (not inside Docker). docker-compose mounts the resulting ADC file into the container
 # at /root/.config/gcloud/application_default_credentials.json automatically.
 # In prod: GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/wif-credentials.json (mounted ConfigMap)
 # For `llm` (Gemini multimodal — image → ExtractedLabel JSON in one call):
-GEMINI_API_KEY=...                        # required only when VISION_MODE=llm
+
+# Image plausibility / abuse gate on uploads (P5-005). Independent of VISION_MODE.
+PLAUSIBILITY_MODE=mock                     # mock | gemini  (no default — must be explicit)
+
+GEMINI_API_KEY=...                        # required when VISION_MODE=llm or PLAUSIBILITY_MODE=gemini
 
 # Deep link scheme used by GET /auth/callback to bounce users back into the app after email
 # verification. exp+breadsheet for Expo Go; breadsheet for a production build.

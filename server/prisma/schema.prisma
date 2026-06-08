@@ -19,6 +19,25 @@ model User {
 
   submittedProducts   Product[]              @relation("ProductSubmitter")
   productVerifications ProductVerification[]
+  abuseFlags          UserAbuseFlag[]
+}
+
+enum AbuseCategory {
+  SEXUAL
+  GRAPHIC
+}
+
+// Server-side moderation record raised when an uploaded image is judged to be
+// abusive (sexual / graphic) by the plausibility check. Record-only for now;
+// a moderation dashboard / auto-ban threshold is a later ticket.
+model UserAbuseFlag {
+  id        String        @id @default(uuid())
+  userId    String
+  category  AbuseCategory
+  reason    String? // model-provided detail (server-side only, never returned to the client)
+  createdAt DateTime      @default(now())
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 enum ProductStatus {

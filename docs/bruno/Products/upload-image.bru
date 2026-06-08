@@ -26,14 +26,39 @@ script:post-response {
       bru.setEnvVar('productImageUrl', body.url);
       console.log('productImageUrl set to', body.url);
     }
+    // For kind=product the response also carries front-of-pack suggestions.
+    if (body.name || body.brand || body.genericName) {
+      console.log('photo suggestions', {
+        name: body.name,
+        brand: body.brand,
+        genericName: body.genericName,
+      });
+    }
   }
 }
 
 docs {
-  Multipart upload. Returns { url } pointing at the eventual processed S3 location. The post-response script stores it as productImageUrl so Submit product can reuse it.
+  Multipart upload. The image is run through an AI plausibility / abuse gate (P5-005)
+  BEFORE being stored, so a rejected image is never persisted.
+
+  Success (200):
+    - kind=product → { url, name, brand, genericName } — `url` points at the eventual
+      processed S3 location; name/brand/genericName are front-of-pack suggestions read
+      off the photo (any may be null). The post-response script stores `url` as
+      productImageUrl so Submit product can reuse it.
+    - kind=label   → { url } only.
 
   Set the image field to a JPEG / PNG / WebP / GIF / TIFF / AVIF file (8 MB hard cap).
   Set kind to either 'product' or 'label'.
 
-  Failure codes: 400 (missing image / bad kind), 413 (over 8 MB), 415 (unsupported format).
+  Failure codes:
+    - 400 (missing image / bad kind)
+    - 413 (over 8 MB)
+    - 415 (unsupported format)
+    - 422 { error: 'image_rejected', reason } — plausibility rejection (not a product /
+      too blurry / abusive). Abusive uploads additionally record a server-side
+      UserAbuseFlag; the client only ever sees a generic reason for those.
+
+  Note: with PLAUSIBILITY_MODE=mock (the local/test default) every image is accepted.
+  Set PLAUSIBILITY_MODE=gemini (and GEMINI_API_KEY) to exercise the real gate.
 }

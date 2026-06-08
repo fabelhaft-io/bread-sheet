@@ -9,6 +9,9 @@
 - [ ] `NODE_ENV=production`
 - [ ] `PORT` — set if different from 3000
 - [ ] `APP_DEEP_LINK_SCHEME=breadsheet` — use the bare scheme for production builds (not `exp+breadsheet`, which is Expo Go only)
+- [ ] `VISION_MODE` — set explicitly (`live` or `llm` in prod; never `mock`, which returns fixture OCR). No default — the server refuses to boot if unset
+- [ ] `PLAUSIBILITY_MODE=gemini` — the upload image plausibility / abuse gate. Must **not** be `mock` in production (`mock` accepts every image, including abusive uploads). No default — the server refuses to boot if unset
+- [ ] `GEMINI_API_KEY` — required when `VISION_MODE=llm` or `PLAUSIBILITY_MODE=gemini`; store as a secret, never in the image
 
 ## Supabase
 
