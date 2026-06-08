@@ -224,6 +224,10 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 | `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError`. Logs one `[image]` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
 | `extract.ts` | `extractFromLabelImage` — orchestrates OCR-then-backend: text path when OCR text ≥ `MIN_OCR_LENGTH`, image fallback otherwise, never throws. Logs one `[extract]` line per attempt (OCR availability, text length, chosen path) |
 
+### Capture feedback
+
+`processCaptureForUpload` (the resize + recompress) runs synchronously-awaited inside the screen's `handleCapture`. Because it can take a noticeable beat on Android, the screen tracks a `processingSlot` (`'product' | 'label' | null`) and renders an in-slot indicator — an `ActivityIndicator` plus a "Processing photo…" label (testID `${slot}-photo-slot-processing`) — in place of the empty placeholder while the resize is in flight. The slot's Camera/Library buttons are disabled for the duration. Only the active slot shows the indicator; the other is unaffected. The indicator is indeterminate (a spinner, not a progress bar) because `expo-image-manipulator` does not surface resize progress.
+
 ### Reviewer flow
 
 `app/(app)/review-product/[barcode].tsx` is the reviewer screen for peer approval. It's surfaced from the product detail screen via a "Needs review" banner that is shown when:

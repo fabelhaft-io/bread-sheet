@@ -172,6 +172,7 @@ function AddProductFlow({
   const [step, setStep] = useState<Step>('photos');
   const [productPhotoUri, setProductPhotoUri] = useState<string | null>(null);
   const [labelPhotoUri, setLabelPhotoUri] = useState<string | null>(null);
+  const [processingSlot, setProcessingSlot] = useState<'product' | 'label' | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [extracted, setExtracted] = useState<ExtractedLabel | null>(null);
@@ -188,6 +189,9 @@ function AddProductFlow({
       try {
         const { uri } = await captureImage(source);
         if (!uri) return;
+        // Resize/compress can take a few seconds;
+        // show the in-slot spinner for its duration so the slot isn't left blank.
+        setProcessingSlot(slot);
         const processed = await processCaptureForUpload(uri, slot);
         if (slot === 'product') {
           setProductPhotoUri(processed.uri);
@@ -200,6 +204,8 @@ function AddProductFlow({
         } else {
           setCaptureError('Could not use that photo. Please try again.');
         }
+      } finally {
+        setProcessingSlot(null);
       }
     },
     [],
@@ -386,6 +392,7 @@ function AddProductFlow({
               label="Product photo"
               hint="Front of packaging — what people will see in listings."
               uri={productPhotoUri}
+              processing={processingSlot === 'product'}
               colors={colors}
               testID="product-photo-slot"
               onPickFromCamera={() => handleCapture('product', 'camera')}
@@ -395,6 +402,7 @@ function AddProductFlow({
               label="Nutritional label photo"
               hint="Used to read the ingredients & nutrition table. Never leaves the device unless we need to."
               uri={labelPhotoUri}
+              processing={processingSlot === 'label'}
               colors={colors}
               testID="label-photo-slot"
               onPickFromCamera={() => handleCapture('label', 'camera')}
@@ -493,6 +501,7 @@ function PhotoSlot({
   label,
   hint,
   uri,
+  processing,
   colors,
   testID,
   onPickFromCamera,
@@ -501,6 +510,7 @@ function PhotoSlot({
   label: string;
   hint: string;
   uri: string | null;
+  processing?: boolean;
   colors: (typeof Colors)['light'];
   testID: string;
   onPickFromCamera: () => void;
@@ -510,7 +520,15 @@ function PhotoSlot({
     <View style={styles.slot} testID={testID}>
       <ThemedText style={styles.slotLabel}>{label}</ThemedText>
       <ThemedText style={styles.slotHint}>{hint}</ThemedText>
-      {uri ? (
+      {processing ? (
+        <View
+          style={[styles.slotPlaceholder, styles.slotProcessing, { borderColor: colors.tint }]}
+          testID={`${testID}-processing`}
+        >
+          <ActivityIndicator size="large" color={colors.tint} />
+          <ThemedText style={styles.slotProcessingText}>Processing photo…</ThemedText>
+        </View>
+      ) : uri ? (
         <Image source={{ uri }} style={styles.slotPreview} resizeMode="cover" />
       ) : (
         <View style={[styles.slotPlaceholder, { borderColor: colors.icon + '55' }]}>
@@ -519,15 +537,25 @@ function PhotoSlot({
       )}
       <View style={styles.slotButtonRow}>
         <TouchableOpacity
-          style={[styles.slotButton, { borderColor: colors.tint }]}
+          style={[
+            styles.slotButton,
+            { borderColor: colors.tint },
+            processing && styles.buttonDisabled,
+          ]}
           onPress={onPickFromCamera}
+          disabled={processing}
           testID={`${testID}-camera`}
         >
           <Text style={[styles.slotButtonText, { color: colors.tint }]}>Camera</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.slotButton, { borderColor: colors.tint }]}
+          style={[
+            styles.slotButton,
+            { borderColor: colors.tint },
+            processing && styles.buttonDisabled,
+          ]}
           onPress={onPickFromLibrary}
+          disabled={processing}
           testID={`${testID}-library`}
         >
           <Text style={[styles.slotButtonText, { color: colors.tint }]}>Library</Text>
@@ -887,6 +915,15 @@ const styles = StyleSheet.create({
   slotPlaceholderIcon: {
     fontSize: 48,
     opacity: 0.5,
+  },
+  slotProcessing: {
+    borderStyle: 'solid',
+    gap: 12,
+  },
+  slotProcessingText: {
+    fontSize: 14,
+    fontWeight: '600',
+    opacity: 0.8,
   },
   slotButtonRow: {
     flexDirection: 'row',

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert } from 'react-native';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import AddProductScreen from './add-product';
 
@@ -92,6 +92,8 @@ const { ApiError } = require('@/lib/api') as typeof import('@/lib/api');
 const productsApi = require('@/features/products/api');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const extractModule = require('@/features/products/extract');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const imageProcessing = require('@/features/products/image-processing');
 
 describe('AddProductScreen — access control', () => {
   beforeEach(() => {
@@ -148,6 +150,32 @@ describe('AddProductScreen — flow progression', () => {
     await waitFor(() => expect(getByTestId('field-name')).toBeTruthy());
     // No "mode" switcher when we skipped extraction (nothing to pre-fill).
     expect(queryByTestId('fill-mode-row')).toBeNull();
+  });
+
+  it('shows a per-slot processing indicator while the capture is being resized', async () => {
+    // Hold the resize promise open so we can observe the in-flight state.
+    let resolveProcessing!: (v: { uri: string; size: number }) => void;
+    imageProcessing.processCaptureForUpload.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveProcessing = resolve;
+        }),
+    );
+
+    const { getByTestId, queryByTestId, findByTestId } = render(<AddProductScreen />);
+    fireEvent.press(getByTestId('product-photo-slot-camera'));
+
+    // Spinner + text appear while processCaptureForUpload is pending.
+    await findByTestId('product-photo-slot-processing');
+    // The other slot is unaffected.
+    expect(queryByTestId('label-photo-slot-processing')).toBeNull();
+
+    // Resolving the resize clears the indicator. Wrap in act so the state
+    // update from the awaited continuation is flushed before we assert.
+    await act(async () => {
+      resolveProcessing({ uri: 'file:///tmp/processed.jpg', size: 1024 });
+    });
+    expect(queryByTestId('product-photo-slot-processing')).toBeNull();
   });
 
   it('pre-fills the form when extraction succeeds with medium+ confidence', async () => {
