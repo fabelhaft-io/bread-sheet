@@ -23,15 +23,12 @@ export function getPlausibilityMode(): PlausibilityMode {
 }
 
 export type Verdict = 'ok' | 'not_a_product' | 'unusable' | 'abuse';
-export type AbuseCategory = 'SEXUAL' | 'GRAPHIC';
 
 export interface PlausibilityResult {
   verdict: Verdict;
   // Model-provided detail. Used server-side for logging and (on `abuse`) the
   // moderation record — never forwarded verbatim to the client.
   reason: string;
-  // Present only when verdict === 'abuse'.
-  category: AbuseCategory | null;
   // Front-of-pack suggestions. Only meaningful for `kind === 'product'`; the
   // model returns null for label images.
   name: string | null;
@@ -55,8 +52,6 @@ Judge the image and return JSON matching the provided schema.
 - "not_a_product" if it is clearly something unrelated to a packaged food/drink product (a person, a pet, scenery, a random object, a screenshot, etc.).
 - "ok" otherwise.
 
-"category": when verdict is "abuse", classify as "SEXUAL" or "GRAPHIC". Otherwise null.
-
 "reason": one short factual sentence describing what you see (for internal logging).
 
 ${
@@ -70,13 +65,12 @@ const responseSchema = {
   type: Type.OBJECT,
   properties: {
     verdict: { type: Type.STRING, enum: ['ok', 'not_a_product', 'unusable', 'abuse'] },
-    category: { type: Type.STRING, enum: ['SEXUAL', 'GRAPHIC'], nullable: true },
     reason: { type: Type.STRING },
     name: { type: Type.STRING, nullable: true },
     brand: { type: Type.STRING, nullable: true },
     genericName: { type: Type.STRING, nullable: true },
   },
-  required: ['verdict', 'category', 'reason', 'name', 'brand', 'genericName'],
+  required: ['verdict', 'reason', 'name', 'brand', 'genericName'],
 };
 
 let _client: GoogleGenAI | null = null;
@@ -100,7 +94,6 @@ function checkMock(kind: ImageKind): PlausibilityResult {
   return {
     verdict: 'ok',
     reason: 'mock mode — image accepted without inspection',
-    category: null,
     name: kind === 'product' ? 'Mock Product' : null,
     brand: kind === 'product' ? 'Mock Brand' : null,
     genericName: null,
@@ -132,13 +125,7 @@ async function checkGemini(
 
   const raw = response.text ?? '';
   logger.debug('plausibility:gemini raw response', { kind, length: raw.length, text: raw });
-  const parsed = JSON.parse(raw) as PlausibilityResult;
-
-  // Defence-in-depth: the model occasionally omits `category` on abuse.
-  if (parsed.verdict === 'abuse' && parsed.category == null) {
-    parsed.category = 'GRAPHIC';
-  }
-  return parsed;
+  return JSON.parse(raw) as PlausibilityResult;
 }
 
 /**

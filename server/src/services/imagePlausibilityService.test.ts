@@ -17,7 +17,6 @@ vi.mock('@google/genai', () => {
 
 const OK_RESPONSE = {
   verdict: 'ok' as const,
-  category: null,
   reason: 'A carton of oat drink, front of pack.',
   name: 'Oat Drink',
   brand: 'Alpro',
@@ -109,11 +108,10 @@ describe('imagePlausibilityService', () => {
       expect(call.contents[0].parts[1].text).toMatch(/label/i);
     });
 
-    it('defaults the abuse category to GRAPHIC when the model omits it', async () => {
+    it('returns the abuse verdict with the model reason', async () => {
       mockGenerateContent.mockResolvedValue({
         text: JSON.stringify({
           verdict: 'abuse',
-          category: null,
           reason: 'explicit content',
           name: null,
           brand: null,
@@ -125,7 +123,7 @@ describe('imagePlausibilityService', () => {
       const result = await checkImage(Buffer.from('x'), 'image/jpeg', 'product');
 
       expect(result.verdict).toBe('abuse');
-      expect(result.category).toBe('GRAPHIC');
+      expect(result.reason).toBe('explicit content');
     });
 
     it('throws when GEMINI_API_KEY is missing', async () => {

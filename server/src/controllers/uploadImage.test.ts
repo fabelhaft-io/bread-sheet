@@ -55,7 +55,6 @@ function okVerdict(overrides: Record<string, unknown> = {}) {
   return {
     verdict: 'ok',
     reason: 'looks fine',
-    category: null,
     name: 'Detected Name',
     brand: 'Detected Brand',
     genericName: 'detected category',
@@ -353,7 +352,7 @@ describe('POST /api/products/upload-image', () => {
     stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'photo.jpg' });
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
     mockCheckImage.mockResolvedValue(
-      okVerdict({ verdict: 'abuse', category: 'SEXUAL', reason: 'explicit content' }),
+      okVerdict({ verdict: 'abuse', reason: 'explicit content' }),
     );
     mockAbuseFlagCreate.mockResolvedValue({ id: 'flag-1' });
 
@@ -368,7 +367,7 @@ describe('POST /api/products/upload-image', () => {
     expect(res.body.reason).not.toMatch(/explicit/i);
     expect(mockUploadImageToS3).not.toHaveBeenCalled();
     expect(mockAbuseFlagCreate).toHaveBeenCalledWith({
-      data: { userId: 'user-1', category: 'SEXUAL', reason: 'explicit content' },
+      data: { userId: 'user-1', reason: 'explicit content' },
     });
   });
 
@@ -379,7 +378,7 @@ describe('POST /api/products/upload-image', () => {
     );
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
     mockCheckImage.mockResolvedValue(
-      okVerdict({ verdict: 'abuse', category: 'GRAPHIC', reason: 'graphic content' }),
+      okVerdict({ verdict: 'abuse', reason: 'graphic content' }),
     );
     mockAbuseFlagCreate.mockResolvedValue({ id: 'flag-2' });
 
@@ -391,7 +390,7 @@ describe('POST /api/products/upload-image', () => {
     expect(res.status).toBe(422);
     expect(mockUploadImageToS3).not.toHaveBeenCalled();
     expect(mockAbuseFlagCreate).toHaveBeenCalledWith({
-      data: { userId: 'user-1', category: 'GRAPHIC', reason: 'graphic content' },
+      data: { userId: 'user-1', reason: 'graphic content' },
     });
   });
 

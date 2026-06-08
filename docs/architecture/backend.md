@@ -227,7 +227,7 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
 2. **Plausibility / abuse gate (synchronous, P5-005):** `imagePlausibilityService.checkImage(buffer, mime, kind)` runs on the in-memory buffer **before** any S3 write. Gated by `PLAUSIBILITY_MODE` (`mock` accepts all; `gemini` runs a Gemini multimodal classification). Applies to **both** `product` and `label` uploads. Verdicts:
    - `ok` → proceed. For `product` photos the same call also returns front-of-pack `name`/`brand`/`genericName` suggestions (returned to the client to pre-fill the Add Product form).
    - `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.
-   - `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `category` `SEXUAL|GRAPHIC`, `reason`) is recorded server-side. The model's specific reason is never returned to the client.
+   - `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `reason`, `createdAt`) is recorded server-side — count + free-text reason only, no category. The model's specific reason is never returned to the client.
 3. **Upload:** Converts the validated bytes to JPEG using `sharp` in `imageService.ts` and uploads to S3 at `raw/product/{uuid}.jpg` or `raw/label/{uuid}.jpg`.
 4. **Lambda (async):** S3 `ObjectCreated` event triggers the resize Lambda. Writes to `processed/{uuid}.jpg` with the appropriate dimension cap (1200 px product / 1600 px label).
 5. **Response:** API returns the predicted `processed/` URL immediately — does not wait for Lambda.

@@ -274,14 +274,14 @@ Minor Frontend fix: Screens should be if possible one full screen with no scroll
 **Verdict contract:**
 - `ok` → upload proceeds. For `product` photos the same call returns front-of-pack `name`/`brand`/`genericName` suggestions; these win those three fields over label OCR on the form (label fills them only if the photo left them blank). Nutrition fields still come from label extraction.
 - `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.
-- `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `category` `SEXUAL|GRAPHIC`, `reason`) is recorded server-side. The model's specific reason is never returned to the client.
+- `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `reason`, `createdAt`) is recorded server-side — count + free-text reason only, no category. The model's specific reason is never returned to the client.
 **Client:** Product photo is uploaded at capture time (not at submit) so rejection feedback and identity suggestions arrive before the review step; the submit step reuses the already-uploaded URL.
-**Schema:** New `AbuseCategory` enum + `UserAbuseFlag` model (`userId`, `category`, `reason?`, `createdAt`); `User.abuseFlags` relation. Record-only — a moderation dashboard / auto-ban threshold is a later ticket.
+**Schema:** New `UserAbuseFlag` model (`userId`, `reason?`, `createdAt`); `User.abuseFlags` relation. Deliberately no category enum — we only track the per-user count and a free-text reason. Record-only — a moderation dashboard / auto-ban threshold is a later ticket.
 **Acceptance Criteria:**
 - [x] A clearly non-product product photo is rejected (`422`) with actionable copy; nothing is written to S3.
 - [x] A blurry/unusable photo is rejected (`422`) advising a retake; nothing is written.
 - [x] A valid product photo returns `200` with `name`/`brand`/`genericName` suggestions and the `processed/` URL.
-- [x] Abusive content on **either** `kind=product` or `kind=label` returns `422` and records a `UserAbuseFlag` with the category; nothing is written to S3.
+- [x] Abusive content on **either** `kind=product` or `kind=label` returns `422` and records a `UserAbuseFlag`; nothing is written to S3.
 - [x] Non-abusive rejections do not create a `UserAbuseFlag`.
 - [x] `PLAUSIBILITY_MODE` is validated at startup; `gemini` without `GEMINI_API_KEY` throws; an invalid value throws.
 - [x] The client pre-fills the form from the upload suggestions (photo wins name/brand/genericName) and surfaces rejection reasons inline with a retake affordance; submit reuses the uploaded URL.

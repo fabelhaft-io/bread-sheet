@@ -22,22 +22,17 @@ model User {
   abuseFlags          UserAbuseFlag[]
 }
 
-enum AbuseCategory {
-  SEXUAL
-  GRAPHIC
-}
-
 // Server-side moderation record raised when an uploaded image is judged to be
-// abusive (sexual / graphic) by the plausibility check. Record-only for now;
-// a moderation dashboard / auto-ban threshold is a later ticket.
+// abusive by the plausibility check. Record-only for now; a moderation dashboard
+// / auto-ban threshold is a later ticket. We track only the count and a
+// free-text reason per flag — not a category.
 model UserAbuseFlag {
-  id        String        @id @default(uuid())
+  id        String   @id @default(uuid())
   userId    String
-  category  AbuseCategory
   reason    String? // model-provided detail (server-side only, never returned to the client)
-  createdAt DateTime      @default(now())
+  createdAt DateTime @default(now())
 
-  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 enum ProductStatus {

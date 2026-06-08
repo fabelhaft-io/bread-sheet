@@ -16,7 +16,6 @@ import {
 } from '../services/productVerificationService.js';
 import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
 import { checkImage, type Verdict } from '../services/imagePlausibilityService.js';
-import { AbuseCategory } from '../generated/prisma_client/enums.js';
 import logger from '../logger.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
 import {
@@ -133,7 +132,6 @@ export const uploadImage = async (
       logger.info('image rejected by plausibility check', {
         kind,
         verdict: result.verdict,
-        category: result.category,
         reason: result.reason,
         userId: req.user?.id,
       });
@@ -143,11 +141,7 @@ export const uploadImage = async (
         // logging-table write failure mask the rejection the user must still see.
         try {
           await prisma.userAbuseFlag.create({
-            data: {
-              userId: req.user!.id,
-              category: (result.category ?? 'GRAPHIC') as AbuseCategory,
-              reason: result.reason,
-            },
+            data: { userId: req.user!.id, reason: result.reason },
           });
         } catch (flagErr) {
           logger.error('failed to record UserAbuseFlag', { userId: req.user?.id, flagErr });

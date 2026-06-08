@@ -87,8 +87,7 @@ type Verdict = 'ok' | 'not_a_product' | 'unusable' | 'abuse';
 
 interface PlausibilityResult {
   verdict: Verdict;
-  reason: string;                      // safe, user-facing copy
-  category?: 'SEXUAL' | 'GRAPHIC';     // present only when verdict === 'abuse'
+  reason: string;                      // model's free-text detail (server-side only)
   name: string | null;                 // front-of-pack (product kind only)
   brand: string | null;
   genericName: string | null;
@@ -105,8 +104,13 @@ Controller (`uploadImage`) handling, applied after magic-byte format detection:
 | `ok` (product)   | 200  | `{ url, name, brand, genericName }`               | upload to S3          |
 | `ok` (label)     | 200  | `{ url }`                                          | upload to S3          |
 
-The `abuse` reason returned to the client is intentionally generic; the specific
-`category` is recorded server-side only.
+The `abuse` reason returned to the client is intentionally generic; the model's
+free-text reason is recorded server-side only.
+
+> **Decision (revised):** the `UserAbuseFlag` carries only a free-text `reason`,
+> no category enum. We only need the per-user abuse *count* and a human-readable
+> why; a category buys nothing until automated moderation logic branches on it
+> (YAGNI), and would otherwise mean a migration per new category.
 
 ---
 
@@ -115,22 +119,17 @@ The `abuse` reason returned to the client is intentionally generic; the specific
 `server/prisma/schema.prisma`:
 
 ```prisma
-enum AbuseCategory {
-  SEXUAL
-  GRAPHIC
-}
-
 model UserAbuseFlag {
-  id        String        @id @default(uuid())
+  id        String   @id @default(uuid())
   userId    String
-  category  AbuseCategory
-  reason    String?       // model-provided detail (server-side only)
-  createdAt DateTime      @default(now())
-  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reason    String?  // model-provided detail (server-side only)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 ```
 
-Add `abuseFlags UserAbuseFlag[]` to `User`. Record-only for now; a moderation
+Add `abuseFlags UserAbuseFlag[]` to `User`. No category enum — count + free-text
+reason only (see the decision note above). Record-only for now; a moderation
 dashboard / auto-ban threshold is a later ticket. Migration via
 `npm run prisma:migrate`.
 
@@ -139,7 +138,7 @@ dashboard / auto-ban threshold is a later ticket. Migration via
 ## Implementation Tasks
 
 ### Task 1 — Schema + migration
-Add `AbuseCategory` enum, `UserAbuseFlag` model, `User.abuseFlags` relation.
+Add `UserAbuseFlag` model + `User.abuseFlags` relation (no category enum).
 Run `npm run prisma:migrate` + `npm run prisma:generate`.
 
 ### Task 2 — `imagePlausibilityService.ts`
@@ -222,7 +221,7 @@ throws a typed error carrying `reason`; its return type gains
 - [ ] A valid product photo returns `200` with `name`/`brand`/`genericName`
       suggestions and the `processed/` URL.
 - [ ] Abusive content on **either** `kind=product` or `kind=label` returns `422`
-      and records a `UserAbuseFlag` row with the category; nothing is written to S3.
+      and records a `UserAbuseFlag` row; nothing is written to S3.
 - [ ] Non-abusive rejections do **not** create a `UserAbuseFlag`.
 - [ ] `PLAUSIBILITY_MODE` is validated at startup; `gemini` without
       `GEMINI_API_KEY` throws; an invalid value throws.

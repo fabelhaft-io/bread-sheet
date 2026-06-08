@@ -38,7 +38,7 @@ const FAT_PATTERNS: RegExp[] = [
 const PROTEIN_PATTERNS: RegExp[] = [
   /^[ \t]*proteine?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   // 'ß' is not \w so \b doesn't apply — use a lookahead instead
-  /^[ \t]*eiweiß(?=[ \t]|[:\-]|$)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*eiweiß(?=[ \t]|[:-]|$)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*protéines?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
@@ -49,7 +49,7 @@ const SALT_PATTERNS: RegExp[] = [
 ];
 
 const SERVING_SIZE_PATTERNS: RegExp[] = [
-  /(?:serving[ \t]+size|portionsgröße|portion(?:ierung)?)[ \t]*(?:[:\-][ \t]*)?(\d+(?:[.,]\d+)?[ \t]*(?:g|ml|oz))/im,
+  /(?:serving[ \t]+size|portionsgröße|portion(?:ierung)?)[ \t]*(?:[:-][ \t]*)?(\d+(?:[.,]\d+)?[ \t]*(?:g|ml|oz))/im,
 ];
 
 function parseDecimal(s: string): number {
@@ -73,7 +73,7 @@ function matchString(text: string, patterns: RegExp[]): string | null {
 }
 
 function extractIngredients(text: string): string | null {
-  const HEADER_RE = /^[ \t]*(?:ingredients?|zutaten)[ \t]*[:\-]?[ \t]*/im;
+  const HEADER_RE = /^[ \t]*(?:ingredients?|zutaten)[ \t]*[:-]?[ \t]*/im;
   const match = HEADER_RE.exec(text);
   if (!match) return null;
 
