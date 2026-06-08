@@ -37,7 +37,7 @@
 
 ## Infrastructure
 
-- [ ] Confirm Docker image builds cleanly: `docker compose build`
+- [ ] Confirm the Docker image builds cleanly locally: `docker build ./server` — Docker Compose is local dev only; EKS pulls the image from ECR, not from Compose
 - [ ] ArgoCD sync policy configured for the production cluster
 - [ ] Kubernetes liveness/readiness probes point to `GET /` health check
 - [ ] Resource requests/limits set on the server pod
