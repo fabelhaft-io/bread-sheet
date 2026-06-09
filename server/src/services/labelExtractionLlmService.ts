@@ -11,7 +11,7 @@ Return JSON matching the provided schema. Strict rules:
 - Return null for any field you cannot read with high confidence. Never guess or infer.
 - All numeric nutrition fields are per 100 g of solid product, or per 100 ml of liquid product. If the label only states per-serving values, return null for those numeric fields and put the serving descriptor in "servingSize".
 - "energyKcal" is kilocalories (kcal). If only kJ is present, convert: kcal = round(kJ / 4.184).
-- "carbohydrates", "fat", "protein", "salt" are grams as a plain number (no unit).
+- "carbohydrates", "sugars", "fat", "saturatedFat", "protein", "salt" are grams as a plain number (no unit). "sugars" is the "of which sugars" sub-value of carbohydrates; "saturatedFat" is the "of which saturates" sub-value of fat.
 - "servingSize" is the literal serving descriptor (e.g. "30g", "100ml", "1 slice"), or null.
 - "ingredients" is the ingredient list as printed (comma-separated, allergens included if listed), or null.
 - "name" is the product's display name. "brand" is the brand name. "genericName" is the generic product category (e.g. "Pear-blackberry juice"). Use null if not visible.
@@ -24,8 +24,10 @@ const responseSchema = {
     brand: { type: Type.STRING, nullable: true },
     genericName: { type: Type.STRING, nullable: true },
     energyKcal: { type: Type.NUMBER, nullable: true },
-    carbohydrates: { type: Type.NUMBER, nullable: true },
     fat: { type: Type.NUMBER, nullable: true },
+    saturatedFat: { type: Type.NUMBER, nullable: true },
+    carbohydrates: { type: Type.NUMBER, nullable: true },
+    sugars: { type: Type.NUMBER, nullable: true },
     protein: { type: Type.NUMBER, nullable: true },
     salt: { type: Type.NUMBER, nullable: true },
     servingSize: { type: Type.STRING, nullable: true },
@@ -37,8 +39,10 @@ const responseSchema = {
     'brand',
     'genericName',
     'energyKcal',
-    'carbohydrates',
     'fat',
+    'saturatedFat',
+    'carbohydrates',
+    'sugars',
     'protein',
     'salt',
     'servingSize',

@@ -39,11 +39,13 @@ Allergene: Enthält Weizen, kann Milch enthalten.
 
 describe('extractFromText', () => {
   describe('English label', () => {
-    it('parses all five macros', () => {
+    it('parses all macros including sub-values', () => {
       const result = extractFromText(ENGLISH_LABEL);
       expect(result.energyKcal).toBe(295);
       expect(result.fat).toBe(10.5);
+      expect(result.saturatedFat).toBe(3.2);
       expect(result.carbohydrates).toBe(45.2);
+      expect(result.sugars).toBe(12.1);
       expect(result.protein).toBe(8.4);
       expect(result.salt).toBe(0.5);
     });
@@ -63,11 +65,15 @@ describe('extractFromText', () => {
     });
 
     it('does not confuse "of which saturates" with total fat', () => {
-      expect(extractFromText(ENGLISH_LABEL).fat).toBe(10.5); // not 3.2
+      const result = extractFromText(ENGLISH_LABEL);
+      expect(result.fat).toBe(10.5);        // not 3.2
+      expect(result.saturatedFat).toBe(3.2); // sub-value extracted separately
     });
 
     it('does not confuse "of which sugars" with total carbohydrates', () => {
-      expect(extractFromText(ENGLISH_LABEL).carbohydrates).toBe(45.2); // not 12.1
+      const result = extractFromText(ENGLISH_LABEL);
+      expect(result.carbohydrates).toBe(45.2); // not 12.1
+      expect(result.sugars).toBe(12.1);         // sub-value extracted separately
     });
 
     it('always returns null for name, brand, genericName', () => {
@@ -79,11 +85,13 @@ describe('extractFromText', () => {
   });
 
   describe('German label', () => {
-    it('parses all five macros with comma as decimal separator', () => {
+    it('parses all macros including sub-values with comma as decimal separator', () => {
       const result = extractFromText(GERMAN_LABEL);
       expect(result.energyKcal).toBe(304);
       expect(result.fat).toBe(12.5);
+      expect(result.saturatedFat).toBe(4.8);
       expect(result.carbohydrates).toBe(50.2);
+      expect(result.sugars).toBe(15.3);
       expect(result.protein).toBe(6.2);
       expect(result.salt).toBe(0.8);
     });
@@ -103,7 +111,9 @@ describe('extractFromText', () => {
     });
 
     it('does not confuse Fettsäuren row with total Fett', () => {
-      expect(extractFromText(GERMAN_LABEL).fat).toBe(12.5); // not 4.8
+      const result = extractFromText(GERMAN_LABEL);
+      expect(result.fat).toBe(12.5);            // not 4.8
+      expect(result.saturatedFat).toBe(4.8);    // sub-value extracted separately
     });
   });
 
@@ -116,19 +126,25 @@ Brennwert
 161 kJ / 38 kcal
 Fett
 0,02 g
+davon gesättigte Fettsäuren
+0,88 g
 Kohlenhydrate
 9,0 g
+davon Zucker
+8,0 g
 Eiweiß
 0,16 g
 Salz
 0,075 g
 `;
 
-    it('parses all five macros when label and value are on separate lines', () => {
+    it('parses all macros including sub-values when label and value are on separate lines', () => {
       const result = extractFromText(SPLIT_LINE_LABEL);
       expect(result.energyKcal).toBe(38);
       expect(result.fat).toBe(0.02);
+      expect(result.saturatedFat).toBe(0.88);
       expect(result.carbohydrates).toBe(9.0);
+      expect(result.sugars).toBe(8.0);
       expect(result.protein).toBe(0.16);
       expect(result.salt).toBe(0.075);
     });

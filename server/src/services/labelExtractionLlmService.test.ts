@@ -25,7 +25,9 @@ const FAKE_RESPONSE = {
   genericName: 'Pear–blackberry juice',
   energyKcal: 38,
   carbohydrates: 9.0,
-  fat: 0.88,
+  sugars: 8.0,
+  fat: 0.02,
+  saturatedFat: 0.88,
   protein: 0.16,
   salt: 0.075,
   servingSize: '100ml',
@@ -57,6 +59,8 @@ describe('extractLabelWithLlm', () => {
     expect(call.model).toBe('gemini-2.5-flash');
     expect(call.config.responseMimeType).toBe('application/json');
     expect(call.config.responseSchema.required).toContain('confidence');
+    expect(call.config.responseSchema.required).toContain('sugars');
+    expect(call.config.responseSchema.required).toContain('saturatedFat');
     expect(call.contents[0].parts[0].inlineData).toEqual({
       mimeType: 'image/jpeg',
       data: buffer.toString('base64'),

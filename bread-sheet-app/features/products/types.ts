@@ -17,8 +17,10 @@ export interface ProductSubmission {
   brand: string | null;
   genericName: string | null;
   energyKcal: number | null;
-  carbohydrates: number | null;
   fat: number | null;
+  saturatedFat: number | null;
+  carbohydrates: number | null;
+  sugars: number | null;
   protein: number | null;
   salt: number | null;
   servingSize: string | null;
@@ -37,8 +39,10 @@ export interface ExtractedLabel {
   brand: string | null;
   genericName: string | null;
   energyKcal: number | null;
-  carbohydrates: number | null;
   fat: number | null;
+  saturatedFat: number | null;
+  carbohydrates: number | null;
+  sugars: number | null;
   protein: number | null;
   salt: number | null;
   servingSize: string | null;

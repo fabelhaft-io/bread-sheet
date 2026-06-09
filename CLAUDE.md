@@ -97,7 +97,7 @@ Keep business logic in these modules — route files stay UI-only.
 
 ### Data Model (Prisma schema at `server/prisma/schema.prisma`)
 
-Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`), `Rating` (taste score 0–10 in 0.5 steps + optional comment; `@@unique([userId, productId])` — one rating per user per product; resubmissions upsert the existing row), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED), `UserAbuseFlag` (`userId`, `reason?`, `createdAt`; moderation record raised when an uploaded image is judged abusive — see the image plausibility gate. Count + free-text reason only, no category).
+Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`; nutrition fields: `energyKcal`, `carbohydrates`, `sugars`, `fat`, `saturatedFat`, `protein`, `salt`, `servingSize`, `ingredients`), `Rating` (taste score 0–10 in 0.5 steps + optional comment; `@@unique([userId, productId])` — one rating per user per product; resubmissions upsert the existing row), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED), `UserAbuseFlag` (`userId`, `reason?`, `createdAt`; moderation record raised when an uploaded image is judged abusive — see the image plausibility gate. Count + free-text reason only, no category).
 
 ### Auth Flow
 

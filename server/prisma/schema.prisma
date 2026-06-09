@@ -62,8 +62,10 @@ model Product {
 
   genericName         String?
   energyKcal          Float?
-  carbohydrates       Float?
   fat                 Float?
+  saturatedFat        Float?
+  carbohydrates       Float?
+  sugars              Float?
   protein             Float?
   salt                Float?
   servingSize         String?

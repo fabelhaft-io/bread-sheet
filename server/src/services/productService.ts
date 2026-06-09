@@ -65,8 +65,10 @@ export interface ProductSubmissionInput {
   brand: string | null;
   genericName: string | null;
   energyKcal: number | null;
-  carbohydrates: number | null;
   fat: number | null;
+  saturatedFat: number | null;
+  carbohydrates: number | null;
+  sugars: number | null;
   protein: number | null;
   salt: number | null;
   servingSize: string | null;
@@ -211,8 +213,10 @@ function mapPayloadToProduct(payload: ProductSubmissionInput) {
     image: payload.productImageUrl, // wire `productImageUrl` → schema `image`
     genericName: payload.genericName,
     energyKcal: payload.energyKcal,
-    carbohydrates: payload.carbohydrates,
     fat: payload.fat,
+    saturatedFat: payload.saturatedFat,
+    carbohydrates: payload.carbohydrates,
+    sugars: payload.sugars,
     protein: payload.protein,
     salt: payload.salt,
     servingSize: payload.servingSize,

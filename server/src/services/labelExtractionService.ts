@@ -3,8 +3,10 @@ export interface ExtractedLabel {
   brand: string | null;
   genericName: string | null;
   energyKcal: number | null;
-  carbohydrates: number | null;
   fat: number | null;
+  saturatedFat: number | null;
+  carbohydrates: number | null;
+  sugars: number | null;
   protein: number | null;
   salt: number | null;
   servingSize: string | null;
@@ -65,6 +67,27 @@ const SALT_PATTERNS: RegExp[] = [
   /^[ \t]*sel\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
+const SUGARS_PATTERNS: RegExp[] = [
+  /^[ \t]*(?:of[ \t]+which[ \t]+)?sugars?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?zucker\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:dont[ \t]+)?sucres?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  // two-column OCR fallback
+  /^[ \t]*(?:of[ \t]+which[ \t]+)?sugars?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?zucker\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:dont[ \t]+)?sucres?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+];
+
+const SATURATED_FAT_PATTERNS: RegExp[] = [
+  /^[ \t]*(?:of[ \t]+which[ \t]+)?saturate[ds]?(?:[ \t]+fat)?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?gesättigte[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:dont[ \t]+)?acides?[ \t]+gras[ \t]+saturés?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  // two-column OCR fallback
+  /^[ \t]*of[ \t]+which[ \t]+saturate[ds]?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*saturated?[ \t]+fat\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?gesättigte[ \t]+fettsäuren[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:dont[ \t]+)?acides?[ \t]+gras[ \t]+saturés?[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+];
+
 const SERVING_SIZE_PATTERNS: RegExp[] = [
   /(?:serving[ \t]+size|portionsgröße|portion(?:ierung)?)[ \t]*(?:[:-][ \t]*)?(\d+(?:[.,]\d+)?[ \t]*(?:g|ml|oz))/im,
 ];
@@ -106,14 +129,16 @@ function extractIngredients(text: string): string | null {
 
 export function extractFromText(rawText: string): ExtractedLabel {
   const energyKcal = matchNumber(rawText, ENERGY_KCAL_PATTERNS);
-  const carbohydrates = matchNumber(rawText, CARBS_PATTERNS);
   const fat = matchNumber(rawText, FAT_PATTERNS);
+  const saturatedFat = matchNumber(rawText, SATURATED_FAT_PATTERNS);
+  const carbohydrates = matchNumber(rawText, CARBS_PATTERNS);
+  const sugars = matchNumber(rawText, SUGARS_PATTERNS);
   const protein = matchNumber(rawText, PROTEIN_PATTERNS);
   const salt = matchNumber(rawText, SALT_PATTERNS);
   const servingSize = matchString(rawText, SERVING_SIZE_PATTERNS);
   const ingredients = extractIngredients(rawText);
 
-  const parsedCount = [energyKcal, carbohydrates, fat, protein, salt, servingSize, ingredients]
+  const parsedCount = [energyKcal, fat, saturatedFat, carbohydrates, sugars, protein, salt, servingSize, ingredients]
     .filter((v) => v !== null).length;
 
   const confidence: 'low' | 'medium' | 'high' =
@@ -124,8 +149,10 @@ export function extractFromText(rawText: string): ExtractedLabel {
     brand: null,
     genericName: null,
     energyKcal,
-    carbohydrates,
     fat,
+    saturatedFat,
+    carbohydrates,
+    sugars,
     protein,
     salt,
     servingSize,

@@ -11,7 +11,9 @@ const VALID_PAYLOAD = {
   genericName: 'Bread',
   energyKcal: 250,
   carbohydrates: 45,
+  sugars: 3.0,
   fat: 3.5,
+  saturatedFat: 1.2,
   protein: 8,
   salt: 1.2,
   servingSize: '50g',
@@ -44,7 +46,9 @@ describe('validateProductSubmission', () => {
         genericName: null,
         energyKcal: null,
         carbohydrates: null,
+        sugars: null,
         fat: null,
+        saturatedFat: null,
         protein: null,
         salt: null,
         servingSize: null,
@@ -53,6 +57,8 @@ describe('validateProductSubmission', () => {
       });
       expect(result.brand).toBeNull();
       expect(result.energyKcal).toBeNull();
+      expect(result.sugars).toBeNull();
+      expect(result.saturatedFat).toBeNull();
       expect(result.ingredients).toBeNull();
     });
 
