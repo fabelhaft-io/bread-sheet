@@ -91,7 +91,7 @@ Keep business logic in these modules — route files stay UI-only.
 
 **Prisma client** is generated to a custom location: `src/generated/prisma_client`. Always import from there, not from `@prisma/client` directly.
 
-**Image processing:** `services/imageService.ts` converts uploads to JPEG (format normalisation) and stores the raw file in S3 at `raw/{kind}/{uuid}.jpg`, returning the predicted `processed/{uuid}.jpg` URL immediately. A Lambda function (triggered by S3 `ObjectCreated` events on the `raw/` prefix) handles the definitive resize (1200 px for product photos, 1600 px for label images) and writes to `processed/`. The S3 bucket and Lambda are provisioned in `terraform/`; LocalStack emulates both locally.
+**Image processing:** `services/imageService.ts` converts uploads to JPEG (format normalisation) and stores the raw file in S3 at `raw/{kind}/{uuid}.jpg`, returning the predicted `processed/{uuid}.jpg` URL immediately. The S3 client's addressing style is selected by `S3_MODE` (`localstack` forces path-style, which LocalStack requires; `aws` uses the SDK default). A Lambda function (triggered by S3 `ObjectCreated` events on the `raw/` prefix) handles the definitive resize (1200 px for product photos, 1600 px for label images) and writes to `processed/`. The S3 bucket and Lambda are provisioned in `terraform/`; LocalStack emulates both locally.
 
 **Image plausibility / abuse gate (P5-005):** `services/imagePlausibilityService.ts` runs an AI check (Gemini multimodal, gated by `PLAUSIBILITY_MODE=mock|gemini`) inside `uploadImage` **before** the S3 write — so a rejected image is never persisted (no orphans). Both `kind=product` and `kind=label` uploads are gated. It returns one of four verdicts: `ok` (proceeds; for `product` also returns front-of-pack `name`/`brand`/`genericName` suggestions used to pre-fill the Add Product form), `not_a_product`/`unusable` (`422` with actionable copy, no record), or `abuse` (`422` with generic copy + a `UserAbuseFlag` row recording the model's free-text reason server-side). The specific abuse reason is never returned to the client.
 
@@ -136,6 +136,13 @@ NODE_ENV=development
 DATABASE_URL="postgresql://admin:password@localhost:5432/breadsheet"
 SUPABASE_URL=...
 SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
+
+# S3 image storage
+AWS_ENDPOINT_URL=http://localhost:4566    # LocalStack locally (docker-compose overrides to http://localstack:4566); real S3 endpoint in prod. Also used to build returned image URLs.
+S3_BUCKET_NAME=breadsheet-images-local
+S3_MODE=localstack                        # localstack | aws  (no default — must be explicit). localstack forces
+                                          # path-style addressing, which LocalStack requires (its virtual-hosted
+                                          # bucket hostnames don't resolve inside the Docker network).
 
 # Logging
 # LOG_LEVEL overrides the default (debug in dev, info in prod, warn in test).

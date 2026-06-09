@@ -11,6 +11,8 @@
 - [ ] `APP_DEEP_LINK_SCHEME=breadsheet` — use the bare scheme for production builds (not `exp+breadsheet`, which is Expo Go only)
 - [ ] `VISION_MODE` — set explicitly (`live` or `llm` in prod; never `mock`, which returns fixture OCR). No default — the server refuses to boot if unset
 - [ ] `PLAUSIBILITY_MODE=gemini` — the upload image plausibility / abuse gate. Must **not** be `mock` in production (`mock` accepts every image, including abusive uploads). No default — the server refuses to boot if unset
+- [ ] `S3_MODE=aws` — selects the S3 backend / addressing style (`localstack` is local dev only; it forces path-style addressing, which LocalStack requires but real S3 deprecates). No default — the server refuses to boot if unset
+- [ ] `S3_BUCKET_NAME` + `AWS_ENDPOINT_URL` — production image bucket and the public S3 endpoint used to build returned image URLs (not the LocalStack URL)
 - [ ] **Gemini credentials** — required when `VISION_MODE=llm` or `PLAUSIBILITY_MODE=gemini`. Pick one auth method (validated at startup by `config.ts`):
   - [ ] **Preferred (keyless):** `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`. Authenticates via ADC / Workload Identity Federation — reuses the `GOOGLE_APPLICATION_CREDENTIALS` WIF mount already used by `live` Vision; the service account needs `roles/aiplatform.user`. No long-lived secret to store or rotate.
   - [ ] **Alternative:** `GEMINI_API_KEY` (Google AI Studio). Store as a secret, never in the image. Do **not** set alongside `GOOGLE_GENAI_USE_VERTEXAI=true`.

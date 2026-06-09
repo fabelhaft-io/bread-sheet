@@ -38,16 +38,37 @@ function readPlausibilityMode(): PlausibilityMode {
   return m as PlausibilityMode;
 }
 
+const VALID_S3_MODES = ['localstack', 'aws'] as const;
+type S3Mode = (typeof VALID_S3_MODES)[number];
+
+// Which S3 backend the server talks to. `localstack` switches the SDK to
+// path-style addressing — LocalStack's bucket-prefixed (virtual-hosted-style)
+// hostnames don't resolve inside the Docker network.
+function readS3Mode(): S3Mode {
+  const m = process.env.S3_MODE;
+  if (!m) {
+    throw new Error(
+      'Missing required environment variable: S3_MODE. Valid values: localstack | aws',
+    );
+  }
+  if (!VALID_S3_MODES.includes(m as S3Mode)) {
+    throw new Error(`Invalid S3_MODE "${m}". Must be one of: ${VALID_S3_MODES.join(' | ')}`);
+  }
+  return m as S3Mode;
+}
+
 interface Config {
   port: number;
   nodeEnv: string;
   visionMode: VisionMode;
   plausibilityMode: PlausibilityMode;
+  s3Mode: S3Mode;
   appDeepLinkScheme: string;
 }
 
 const visionMode = readVisionMode();
 const plausibilityMode = readPlausibilityMode();
+const s3Mode = readS3Mode();
 
 // Gemini is used both for `llm` vision extraction and for `gemini` plausibility.
 // Either one being active requires credentials, chosen by environment (see
@@ -84,6 +105,7 @@ const config: Config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   visionMode,
   plausibilityMode,
+  s3Mode,
   appDeepLinkScheme,
 };
 

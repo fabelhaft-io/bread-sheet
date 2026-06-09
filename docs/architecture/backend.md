@@ -228,7 +228,7 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
    - `ok` → proceed. For `product` photos the same call also returns front-of-pack `name`/`brand`/`genericName` suggestions (returned to the client to pre-fill the Add Product form).
    - `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.
    - `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `reason`, `createdAt`) is recorded server-side — count + free-text reason only, no category. The model's specific reason is never returned to the client.
-3. **Upload:** Converts the validated bytes to JPEG using `sharp` in `imageService.ts` and uploads to S3 at `raw/product/{uuid}.jpg` or `raw/label/{uuid}.jpg`.
+3. **Upload:** Converts the validated bytes to JPEG using `sharp` in `imageService.ts` and uploads to S3 at `raw/product/{uuid}.jpg` or `raw/label/{uuid}.jpg`. The S3 client's addressing style is selected by `S3_MODE` (`localstack` | `aws`, no default): `localstack` forces path-style addressing (`{endpoint}/{bucket}/…`) because LocalStack's bucket-prefixed virtual-host names (e.g. `breadsheet-images-local.localstack`) don't resolve inside the Docker network; `aws` uses the SDK default (virtual-hosted style).
 4. **Lambda (async):** S3 `ObjectCreated` event triggers the resize Lambda. Writes to `processed/{uuid}.jpg` with the appropriate dimension cap (1200 px product / 1600 px label).
 5. **Response:** API returns the predicted `processed/` URL immediately — does not wait for Lambda.
 

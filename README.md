@@ -105,6 +105,7 @@ The Docker Compose stack relies on **Windows host paths and environment variable
     | `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Supabase anon/public key (same settings page) |
     | `AWS_ENDPOINT_URL` | LocalStack endpoint for S3/Lambda emulation (`http://localhost:4566` locally) |
     | `S3_BUCKET_NAME` | S3 bucket where product images are stored |
+    | `S3_MODE` | S3 backend: `localstack` (path-style addressing, required by LocalStack) or `aws` (SDK default) — **required, no default** |
     | `VISION_MODE` | OCR backend: `mock` (fixture), `live` (Google Vision), `llm` (Gemini) — **required, no default** |
     | `PLAUSIBILITY_MODE` | Upload image plausibility / abuse gate: `mock` (accept all) or `gemini` (real AI check) — **required, no default** |
     | `GOOGLE_GENAI_USE_VERTEXAI` | `true` to authenticate Gemini via Vertex AI + ADC (recommended; no API key). Requires `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`. Leave unset to use `GEMINI_API_KEY` instead. See [Using the image plausibility gate locally](#using-the-image-plausibility--abuse-gate-locally-plausibility_modegemini) |

@@ -24,6 +24,8 @@ docker compose --profile app-dev up -d
 
 LocalStack allows developers to test S3 uploads and Lambda triggers without an AWS account or cost.
 
+The server reaches LocalStack at `AWS_ENDPOINT_URL=http://localstack:4566` and must run with `S3_MODE=localstack` (set in `docker-compose.yml`): LocalStack requires path-style S3 addressing because virtual-hosted-style hostnames like `breadsheet-images-local.localstack` don't resolve inside the Docker network. Production uses `S3_MODE=aws` (SDK-default virtual-hosted addressing).
+
 **Lambda build (required before `terraform apply`):**
 The image-resizer Lambda is a TypeScript package at `server/lambda/imageResizer/`. Terraform's `archive_file` data source reads the compiled output from `dist/bundle/`, so the Lambda must be built before applying:
 

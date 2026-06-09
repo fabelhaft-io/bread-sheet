@@ -1,8 +1,20 @@
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
 import { v4 as uuidv4 } from 'uuid';
+import config from '../configs/config.js';
 
-const s3Client = new S3Client({});
+let s3Client: S3Client | undefined;
+
+function getS3Client(): S3Client {
+  if (!s3Client) {
+    // LocalStack needs path-style addressing (bucket in the path): the SDK's
+    // default virtual-hosted style prefixes the bucket onto the endpoint host
+    // (e.g. breadsheet-images-local.localstack), which doesn't resolve inside
+    // the Docker network.
+    s3Client = new S3Client({ forcePathStyle: config.s3Mode === 'localstack' });
+  }
+  return s3Client;
+}
 
 export type ImageKind = 'product' | 'label';
 
@@ -32,7 +44,7 @@ export async function uploadImageToS3(
   const uuid = uuidv4();
   const rawKey = `raw/${kind}/${uuid}.jpg`;
 
-  await s3Client.send(
+  await getS3Client().send(
     new PutObjectCommand({
       Bucket: bucket,
       Key: rawKey,

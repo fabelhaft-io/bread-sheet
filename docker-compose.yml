@@ -34,6 +34,7 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_ENDPOINT_URL=http://localstack:4566 # Points AWS SDK to LocalStack
+      - S3_MODE=localstack # localstack | aws — LocalStack needs path-style S3 addressing
       # Only used when VISION_MODE=live. Host credentials are mounted below.
       - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
       # Deep link scheme for the /auth/callback redirect page.
