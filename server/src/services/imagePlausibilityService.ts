@@ -1,5 +1,6 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { Type } from '@google/genai';
 import logger from '../logger.js';
+import { getGeminiClient } from './geminiClient.js';
 import type { ImageKind } from './imageService.js';
 
 const MODEL = 'gemini-2.5-flash';
@@ -73,20 +74,6 @@ const responseSchema = {
   required: ['verdict', 'reason', 'name', 'brand', 'genericName'],
 };
 
-let _client: GoogleGenAI | null = null;
-
-function getClient(): GoogleGenAI {
-  if (_client) return _client;
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      'Missing required environment variable: GEMINI_API_KEY (required when PLAUSIBILITY_MODE=gemini)',
-    );
-  }
-  _client = new GoogleGenAI({ apiKey });
-  return _client;
-}
-
 // Fixed verdict returned in mock mode regardless of image content, so the test
 // suite and local dev work without a Gemini API key. Tests that need to exercise
 // rejection paths mock this module directly.
@@ -105,7 +92,7 @@ async function checkGemini(
   mimeType: string,
   kind: ImageKind,
 ): Promise<PlausibilityResult> {
-  const client = getClient();
+  const client = getGeminiClient();
   const response = await client.models.generateContent({
     model: MODEL,
     contents: [

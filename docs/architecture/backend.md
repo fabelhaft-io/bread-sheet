@@ -259,7 +259,12 @@ The controller (`labelExtractionController.ts`) branches on `getVisionMode()`: `
 
 **Authentication (`live` mode):** Uses Application Default Credentials (ADC) — no service account JSON key. In production the pod's `GOOGLE_APPLICATION_CREDENTIALS` env var points to a Workload Identity Federation credential config file (`type: external_account`) mounted from a ConfigMap. The Google auth library exchanges the pod's IRSA/OIDC token for a short-lived GCP access token automatically. For local `live` testing run `gcloud auth application-default login` and then `gcloud auth application-default set-quota-project <project>` (Vision requires an ADC quota project).
 
-**Authentication (`llm` mode):** `GEMINI_API_KEY` only — issued from Google AI Studio. The `@google/genai` SDK uses it directly; no GCP project / ADC plumbing required. Schema validation is enforced by Gemini's `responseSchema` + `responseMimeType: 'application/json'`, so the controller can `JSON.parse` the response and cast to `ExtractedLabel` without further validation. The full Gemini response is logged at `debug` level (`vision:llm raw response`).
+**Gemini authentication (`llm` mode + image plausibility gate):** Both Gemini callers — `labelExtractionLlmService.ts` and `imagePlausibilityService.ts` — share a single client factory, `services/geminiClient.ts` (`getGeminiClient()`). The auth method is chosen entirely by environment, so the calling code is identical in local dev and production:
+
+- **Gemini Developer API** (local default): `GEMINI_API_KEY` from Google AI Studio, used directly by `@google/genai`; no GCP project / ADC plumbing.
+- **Vertex AI** (production, keyless): set `GOOGLE_GENAI_USE_VERTEXAI=true` plus `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`. The SDK authenticates via ADC, which in production resolves through the same Workload Identity Federation credential file used by `live` Vision (`GOOGLE_APPLICATION_CREDENTIALS`) — no `GEMINI_API_KEY` needed. The service account requires `roles/aiplatform.user`.
+
+`config.ts` validates the required combination at startup (Vertex needs project+location; otherwise a key is required). Schema validation is enforced by Gemini's `responseSchema` + `responseMimeType: 'application/json'`, so callers `JSON.parse` the response and cast directly. The full Gemini response is logged at `debug` level (`vision:llm raw response` / `plausibility:gemini raw response`).
 
 **Parser design (`labelExtractionService.ts`):**
 - All patterns use the `m` flag so `^` anchors to the start of each line, preventing sub-entry rows ("of which saturates", "davon Zucker") from matching the parent-nutrient patterns.

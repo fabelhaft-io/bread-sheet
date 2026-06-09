@@ -1,5 +1,6 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { Type } from '@google/genai';
 import logger from '../logger.js';
+import { getGeminiClient } from './geminiClient.js';
 import type { ExtractedLabel } from './labelExtractionService.js';
 
 const MODEL = 'gemini-2.5-flash';
@@ -46,25 +47,11 @@ const responseSchema = {
   ],
 };
 
-let _client: GoogleGenAI | null = null;
-
-function getClient(): GoogleGenAI {
-  if (_client) return _client;
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      'Missing required environment variable: GEMINI_API_KEY (required when VISION_MODE=llm)',
-    );
-  }
-  _client = new GoogleGenAI({ apiKey });
-  return _client;
-}
-
 export async function extractLabelWithLlm(
   buffer: Buffer,
   mimeType = 'image/jpeg',
 ): Promise<ExtractedLabel> {
-  const client = getClient();
+  const client = getGeminiClient();
   const response = await client.models.generateContent({
     model: MODEL,
     contents: [

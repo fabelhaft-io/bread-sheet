@@ -153,7 +153,15 @@ VISION_MODE=mock                          # mock | live | llm  (no default — m
 # Image plausibility / abuse gate on uploads (P5-005). Independent of VISION_MODE.
 PLAUSIBILITY_MODE=mock                     # mock | gemini  (no default — must be explicit)
 
-GEMINI_API_KEY=...                        # required when VISION_MODE=llm or PLAUSIBILITY_MODE=gemini
+# Gemini credentials (shared by VISION_MODE=llm and PLAUSIBILITY_MODE=gemini via
+# services/geminiClient.ts). Auth method is chosen by env — the calling code is identical:
+#   - Local default: GEMINI_API_KEY (Google AI Studio Developer API).
+GEMINI_API_KEY=...                        # required unless GOOGLE_GENAI_USE_VERTEXAI=true
+#   - Prod (keyless): Vertex AI via ADC / Workload Identity Federation — set the three below
+#     INSTEAD of GEMINI_API_KEY; reuses the live-Vision WIF mount. SA needs roles/aiplatform.user.
+# GOOGLE_GENAI_USE_VERTEXAI=true
+# GOOGLE_CLOUD_PROJECT=...
+# GOOGLE_CLOUD_LOCATION=europe-west1
 
 # Deep link scheme used by GET /auth/callback to bounce users back into the app after email
 # verification. exp+breadsheet for Expo Go; breadsheet for a production build.

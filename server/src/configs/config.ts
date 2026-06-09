@@ -49,16 +49,26 @@ interface Config {
 const visionMode = readVisionMode();
 const plausibilityMode = readPlausibilityMode();
 
-// Gemini is used both for `llm` vision extraction and for `gemini` plausibility;
-// either one being active requires the API key.
-if (
-  (visionMode === 'llm' || plausibilityMode === 'gemini') &&
-  !process.env.GEMINI_API_KEY
-) {
-  throw new Error(
-    'Missing required environment variable: GEMINI_API_KEY ' +
-      '(required when VISION_MODE=llm or PLAUSIBILITY_MODE=gemini)',
-  );
+// Gemini is used both for `llm` vision extraction and for `gemini` plausibility.
+// Either one being active requires credentials, chosen by environment (see
+// services/geminiClient.ts): Vertex AI via ADC/Workload Identity Federation when
+// GOOGLE_GENAI_USE_VERTEXAI=true (keyless, used in prod), otherwise the Gemini
+// Developer API with GEMINI_API_KEY (the local default).
+const geminiNeeded = visionMode === 'llm' || plausibilityMode === 'gemini';
+if (geminiNeeded) {
+  if (process.env.GOOGLE_GENAI_USE_VERTEXAI === 'true') {
+    if (!process.env.GOOGLE_CLOUD_PROJECT || !process.env.GOOGLE_CLOUD_LOCATION) {
+      throw new Error(
+        'GOOGLE_GENAI_USE_VERTEXAI=true requires GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION',
+      );
+    }
+  } else if (!process.env.GEMINI_API_KEY) {
+    throw new Error(
+      'Missing required environment variable: GEMINI_API_KEY ' +
+        '(required when VISION_MODE=llm or PLAUSIBILITY_MODE=gemini, ' +
+        'unless GOOGLE_GENAI_USE_VERTEXAI=true)',
+    );
+  }
 }
 
 const appDeepLinkScheme = process.env.APP_DEEP_LINK_SCHEME;
