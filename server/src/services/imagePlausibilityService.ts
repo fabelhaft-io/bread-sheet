@@ -1,6 +1,6 @@
 import { Type } from '@google/genai';
 import logger from '../logger.js';
-import { getGeminiClient } from './geminiClient.js';
+import { getGeminiClient } from '../geminiClient.js';
 import type { ImageKind } from './imageService.js';
 
 const MODEL = 'gemini-2.5-flash';
