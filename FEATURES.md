@@ -269,6 +269,7 @@ Minor Frontend fix: Screens should be if possible one full screen with no scroll
 **Acceptance Criteria:**
 - [ ] TODO!!!!
 - [ ] Images of Product in Review isn't shown
+- [ ] Product after two successful reviews is still not ratable by anonymous user (but it's shown)
 - [ ] After adding a product, the slider input moves the screen (like back gesture - screen slides for close)
 - [ ] After adding a product and rating it, you move back to missing product screen!
 
