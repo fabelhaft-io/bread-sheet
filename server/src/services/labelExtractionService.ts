@@ -22,17 +22,26 @@ const ENERGY_KCAL_PATTERNS: RegExp[] = [
   /^[ \t]*(?:energy|energie|brennwert)[^\d\n]*\d+(?:[.,]\d+)?[ \t]*k[Jj][^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*kcal/im,
   // "295 kcal" (kcal-only, no leading kJ value)
   /^[ \t]*(?:energy|energie|brennwert)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*kcal/im,
+  // two-column OCR fallback: label alone on its line, energy row on next line
+  /^[ \t]*(?:energy|energie|brennwert)[ \t]*\n[ \t]*\d+(?:[.,]\d+)?[ \t]*k[Jj][^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*kcal/im,
+  /^[ \t]*(?:energy|energie|brennwert)[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*kcal/im,
 ];
 
 const CARBS_PATTERNS: RegExp[] = [
   // [^\d\n]* is disjoint from \d+ so there is no ambiguous split to backtrack over.
   /^[ \t]*(?:carbohydrates?|kohlenhydrate|glucides?)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  // two-column OCR fallback
+  /^[ \t]*(?:carbohydrates?|kohlenhydrate|glucides?)[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const FAT_PATTERNS: RegExp[] = [
   /^[ \t]*(?:total[ \t]+)?fat\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*fett\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*matières?[ \t]+grasses?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  // two-column OCR fallback
+  /^[ \t]*(?:total[ \t]+)?fat\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*fett\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*matières?[ \t]+grasses?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const PROTEIN_PATTERNS: RegExp[] = [
@@ -40,12 +49,20 @@ const PROTEIN_PATTERNS: RegExp[] = [
   // 'ß' is not \w so \b doesn't apply — use a lookahead instead
   /^[ \t]*eiweiß(?=[ \t]|[:-]|$)[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*protéines?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  // two-column OCR fallback
+  /^[ \t]*proteine?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*eiweiß[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*protéines?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const SALT_PATTERNS: RegExp[] = [
   /^[ \t]*salt\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*salz\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*sel\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  // two-column OCR fallback
+  /^[ \t]*salt\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*salz\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*sel\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const SERVING_SIZE_PATTERNS: RegExp[] = [

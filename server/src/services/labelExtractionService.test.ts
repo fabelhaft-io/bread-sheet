@@ -107,6 +107,38 @@ describe('extractFromText', () => {
     });
   });
 
+  describe('two-column OCR layout (label and value on separate lines)', () => {
+    // OCR of a two-column nutrition table often puts each label on its own line
+    // with the corresponding value on the immediately following line.
+    const SPLIT_LINE_LABEL = `
+Nährwertangaben pro 100 ml:
+Brennwert
+161 kJ / 38 kcal
+Fett
+0,02 g
+Kohlenhydrate
+9,0 g
+Eiweiß
+0,16 g
+Salz
+0,075 g
+`;
+
+    it('parses all five macros when label and value are on separate lines', () => {
+      const result = extractFromText(SPLIT_LINE_LABEL);
+      expect(result.energyKcal).toBe(38);
+      expect(result.fat).toBe(0.02);
+      expect(result.carbohydrates).toBe(9.0);
+      expect(result.protein).toBe(0.16);
+      expect(result.salt).toBe(0.075);
+    });
+
+    it('does not match Fettsäuren as total fat when it appears on its own line', () => {
+      const text = `Fett\n0,02 g\ndavon gesättigte Fettsäuren\n0,88 g\n`;
+      expect(extractFromText(text).fat).toBe(0.02); // not 0.88
+    });
+  });
+
   describe('confidence levels', () => {
     it('returns medium when 3-4 fields match', () => {
       const text = `
