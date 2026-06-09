@@ -119,8 +119,10 @@ describe('ReviewProductScreen', () => {
         brand: 'Artisan',
         genericName: null,
         energyKcal: 250,
-        carbohydrates: null,
         fat: null,
+        saturatedFat: null,
+        carbohydrates: null,
+        sugars: null,
         protein: null,
         salt: null,
         servingSize: null,
@@ -129,7 +131,6 @@ describe('ReviewProductScreen', () => {
     });
     const { findByTestId, getAllByText } = render(<ReviewProductScreen />);
     await findByTestId('review-details');
-    // 8 nulls → 8 "Not provided" rows.
-    expect(getAllByText('Not provided').length).toBeGreaterThanOrEqual(7);
+    expect(getAllByText('Not provided').length).toBeGreaterThanOrEqual(9);
   });
 });

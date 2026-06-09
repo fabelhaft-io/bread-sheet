@@ -56,8 +56,10 @@ interface FormState {
   brand: string;
   genericName: string;
   energyKcal: string;
-  carbohydrates: string;
   fat: string;
+  saturatedFat: string;
+  carbohydrates: string;
+  sugars: string;
   protein: string;
   salt: string;
   servingSize: string;
@@ -69,8 +71,10 @@ const EMPTY_FORM: FormState = {
   brand: '',
   genericName: '',
   energyKcal: '',
-  carbohydrates: '',
   fat: '',
+  saturatedFat: '',
+  carbohydrates: '',
+  sugars: '',
   protein: '',
   salt: '',
   servingSize: '',
@@ -101,8 +105,10 @@ function hydrateForm(extracted: ExtractedLabel): FormState {
     brand: extracted.brand ?? '',
     genericName: extracted.genericName ?? '',
     energyKcal: toText(extracted.energyKcal),
-    carbohydrates: toText(extracted.carbohydrates),
     fat: toText(extracted.fat),
+    saturatedFat: toText(extracted.saturatedFat),
+    carbohydrates: toText(extracted.carbohydrates),
+    sugars: toText(extracted.sugars),
     protein: toText(extracted.protein),
     salt: toText(extracted.salt),
     servingSize: extracted.servingSize ?? '',
@@ -337,8 +343,10 @@ function AddProductFlow({
     if (!form.name.trim()) errors.name = 'Product name is required.';
     const numericFields = [
       'energyKcal',
-      'carbohydrates',
       'fat',
+      'saturatedFat',
+      'carbohydrates',
+      'sugars',
       'protein',
       'salt',
     ] as const;
@@ -365,8 +373,10 @@ function AddProductFlow({
         brand: form.brand.trim() || null,
         genericName: form.genericName.trim() || null,
         energyKcal: parseNumeric(form.energyKcal),
-        carbohydrates: parseNumeric(form.carbohydrates),
         fat: parseNumeric(form.fat),
+        saturatedFat: parseNumeric(form.saturatedFat),
+        carbohydrates: parseNumeric(form.carbohydrates),
+        sugars: parseNumeric(form.sugars),
         protein: parseNumeric(form.protein),
         salt: parseNumeric(form.salt),
         servingSize: form.servingSize.trim() || null,
@@ -735,6 +745,26 @@ function ReviewStep({
         colors={colors}
       />
       <Field
+        label="Fat (g)"
+        testID="field-fat"
+        value={form.fat}
+        onChangeText={(v) => set('fat', v)}
+        keyboardType="decimal-pad"
+        readOnly={readOnly}
+        error={fieldErrors.fat}
+        colors={colors}
+      />
+      <Field
+        label="of which saturates (g)"
+        testID="field-saturatedFat"
+        value={form.saturatedFat}
+        onChangeText={(v) => set('saturatedFat', v)}
+        keyboardType="decimal-pad"
+        readOnly={readOnly}
+        error={fieldErrors.saturatedFat}
+        colors={colors}
+      />
+      <Field
         label="Carbohydrates (g)"
         testID="field-carbohydrates"
         value={form.carbohydrates}
@@ -745,13 +775,13 @@ function ReviewStep({
         colors={colors}
       />
       <Field
-        label="Fat (g)"
-        testID="field-fat"
-        value={form.fat}
-        onChangeText={(v) => set('fat', v)}
+        label="of which sugars (g)"
+        testID="field-sugars"
+        value={form.sugars}
+        onChangeText={(v) => set('sugars', v)}
         keyboardType="decimal-pad"
         readOnly={readOnly}
-        error={fieldErrors.fat}
+        error={fieldErrors.sugars}
         colors={colors}
       />
       <Field

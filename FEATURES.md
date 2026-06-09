@@ -263,9 +263,14 @@ User History
 - [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8)*
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
-### [TICKET-P5-004] Anonymous users
+### [TICKET-P5-004] Anonymous users and FE Fixes
 **Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. 
 Minor Frontend fix: Screens should be if possible one full screen with no scroll column (currently on iOS it is slightly too high on rating screen and product submission)
+**Acceptance Criteria:**
+- [ ] TODO!!!!
+- [ ] Images of Product in Review isn't shown
+- [ ] After adding a product, the slider input moves the screen (like back gesture - screen slides for close)
+- [ ] After adding a product and rating it, you move back to missing product screen!
 
 ### [TICKET-P5-005] Product Image Plausibility & Abuse Gating
 **Goal:** Run an AI plausibility check on uploaded images so the app (1) rejects images that are not the expected subject (a chair, a pet, a selfie) with actionable feedback, (2) reads correct product identity (name/brand/generic name) off the product photo so the submission form pre-fills instead of showing confusingly empty fields, and (3) flags genuinely abusive uploads (sexual / graphic) server-side for moderation. Implementation plan: `docs/P5-005-implementation-plan.md`.
