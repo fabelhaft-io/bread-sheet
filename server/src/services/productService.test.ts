@@ -156,7 +156,7 @@ const VALID_INPUT: ProductSubmissionInput = {
   protein: 8,
   salt: 1.2,
   servingSize: '50g',
-  productImageUrl: 'https://s3.example.com/processed/abc.jpg',
+  productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
   ingredients: 'Flour, water, salt, yeast',
 };
 
@@ -232,7 +232,7 @@ describe('createSubmittedProduct', () => {
       data: expect.objectContaining({
         name: VALID_INPUT.name,
         brand: VALID_INPUT.brand,
-        image: VALID_INPUT.productImageUrl,
+        image: VALID_INPUT.productImageKey,
         status: ProductStatus.PENDING_REVIEW,
         submittedByUserId: 'user-2',
       }),
@@ -310,7 +310,7 @@ describe('createSubmittedProduct', () => {
       data: expect.objectContaining({
         barcode: VALID_INPUT.barcode,
         name: VALID_INPUT.name,
-        image: VALID_INPUT.productImageUrl,
+        image: VALID_INPUT.productImageKey,
         status: ProductStatus.PENDING_REVIEW,
         submittedByUserId: 'user-1',
       }),
@@ -331,7 +331,7 @@ describe('createSubmittedProduct', () => {
       barcode: VALID_INPUT.barcode,
       name: VALID_INPUT.name,
       brand: VALID_INPUT.brand,
-      image: VALID_INPUT.productImageUrl,
+      image: VALID_INPUT.productImageKey,
       genericName: VALID_INPUT.genericName,
       energyKcal: VALID_INPUT.energyKcal,
       carbohydrates: VALID_INPUT.carbohydrates,
@@ -343,8 +343,8 @@ describe('createSubmittedProduct', () => {
       status: ProductStatus.PENDING_REVIEW,
       submittedByUserId: 'user-1',
     });
-    // The schema field is `image`, not `productImageUrl` — make sure we don't leak the wire name
-    expect(createArg.data).not.toHaveProperty('productImageUrl');
+    // The schema field is `image`, not `productImageKey` — make sure we don't leak the wire name
+    expect(createArg.data).not.toHaveProperty('productImageKey');
   });
 
   it('translates a Prisma P2002 unique-violation race into ProductPendingByAnotherUserError', async () => {

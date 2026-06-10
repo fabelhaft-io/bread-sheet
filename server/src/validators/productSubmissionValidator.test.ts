@@ -17,7 +17,7 @@ const VALID_PAYLOAD = {
   protein: 8,
   salt: 1.2,
   servingSize: '50g',
-  productImageUrl: 'https://s3.example.com/processed/abc.jpg',
+  productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
   ingredients: 'Flour, water, salt, yeast',
 };
 
@@ -52,7 +52,7 @@ describe('validateProductSubmission', () => {
         protein: null,
         salt: null,
         servingSize: null,
-        productImageUrl: 'https://s3.example.com/processed/abc.jpg',
+        productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
         ingredients: null,
       });
       expect(result.brand).toBeNull();
@@ -66,7 +66,7 @@ describe('validateProductSubmission', () => {
       const result = validateProductSubmission({
         barcode: '1234567890123',
         name: 'Sourdough',
-        productImageUrl: 'https://s3.example.com/processed/abc.jpg',
+        productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
       });
       expect(result.brand).toBeNull();
       expect(result.energyKcal).toBeNull();
@@ -216,27 +216,54 @@ describe('validateProductSubmission', () => {
     });
   });
 
-  describe('productImageUrl', () => {
-    it('throws when productImageUrl is missing', () => {
-      const { productImageUrl: _p, ...rest } = VALID_PAYLOAD;
+  describe('productImageKey', () => {
+    it('throws when productImageKey is missing', () => {
+      const { productImageKey: _p, ...rest } = VALID_PAYLOAD;
       try {
         validateProductSubmission(rest);
         throw new Error('expected throw');
       } catch (err) {
-        expect((err as SubmissionValidationError).field).toBe('productImageUrl');
+        expect((err as SubmissionValidationError).field).toBe('productImageKey');
       }
     });
 
-    it('throws when productImageUrl does not contain /processed/', () => {
+    it('throws when productImageKey is an arbitrary external URL', () => {
       try {
         validateProductSubmission({
           ...VALID_PAYLOAD,
-          productImageUrl: 'https://attacker.example.com/evil.jpg',
+          productImageKey: 'https://attacker.example.com/evil.jpg',
         });
         throw new Error('expected throw');
       } catch (err) {
-        expect((err as SubmissionValidationError).field).toBe('productImageUrl');
+        expect((err as SubmissionValidationError).field).toBe('productImageKey');
         expect((err as Error).message).toMatch(/server-issued/);
+      }
+    });
+
+    it('throws when productImageKey is an absolute URL even if it contains /processed/', () => {
+      // Pre-key-era clients sent full URLs — those must now be rejected so the
+      // image column only ever stores keys (or OFF URLs written server-side).
+      try {
+        validateProductSubmission({
+          ...VALID_PAYLOAD,
+          productImageKey:
+            'http://localhost:4566/bucket/processed/123e4567-e89b-42d3-a456-426614174000.jpg',
+        });
+        throw new Error('expected throw');
+      } catch (err) {
+        expect((err as SubmissionValidationError).field).toBe('productImageKey');
+      }
+    });
+
+    it('throws when the key is not a UUID-shaped processed/ jpg', () => {
+      try {
+        validateProductSubmission({
+          ...VALID_PAYLOAD,
+          productImageKey: 'processed/../raw/product/escape.jpg',
+        });
+        throw new Error('expected throw');
+      } catch (err) {
+        expect((err as SubmissionValidationError).field).toBe('productImageKey');
       }
     });
   });

@@ -7,9 +7,13 @@ import type { ExtractedLabel, ProductSubmission } from './types';
  * before persisting the image and, for product photos, reads front-of-pack
  * identity suggestions off the packaging (P5-005). A rejected image is never
  * stored and surfaces as a 422 `ApiError`.
+ *
+ * `imageKey` is an S3 object key (`processed/{uuid}.jpg`), not a URL — it is
+ * echoed back verbatim in the product submission; the server resolves keys to
+ * environment-specific URLs when serving products.
  */
 export interface ProductImageUploadResult {
-  url: string;
+  imageKey: string;
   name: string | null;
   brand: string | null;
   genericName: string | null;
@@ -27,9 +31,9 @@ export interface ProductImageUploadResult {
 
 /**
  * Upload a product or label image. The API returns the predicted
- * `processed/` S3 URL immediately (a Lambda resize runs asynchronously, see
- * P5-003). The `kind` prefix (`product/` vs `label/`) tells the Lambda which
- * size cap to apply.
+ * `processed/` S3 object key immediately (a Lambda resize runs asynchronously,
+ * see P5-003). The `kind` prefix (`product/` vs `label/`) tells the Lambda
+ * which size cap to apply.
  */
 export async function uploadProductImage(
   imageUri: string,
@@ -59,9 +63,9 @@ export async function uploadProductImage(
         : null) ?? `Image upload failed: ${res.status}`;
     throw new ApiError(res.status, message, body);
   }
-  const data = (await res.json()) as Partial<ProductImageUploadResult> & { url: string };
+  const data = (await res.json()) as Partial<ProductImageUploadResult> & { imageKey: string };
   return {
-    url: data.url,
+    imageKey: data.imageKey,
     name: data.name ?? null,
     brand: data.brand ?? null,
     genericName: data.genericName ?? null,

@@ -137,7 +137,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. |
-| `POST` | `/products/upload-image` | Auth | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ url, name, brand, genericName }`; for `kind=label` returns `{ url }` |
+| `POST` | `/products/upload-image` | Auth | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ imageKey, name, brand, genericName }`; for `kind=label` returns `{ imageKey }`. `imageKey` is the `processed/{uuid}.jpg` S3 object key — echoed back as `productImageKey` in the submission |
 | `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/live/llm) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
 | `PATCH` | `/products/:barcode` | Registered | Correct a `PENDING_REVIEW` product (resets verifications) |
@@ -185,7 +185,7 @@ Submission flow for the Add Product screen (P5-002/P5-003):
 | Layer | File | Responsibility |
 |-------|------|----------------|
 | Route | `routes/productRoutes.ts` | `apiLimiter` → `requireAuth` → `requireRegistered` → `submitProduct` |
-| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageUrl` must contain `/processed/` (i.e. must be a server-issued URL from `POST /products/upload-image`). Throws `SubmissionValidationError(field, message)`. The product image is plausibility-checked at upload time (P5-005, see Image Processing); nutritional-value plausibility (kcal ranges, macro sums) is still deferred to a follow-up ticket. |
+| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageKey` must match `processed/{uuid}.jpg` exactly (i.e. must be a server-issued key from `POST /products/upload-image`; absolute URLs are rejected). Throws `SubmissionValidationError(field, message)`. The product image is plausibility-checked at upload time (P5-005, see Image Processing); nutritional-value plausibility (kcal ranges, macro sums) is still deferred to a follow-up ticket. |
 | Controller | `controllers/productController.ts` | Maps validator errors → `422 { error, reason, field }`; maps service errors → `409 { error: <code> }`; otherwise delegates and returns `201` (created) or `200` (updated own submission). |
 | Service | `services/productService.ts#createSubmittedProduct` | Single Prisma transaction encapsulating the resubmission branches below. |
 
@@ -230,9 +230,20 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
    - `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `reason`, `createdAt`) is recorded server-side — count + free-text reason only, no category. The model's specific reason is never returned to the client.
 3. **Upload:** Converts the validated bytes to JPEG using `sharp` in `imageService.ts` and uploads to S3 at `raw/product/{uuid}.jpg` or `raw/label/{uuid}.jpg`. The S3 client's addressing style is selected by `S3_MODE` (`localstack` | `aws`, no default): `localstack` forces path-style addressing (`{endpoint}/{bucket}/…`) because LocalStack's bucket-prefixed virtual-host names (e.g. `breadsheet-images-local.localstack`) don't resolve inside the Docker network; `aws` uses the SDK default (virtual-hosted style).
 4. **Lambda (async):** S3 `ObjectCreated` event triggers the resize Lambda. Writes to `processed/{uuid}.jpg` with the appropriate dimension cap (1200 px product / 1600 px label).
-5. **Response:** API returns the predicted `processed/` URL immediately — does not wait for Lambda.
+5. **Response:** API returns the predicted `processed/{uuid}.jpg` object **key** immediately (`{ imageKey }`) — does not wait for Lambda.
 
 Because the gate runs before the S3 write, a rejected image is never persisted (no orphan objects to reap).
+
+### Image URLs: keys in the DB, resolution at read time
+
+`Product.image` stores either an **S3 object key** (`processed/{uuid}.jpg`, user uploads) or an **absolute external URL** (Open Food Facts catalogue images). Only keys are persisted for our own uploads — the environment-specific base is never frozen into rows.
+
+`imageService.resolveImageUrl(image)` converts the stored value to a client-usable URL at serialization time: values starting with `http(s)://` pass through; keys are prefixed with `ASSET_BASE_URL`. Every endpoint that returns a product applies it (`GET /products/:barcode`, rating responses that `include` the product).
+
+`ASSET_BASE_URL` is the public base **including the bucket part**, so the path-style vs virtual-hosted addressing difference between LocalStack and AWS lives in configuration, not code:
+
+- LocalStack: `http://<host-LAN-ip>:4566/breadsheet-images-local` (must be reachable from the *device* running the app — same host as `EXPO_PUBLIC_API_URL`)
+- AWS: `https://<bucket>.s3.<region>.amazonaws.com` (or a CDN domain later — config change only, no data migration)
 
 ---
 

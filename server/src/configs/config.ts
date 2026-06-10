@@ -57,12 +57,45 @@ function readS3Mode(): S3Mode {
   return m as S3Mode;
 }
 
+// Public base URL under which stored S3 object keys resolve. Includes the
+// bucket part, so the path-style (LocalStack) vs virtual-hosted (AWS) URL
+// difference is absorbed by the value, never by code:
+//   - LocalStack:  http://<host-reachable-ip>:4566/breadsheet-images-local
+//   - AWS:         https://<bucket>.s3.<region>.amazonaws.com  (or a CDN domain)
+// Image URLs are assembled at READ time as `${assetBaseUrl}/${key}` — only
+// keys are persisted, so changing this value never requires a data migration.
+function readAssetBaseUrl(): string {
+  const v = process.env.ASSET_BASE_URL;
+  if (!v) {
+    throw new Error(
+      'Missing required environment variable: ASSET_BASE_URL ' +
+        '(public base URL for stored image keys, e.g. ' +
+        'http://192.168.1.10:4566/breadsheet-images-local for LocalStack or ' +
+        'https://<bucket>.s3.<region>.amazonaws.com for AWS)',
+    );
+  }
+  if (!/^https?:\/\//.test(v)) {
+    throw new Error(`Invalid ASSET_BASE_URL "${v}". Must start with http:// or https://`);
+  }
+  return v.replace(/\/+$/, ''); // tolerate a trailing slash
+}
+
+function readS3BucketName(): string {
+  const v = process.env.S3_BUCKET_NAME;
+  if (!v) {
+    throw new Error('Missing required environment variable: S3_BUCKET_NAME');
+  }
+  return v;
+}
+
 interface Config {
   port: number;
   nodeEnv: string;
   visionMode: VisionMode;
   plausibilityMode: PlausibilityMode;
   s3Mode: S3Mode;
+  s3BucketName: string;
+  assetBaseUrl: string;
   appDeepLinkScheme: string;
 }
 
@@ -106,6 +139,8 @@ const config: Config = {
   visionMode,
   plausibilityMode,
   s3Mode,
+  s3BucketName: readS3BucketName(),
+  assetBaseUrl: readAssetBaseUrl(),
   appDeepLinkScheme,
 };
 

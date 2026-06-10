@@ -58,8 +58,8 @@ describe('GET /api/users/me/ratings', () => {
 
   it('returns the authenticated user\'s ratings ordered by newest first', async () => {
     const ratings = [
-      { id: 2, taste: 9, product: { name: 'Baguette' }, createdAt: '2026-04-05' },
-      { id: 1, taste: 7, product: { name: 'Rye Bread' }, createdAt: '2026-04-01' },
+      { id: 2, taste: 9, product: { name: 'Baguette', image: null }, createdAt: '2026-04-05' },
+      { id: 1, taste: 7, product: { name: 'Rye Bread', image: null }, createdAt: '2026-04-01' },
     ];
     mockRatingFindMany.mockResolvedValue(ratings);
 
@@ -69,6 +69,15 @@ describe('GET /api/users/me/ratings', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual(ratings);
+
+    // Stored S3 keys on the included product resolve to public URLs
+    mockRatingFindMany.mockResolvedValue([
+      { id: 3, taste: 8, product: { name: 'Ciabatta', image: 'processed/abc.jpg' }, createdAt: '2026-04-06' },
+    ]);
+    const res2 = await request(app)
+      .get('/api/users/me/ratings')
+      .set('Authorization', 'Bearer token');
+    expect(res2.body[0].product.image).toBe('http://assets.test/test-bucket/processed/abc.jpg');
     expect(mockRatingFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId: 'user-1' },

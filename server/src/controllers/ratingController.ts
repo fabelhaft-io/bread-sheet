@@ -1,7 +1,18 @@
 import { Response, NextFunction } from 'express';
 import prisma from '../db.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
+import { resolveImageUrl } from '../services/imageService.js';
 import logger from '../logger.js';
+
+/** Resolve the stored image key to a public URL on a rating's included product. */
+function withResolvedProductImage<T extends { product: { image: string | null } }>(
+  rating: T,
+): T {
+  return {
+    ...rating,
+    product: { ...rating.product, image: resolveImageUrl(rating.product?.image) },
+  };
+}
 
 // POST /api/ratings
 // Body: { barcode, taste, comment? }
@@ -62,7 +73,7 @@ export const createRating = async (req: AuthRequest, res: Response, next: NextFu
 
     const action = existing ? 'updated' : 'created';
     logger.info(`Rating ${action} by ${userId} for product ${barcode}: taste=${tasteNum}`);
-    res.status(existing ? 200 : 201).json(rating);
+    res.status(existing ? 200 : 201).json(withResolvedProductImage(rating));
   } catch (error) {
     logger.error(error);
     next(error);
@@ -138,7 +149,7 @@ export const getMyRatings = async (req: AuthRequest, res: Response, next: NextFu
       include: { product: true },
     });
 
-    res.json(ratings);
+    res.json(ratings.map(withResolvedProductImage));
   } catch (error) {
     logger.error(error);
     next(error);

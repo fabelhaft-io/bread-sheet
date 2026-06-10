@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -13,7 +13,7 @@ import {
   View,
 } from 'react-native';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -80,6 +80,14 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
   const trackRef = useRef<View>(null);
   const startX = useRef(0);
   const startVal = useRef(value);
+  // Refs keep PanResponder callbacks (created once) in sync with the latest props
+  // without requiring the PanResponder to be recreated on every render.
+  const valueRef = useRef(value);
+  const onChangeRef = useRef(onChange);
+  useLayoutEffect(() => {
+    valueRef.current = value;
+    onChangeRef.current = onChange;
+  });
 
   const thumbAnim = useRef(new Animated.Value((value / MAX) * TRACK_WIDTH)).current;
 
@@ -100,17 +108,23 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      // Wait for movement to start before claiming — prevents conflicting with the
+      // vertical ScrollView and the iOS swipe-back navigation gesture on first touch.
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gs) =>
+        Math.abs(gs.dx) > Math.abs(gs.dy) && Math.abs(gs.dx) > 4,
+      // Once the slider owns the gesture, hold it — prevents the iOS navigation
+      // gesture from stealing it mid-drag.
+      onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (evt) => {
         startX.current = evt.nativeEvent.pageX;
-        startVal.current = value;
+        startVal.current = valueRef.current;
       },
       onPanResponderMove: (evt) => {
         const dx = evt.nativeEvent.pageX - startX.current;
         const delta = (dx / TRACK_WIDTH) * MAX;
         const snapped = snap(startVal.current + delta);
-        onChange(snapped);
+        onChangeRef.current(snapped);
       },
     })
   ).current;
@@ -331,47 +345,54 @@ export default function ProductScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    setNotFound(false);
-    setLoadError(null);
+  // useFocusEffect instead of useEffect so the product data refreshes whenever
+  // this screen is navigated back to (e.g. after a peer review changes the status).
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setNotFound(false);
+      setLoadError(null);
+      setImageError(false);
+      setLoading(true);
 
-    // Fetch the product and the caller's existing rating in parallel. Anonymous
-    // sessions don't have a persistent rating to fetch yet (P5-004), so skip the
-    // /me lookup for them. Any failure on the rating lookup (404 "not rated yet"
-    // or otherwise) degrades to "no existing rating" so it never blocks the
-    // product screen — the user can still submit a fresh rating.
-    const productReq = api.get<Product>(`/api/products/${barcode}`);
-    const ratingReq: Promise<UserRating | null> = isAnonymous
-      ? Promise.resolve(null)
-      : api
-          .get<UserRating>(`/api/ratings/me/${barcode}`)
-          .catch(() => null);
+      // Fetch the product and the caller's existing rating in parallel. Anonymous
+      // sessions don't have a persistent rating to fetch yet (P5-004), so skip the
+      // /me lookup for them. Any failure on the rating lookup (404 "not rated yet"
+      // or otherwise) degrades to "no existing rating" so it never blocks the
+      // product screen — the user can still submit a fresh rating.
+      const productReq = api.get<Product>(`/api/products/${barcode}`);
+      const ratingReq: Promise<UserRating | null> = isAnonymous
+        ? Promise.resolve(null)
+        : api
+            .get<UserRating>(`/api/ratings/me/${barcode}`)
+            .catch(() => null);
 
-    productReq
-      .then((data) => {
-        if (cancelled) return;
-        setProduct(data);
-        addRecentProduct({ barcode: data.barcode, name: data.name, brand: data.brand, image: data.image });
-        return ratingReq.then((rating) => {
-          if (cancelled || !rating) return;
-          setExistingRating(rating);
-          setTaste(rating.taste);
-          setComment(rating.comment ?? '');
-        });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setNotFound(true);
-        } else {
-          setLoadError(formatApiError(err, 'Could not load this product. Please try again.'));
-        }
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [addRecentProduct, barcode, isAnonymous]);
+      productReq
+        .then((data) => {
+          if (cancelled) return;
+          setProduct(data);
+          addRecentProduct({ barcode: data.barcode, name: data.name, brand: data.brand, image: data.image });
+          return ratingReq.then((rating) => {
+            if (cancelled || !rating) return;
+            setExistingRating(rating);
+            setTaste(rating.taste);
+            setComment(rating.comment ?? '');
+          });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          if (err instanceof ApiError && err.status === 404) {
+            setNotFound(true);
+          } else {
+            setLoadError(formatApiError(err, 'Could not load this product. Please try again.'));
+          }
+        })
+        .finally(() => { if (!cancelled) setLoading(false); });
+      return () => { cancelled = true; };
+    }, [addRecentProduct, barcode, isAnonymous])
+  );
 
   const handleSubmit = useCallback(async () => {
     if (!product || submitting) return;
@@ -446,7 +467,7 @@ export default function ProductScreen() {
             testID="product-not-found-add"
             style={[styles.button, { backgroundColor: colors.tint }]}
             onPress={() =>
-              router.push({
+              router.replace({
                 pathname: '/(app)/add-product',
                 params: { barcode },
               })
@@ -486,8 +507,13 @@ export default function ProductScreen() {
       style={{ flex: 1, backgroundColor: colors.background }}
       contentContainerStyle={styles.scrollContent}
     >
-      {product?.image ? (
-        <Image source={{ uri: product.image }} style={styles.heroImage} resizeMode="cover" />
+      {product?.image && !imageError ? (
+        <Image
+          source={{ uri: product.image }}
+          style={styles.heroImage}
+          resizeMode="cover"
+          onError={() => setImageError(true)}
+        />
       ) : (
         <View style={[styles.heroPlaceholder, { backgroundColor: colors.icon + '22' }]}>
           <Text style={styles.placeholderIcon}>🍞</Text>

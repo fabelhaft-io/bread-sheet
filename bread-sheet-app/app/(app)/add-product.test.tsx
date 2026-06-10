@@ -58,7 +58,7 @@ jest.mock('@/lib/api', () => {
 
 jest.mock('@/features/products/api', () => ({
   submitProduct: jest.fn(),
-  uploadProductImage: jest.fn().mockResolvedValue({ url: 'https://s3/mock.jpg' }),
+  uploadProductImage: jest.fn().mockResolvedValue({ imageKey: 'processed/mock-uuid.jpg' }),
   extractLabelFromText: jest.fn(),
   extractLabelFromImage: jest.fn(),
   approveProduct: jest.fn(),
@@ -232,7 +232,7 @@ describe('AddProductScreen — flow progression', () => {
 
   it('pre-fills name/brand from the product-photo suggestions (photo wins)', async () => {
     productsApi.uploadProductImage.mockResolvedValueOnce({
-      url: 'https://s3/mock.jpg',
+      imageKey: 'processed/mock-uuid.jpg',
       name: 'Cola',
       brand: 'Coca-Cola',
       genericName: 'Soft drink',

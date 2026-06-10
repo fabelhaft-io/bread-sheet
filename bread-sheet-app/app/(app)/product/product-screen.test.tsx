@@ -20,10 +20,16 @@ const mockRouter = {
 const mockUseLocalSearchParams = jest.fn(() => ({ barcode: '0000000000001' }));
 const mockUseSession = jest.fn();
 
-jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => mockUseLocalSearchParams(),
-  useRouter: () => mockRouter,
-}));
+jest.mock('expo-router', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const React = require('react');
+  return {
+    useLocalSearchParams: () => mockUseLocalSearchParams(),
+    useRouter: () => mockRouter,
+    // Simulate focusing on mount (no re-focus in unit tests)
+    useFocusEffect: (cb: () => unknown) => React.useEffect(cb, []),
+  };
+});
 
 jest.mock('@/hooks/use-session', () => ({
   useSession: () => mockUseSession(),
@@ -115,7 +121,9 @@ describe('ProductScreen — product-not-found state', () => {
     const btn = await findByTestId('product-not-found-add');
     expect(queryByTestId('product-not-found-signup')).toBeNull();
     fireEvent.press(btn);
-    expect(mockRouter.push).toHaveBeenCalledWith({
+    // replace (not push) so the "not-found" screen is removed from the stack —
+    // prevents the user landing back on it after adding the product and rating it.
+    expect(mockRouter.replace).toHaveBeenCalledWith({
       pathname: '/(app)/add-product',
       params: { barcode: '0000000000001' },
     });

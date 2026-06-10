@@ -30,7 +30,7 @@ body:json {
     "protein": 8,
     "salt": 0.5,
     "servingSize": "30g",
-    "productImageUrl": "{{productImageUrl}}",
+    "productImageKey": "{{productImageKey}}",
     "ingredients": "oats, sugar, sunflower oil, salt"
   }
 }
@@ -43,5 +43,6 @@ docs {
   - 422 with { error, reason, field } on validation failure
   - 409 with { error: 'product_already_verified' | 'product_previously_rejected' | 'submission_pending' } on conflicts
 
-  productImageUrl must include /processed/ — populate it by running Upload image first.
+  productImageKey must be a server-issued processed/{uuid}.jpg key — populate it by
+  running Upload image first.
 }

@@ -14,7 +14,7 @@ import {
   ProductNotPendingError,
   SelfVerificationError,
 } from '../services/productVerificationService.js';
-import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
+import { uploadImageToS3, resolveImageUrl, type ImageKind } from '../services/imageService.js';
 import { checkImage, type Verdict } from '../services/imagePlausibilityService.js';
 import logger from '../logger.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
@@ -68,6 +68,7 @@ export const getProductByBarcode = async (req: AuthRequest, res: Response, next:
       const unverified = cached.status !== ProductStatus.VERIFIED;
       return res.json({
         ...cached,
+        image: resolveImageUrl(cached.image),
         unverified,
         ...(unverified && {
           submission: {
@@ -97,7 +98,7 @@ export const getProductByBarcode = async (req: AuthRequest, res: Response, next:
     // 3. Cache in DB and return
     const product = await prisma.product.create({ data });
     logger.info(`Product fetched and cached: ${barcode}`);
-    res.json({ ...product, unverified: false });
+    res.json({ ...product, image: resolveImageUrl(product.image), unverified: false });
   } catch (error) {
     logger.error(error);
     next(error);
@@ -156,19 +157,19 @@ export const uploadImage = async (
       });
     }
 
-    const url = await uploadImageToS3(req.file.buffer, kind as ImageKind);
+    const imageKey = await uploadImageToS3(req.file.buffer, kind as ImageKind);
 
     // Front-of-pack suggestions are only returned for product photos; the label
     // slot has no use for them (its data comes from the extract-label flow).
     if (kind === 'product') {
       return res.json({
-        url,
+        imageKey,
         name: result.name,
         brand: result.brand,
         genericName: result.genericName,
       });
     }
-    res.json({ url });
+    res.json({ imageKey });
   } catch (err) {
     next(err);
   }

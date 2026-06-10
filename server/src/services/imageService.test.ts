@@ -34,7 +34,7 @@ describe('imageService', () => {
     vi.resetModules();
     delete process.env.S3_MODE;
     process.env.S3_BUCKET_NAME = 'test-bucket';
-    process.env.AWS_ENDPOINT_URL = 'http://localstack:4566';
+    process.env.ASSET_BASE_URL = 'http://assets.test/test-bucket';
   });
 
   describe('uploadImageToS3', () => {
@@ -56,11 +56,11 @@ describe('imageService', () => {
       expect(s3CtorCalls.opts).toEqual([{ forcePathStyle: false }]);
     });
 
-    it('uploads the normalised JPEG to raw/{kind}/ and returns the processed URL', async () => {
+    it('uploads the normalised JPEG to raw/{kind}/ and returns the processed object KEY', async () => {
       process.env.S3_MODE = 'localstack';
       const { uploadImageToS3 } = await import('./imageService.js');
 
-      const url = await uploadImageToS3(Buffer.from('raw'), 'label');
+      const key = await uploadImageToS3(Buffer.from('raw'), 'label');
 
       expect(mockSend).toHaveBeenCalledTimes(1);
       const put = mockSend.mock.calls[0][0].input;
@@ -69,8 +69,49 @@ describe('imageService', () => {
       expect(put.Body).toBe(JPEG_OUTPUT);
       expect(put.ContentType).toBe('image/jpeg');
 
+      // Returns a key, never a URL — environment-specific bases are applied at
+      // read time by resolveImageUrl, so keys are what gets persisted.
       const uuid = (put.Key as string).match(/raw\/label\/(.+)\.jpg/)![1];
-      expect(url).toBe(`http://localstack:4566/test-bucket/processed/${uuid}.jpg`);
+      expect(key).toBe(`processed/${uuid}.jpg`);
+    });
+  });
+
+  describe('resolveImageUrl', () => {
+    it('prefixes stored S3 keys with ASSET_BASE_URL', async () => {
+      process.env.S3_MODE = 'localstack';
+      const { resolveImageUrl } = await import('./imageService.js');
+
+      expect(resolveImageUrl('processed/abc-123.jpg')).toBe(
+        'http://assets.test/test-bucket/processed/abc-123.jpg',
+      );
+    });
+
+    it('passes absolute URLs through untouched (Open Food Facts images)', async () => {
+      process.env.S3_MODE = 'localstack';
+      const { resolveImageUrl } = await import('./imageService.js');
+
+      expect(resolveImageUrl('https://images.openfoodfacts.org/p/123.jpg')).toBe(
+        'https://images.openfoodfacts.org/p/123.jpg',
+      );
+      expect(resolveImageUrl('http://example.com/x.jpg')).toBe('http://example.com/x.jpg');
+    });
+
+    it('returns null for null/undefined', async () => {
+      process.env.S3_MODE = 'localstack';
+      const { resolveImageUrl } = await import('./imageService.js');
+
+      expect(resolveImageUrl(null)).toBeNull();
+      expect(resolveImageUrl(undefined)).toBeNull();
+    });
+
+    it('tolerates a trailing slash on ASSET_BASE_URL', async () => {
+      process.env.S3_MODE = 'localstack';
+      process.env.ASSET_BASE_URL = 'http://assets.test/test-bucket/';
+      const { resolveImageUrl } = await import('./imageService.js');
+
+      expect(resolveImageUrl('processed/abc.jpg')).toBe(
+        'http://assets.test/test-bucket/processed/abc.jpg',
+      );
     });
   });
 });

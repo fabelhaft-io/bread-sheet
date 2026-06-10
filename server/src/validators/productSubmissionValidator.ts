@@ -64,16 +64,18 @@ export function validateProductSubmission(
     );
   }
 
-  // Product image URL: must look like our S3 URL (cheap sanity check; tighten later)
-  const productImageUrl = requireString(
-    b.productImageUrl,
-    'productImageUrl',
+  // Product image key: exactly the shape POST /upload-image issues
+  // (`processed/{uuid}.jpg`). Anything else — including absolute URLs from the
+  // pre-key era — is rejected so arbitrary strings never reach the image column.
+  const productImageKey = requireString(
+    b.productImageKey,
+    'productImageKey',
     1024,
   );
-  if (!productImageUrl.includes('/processed/')) {
+  if (!/^processed\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/.test(productImageKey)) {
     throw new SubmissionValidationError(
-      'productImageUrl',
-      'productImageUrl must be a server-issued upload URL',
+      'productImageKey',
+      'productImageKey must be a server-issued upload key',
     );
   }
 
@@ -90,7 +92,7 @@ export function validateProductSubmission(
     protein: optionalNumber(b.protein, 'protein'),
     salt: optionalNumber(b.salt, 'salt'),
     servingSize: optionalString(b.servingSize, 'servingSize', 100),
-    productImageUrl,
+    productImageKey,
     ingredients: optionalString(b.ingredients, 'ingredients', 2000),
   };
 }

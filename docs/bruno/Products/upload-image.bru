@@ -22,9 +22,9 @@ body:multipart-form {
 script:post-response {
   if (res.getStatus() === 200) {
     const body = res.getBody();
-    if (body.url) {
-      bru.setEnvVar('productImageUrl', body.url);
-      console.log('productImageUrl set to', body.url);
+    if (body.imageKey) {
+      bru.setEnvVar('productImageKey', body.imageKey);
+      console.log('productImageKey set to', body.imageKey);
     }
     // For kind=product the response also carries front-of-pack suggestions.
     if (body.name || body.brand || body.genericName) {
@@ -42,11 +42,13 @@ docs {
   BEFORE being stored, so a rejected image is never persisted.
 
   Success (200):
-    - kind=product → { url, name, brand, genericName } — `url` points at the eventual
-      processed S3 location; name/brand/genericName are front-of-pack suggestions read
-      off the photo (any may be null). The post-response script stores `url` as
-      productImageUrl so Submit product can reuse it.
-    - kind=label   → { url } only.
+    - kind=product → { imageKey, name, brand, genericName } — `imageKey` is the S3
+      object key (processed/{uuid}.jpg) of the eventual resized image; the server
+      resolves keys to public URLs (ASSET_BASE_URL) when serving products.
+      name/brand/genericName are front-of-pack suggestions read off the photo (any
+      may be null). The post-response script stores `imageKey` as productImageKey
+      so Submit product can reuse it.
+    - kind=label   → { imageKey } only.
 
   Set the image field to a JPEG / PNG / WebP / GIF / TIFF / AVIF file (8 MB hard cap).
   Set kind to either 'product' or 'label'.

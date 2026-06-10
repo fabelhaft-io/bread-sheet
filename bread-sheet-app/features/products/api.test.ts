@@ -24,11 +24,11 @@ describe('uploadProductImage', () => {
     jest.clearAllMocks();
   });
 
-  it('returns the url and front-of-pack suggestions on success', async () => {
+  it('returns the image key and front-of-pack suggestions on success', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        url: 'http://test.local/processed/uuid.jpg',
+        imageKey: 'processed/uuid.jpg',
         name: 'Oat Drink',
         brand: 'Alpro',
         genericName: 'Oat drink',
@@ -38,7 +38,7 @@ describe('uploadProductImage', () => {
     const result = await uploadProductImage('file:///tmp/p.jpg', 'product', 'Bearer tok');
 
     expect(result).toEqual({
-      url: 'http://test.local/processed/uuid.jpg',
+      imageKey: 'processed/uuid.jpg',
       name: 'Oat Drink',
       brand: 'Alpro',
       genericName: 'Oat drink',
@@ -48,13 +48,13 @@ describe('uploadProductImage', () => {
   it('defaults missing suggestion fields to null', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ url: 'http://test.local/processed/uuid.jpg' }),
+      json: async () => ({ imageKey: 'processed/uuid.jpg' }),
     }) as unknown as typeof fetch;
 
     const result = await uploadProductImage('file:///tmp/p.jpg', 'product', 'Bearer tok');
 
     expect(result).toEqual({
-      url: 'http://test.local/processed/uuid.jpg',
+      imageKey: 'processed/uuid.jpg',
       name: null,
       brand: null,
       genericName: null,

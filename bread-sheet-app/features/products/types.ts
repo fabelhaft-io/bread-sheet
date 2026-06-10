@@ -24,7 +24,8 @@ export interface ProductSubmission {
   protein: number | null;
   salt: number | null;
   servingSize: string | null;
-  productImageUrl: string;
+  /** S3 object key (`processed/{uuid}.jpg`) returned by the upload-image endpoint. */
+  productImageKey: string;
   ingredients: string | null;
 }
 

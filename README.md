@@ -103,9 +103,10 @@ The Docker Compose stack relies on **Windows host paths and environment variable
     | `DATABASE_URL` | PostgreSQL connection string — matches the Docker Compose service |
     | `SUPABASE_URL` | Your Supabase project URL (Project Settings → API) |
     | `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Supabase anon/public key (same settings page) |
-    | `AWS_ENDPOINT_URL` | LocalStack endpoint for S3/Lambda emulation (`http://localhost:4566` locally) |
+    | `AWS_ENDPOINT_URL` | LocalStack endpoint for S3/Lambda emulation (`http://localhost:4566` locally) — SDK only |
     | `S3_BUCKET_NAME` | S3 bucket where product images are stored |
     | `S3_MODE` | S3 backend: `localstack` (path-style addressing, required by LocalStack) or `aws` (SDK default) — **required, no default** |
+    | `ASSET_BASE_URL` | Public base URL where stored image keys resolve, including the bucket part (e.g. `http://<your-LAN-ip>:4566/breadsheet-images-local` locally — must be reachable from the device running the app, so use the same host as `EXPO_PUBLIC_API_URL`) — **required, no default** |
     | `VISION_MODE` | OCR backend: `mock` (fixture), `live` (Google Vision), `llm` (Gemini) — **required, no default** |
     | `PLAUSIBILITY_MODE` | Upload image plausibility / abuse gate: `mock` (accept all) or `gemini` (real AI check) — **required, no default** |
     | `GOOGLE_GENAI_USE_VERTEXAI` | `true` to authenticate Gemini via Vertex AI + ADC (recommended; no API key). Requires `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`. Leave unset to use `GEMINI_API_KEY` instead. See [Using the image plausibility gate locally](#using-the-image-plausibility--abuse-gate-locally-plausibility_modegemini) |
@@ -134,6 +135,11 @@ The Docker Compose stack relies on **Windows host paths and environment variable
 
     From the project root, run:
     ```powershell
+    # Build the image-resizer Lambda bundle (deployed into LocalStack on startup)
+    cd server/lambda/imageResizer
+    npm install
+    npm run build
+    cd ../../..
     # Build and start localstack and db
     docker compose up
    # Switch into server directory
@@ -146,6 +152,8 @@ The Docker Compose stack relies on **Windows host paths and environment variable
     docker compose --profile app-dev up -d --build
     ```
     Your backend is now running. The server is available at `http://localhost:3000`.
+
+    The LocalStack init hook (`scripts/localstack-init.sh`) provisions the S3 bucket, the image-resizer Lambda, and the S3→Lambda trigger automatically on startup. If you rebuild the Lambda later, redeploy it with `docker compose restart localstack`. If the bundle was missing at startup, the hook logs a warning and skips the Lambda — images upload fine but are never resized to `processed/`.
 
 6. **Run the Server/App**
     * **Server:** Inside `/server`: `npm run db:deploy` if database changed or needs initialization, afterwards `npm run dev`
@@ -248,10 +256,13 @@ Non-empty JSON means ADC is available inside the container.
 
 ### Infrastructure (Terraform)
 
-To deploy the infrastructure locally to LocalStack:
+Terraform is the source of truth for **AWS** infrastructure. For local development you do *not* need Terraform — the LocalStack init hook (`scripts/localstack-init.sh`) provisions the bucket, Lambda, and S3 trigger on `docker compose up` (see *Development with Docker* above).
 
-1. Navigate to the terraform directory: `cd terraform`
-2. Initialize Terraform: `terraform init`
-3. Apply the configuration: `terraform apply --auto-approve`
+To apply the Terraform configuration against LocalStack anyway (e.g. to test the Terraform code itself):
 
-This will create the S3 bucket and Lambda function inside the LocalStack container.
+1. Build the Lambda first: `cd server/lambda/imageResizer && npm run build`
+2. Navigate to the terraform directory: `cd terraform`
+3. Initialize Terraform: `terraform init`
+4. Apply the configuration: `terraform apply -var-file=environments/local.tfvars --auto-approve`
+
+Keep the Lambda runtime in `scripts/localstack-init.sh` in sync with `terraform/lambda.tf`.

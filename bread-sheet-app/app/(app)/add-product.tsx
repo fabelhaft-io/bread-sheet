@@ -204,9 +204,9 @@ function AddProductFlow({
   // ─── Flow state ───────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>('photos');
   const [productPhotoUri, setProductPhotoUri] = useState<string | null>(null);
-  // S3 URL returned by the upload-image endpoint at capture time; reused at
-  // submit so the photo is uploaded (and plausibility-checked) exactly once.
-  const [productImageUrl, setProductImageUrl] = useState<string | null>(null);
+  // S3 object key returned by the upload-image endpoint at capture time; reused
+  // at submit so the photo is uploaded (and plausibility-checked) exactly once.
+  const [productImageKey, setProductImageKey] = useState<string | null>(null);
   // Front-of-pack name/brand/genericName read off the product photo.
   const [suggestion, setSuggestion] = useState<PhotoSuggestion | null>(null);
   const [labelPhotoUri, setLabelPhotoUri] = useState<string | null>(null);
@@ -244,7 +244,7 @@ function AddProductFlow({
 
           const uploaded = await uploadProductImage(processed.uri, 'product', authHeader);
           setProductPhotoUri(processed.uri);
-          setProductImageUrl(uploaded.url);
+          setProductImageKey(uploaded.imageKey);
           setSuggestion({
             name: uploaded.name,
             brand: uploaded.brand,
@@ -262,7 +262,7 @@ function AddProductFlow({
           setCaptureError(err.message);
           if (slot === 'product') {
             setProductPhotoUri(null);
-            setProductImageUrl(null);
+            setProductImageKey(null);
             setSuggestion(null);
           }
         } else {
@@ -360,7 +360,7 @@ function AddProductFlow({
       return;
     }
 
-    if (!productImageUrl) {
+    if (!productImageKey) {
       setSubmitError('The product photo is still uploading. Please wait a moment and try again.');
       return;
     }
@@ -380,7 +380,7 @@ function AddProductFlow({
         protein: parseNumeric(form.protein),
         salt: parseNumeric(form.salt),
         servingSize: form.servingSize.trim() || null,
-        productImageUrl,
+        productImageKey,
         ingredients: form.ingredients.trim() || null,
       };
 
@@ -407,7 +407,7 @@ function AddProductFlow({
       }
       setStep('review');
     }
-  }, [productPhotoUri, productImageUrl, canSubmit, form, barcodeInput, onSubmitted]);
+  }, [productPhotoUri, productImageKey, canSubmit, form, barcodeInput, onSubmitted]);
 
   // ─── Rendering ────────────────────────────────────────────────────────
   if (step === 'extracting') {

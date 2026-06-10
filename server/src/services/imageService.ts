@@ -19,23 +19,35 @@ function getS3Client(): S3Client {
 export type ImageKind = 'product' | 'label';
 
 /**
+ * Resolve a stored `Product.image` value to a client-usable URL.
+ *
+ * The column holds two shapes:
+ *   - S3 object keys (`processed/{uuid}.jpg`) for user-uploaded photos —
+ *     prefixed with the public asset base from config at read time
+ *   - absolute external URLs (Open Food Facts catalogue images) — passed through
+ *
+ * Only keys are persisted for our own uploads, so the environment-specific
+ * base (LocalStack host, S3 region, future CDN) is never frozen into rows.
+ */
+export function resolveImageUrl(image: string | null | undefined): string | null {
+  if (image == null) return null;
+  if (/^https?:\/\//.test(image)) return image;
+  return `${config.assetBaseUrl}/${image}`;
+}
+
+/**
  * Convert image buffer to JPEG (format normalisation only — no resize), upload to
- * `raw/{kind}/{uuid}.jpg`, and return the predicted `processed/{uuid}.jpg` URL.
+ * `raw/{kind}/{uuid}.jpg`, and return the predicted `processed/{uuid}.jpg` object
+ * KEY (not a URL — clients receive URLs via `resolveImageUrl` at read time).
  *
  * Resizing to the final dimension caps (1200 px product / 1600 px label) is
  * handled asynchronously by the S3-triggered Lambda, which writes to `processed/`.
- * The API returns the predicted URL immediately without waiting for the Lambda.
+ * The API returns the predicted key immediately without waiting for the Lambda.
  */
 export async function uploadImageToS3(
   buffer: Buffer,
   kind: ImageKind,
 ): Promise<string> {
-  const bucket = process.env.S3_BUCKET_NAME;
-  if (!bucket) throw new Error('FATAL: S3_BUCKET_NAME environment variable is required.');
-
-  const endpoint = process.env.AWS_ENDPOINT_URL;
-  if (!endpoint) throw new Error('FATAL: AWS_ENDPOINT_URL environment variable is required.');
-
   // Format normalisation: convert to JPEG so Lambda always receives a consistent
   // input regardless of the original format (PNG, WebP, TIFF, etc.).
   // Quality 95 preserves sufficient detail for Lambda's subsequent resize step.
@@ -46,12 +58,12 @@ export async function uploadImageToS3(
 
   await getS3Client().send(
     new PutObjectCommand({
-      Bucket: bucket,
+      Bucket: config.s3BucketName,
       Key: rawKey,
       Body: jpegBuffer,
       ContentType: 'image/jpeg',
     }),
   );
 
-  return `${endpoint}/${bucket}/processed/${uuid}.jpg`;
+  return `processed/${uuid}.jpg`;
 }

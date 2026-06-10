@@ -50,6 +50,7 @@ export default function ReviewProductScreen() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState(false);
 
   useEffect(() => {
     // Skip the fetch when the caller isn't allowed to review — the render
@@ -172,8 +173,13 @@ export default function ReviewProductScreen() {
       contentContainerStyle={styles.scrollContent}
       testID="review-product-screen"
     >
-      {product.image ? (
-        <Image source={{ uri: product.image }} style={styles.heroImage} resizeMode="cover" />
+      {product.image && !imageError ? (
+        <Image
+          source={{ uri: product.image }}
+          style={styles.heroImage}
+          resizeMode="cover"
+          onError={() => setImageError(true)}
+        />
       ) : (
         <View style={[styles.heroPlaceholder, { backgroundColor: colors.icon + '22' }]}>
           <Text style={styles.heroPlaceholderIcon}>🍞</Text>

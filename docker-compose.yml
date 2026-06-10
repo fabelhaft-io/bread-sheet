@@ -69,6 +69,9 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - localstack_data:/var/lib/localstack
       - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-buckets.sh:ro
+      # image-resizer Lambda bundle — build on the host first:
+      #   cd server/lambda/imageResizer && npm run build
+      - ./server/lambda/imageResizer/dist/bundle:/opt/lambda/imageResizer:ro
 
 volumes:
   db_data:

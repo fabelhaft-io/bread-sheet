@@ -96,7 +96,7 @@ const VALIDATED_PAYLOAD = {
   protein: 8,
   salt: 1.2,
   servingSize: '50g',
-  productImageUrl: 'https://s3.example.com/processed/abc.jpg',
+  productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
   ingredients: 'Flour, water, salt, yeast',
 };
 
@@ -125,7 +125,7 @@ describe('GET /api/products/:barcode', () => {
   });
 
   it('returns the cached VERIFIED product with unverified: false', async () => {
-    const product = { id: 1, barcode: VALID_BARCODE, name: 'Sourdough', status: ProductStatus.VERIFIED };
+    const product = { id: 1, barcode: VALID_BARCODE, name: 'Sourdough', image: null, status: ProductStatus.VERIFIED };
     mockFindUnique.mockResolvedValue(product);
 
     const res = await request(app)
@@ -135,6 +135,45 @@ describe('GET /api/products/:barcode', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ...product, unverified: false });
     expect(mockFetchFromOFF).not.toHaveBeenCalled();
+  });
+
+  it('resolves a stored S3 image key to a public URL using ASSET_BASE_URL', async () => {
+    // vitest.setup.ts sets ASSET_BASE_URL=http://assets.test/test-bucket
+    const product = {
+      id: 1,
+      barcode: VALID_BARCODE,
+      name: 'Sourdough',
+      image: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
+      status: ProductStatus.VERIFIED,
+    };
+    mockFindUnique.mockResolvedValue(product);
+
+    const res = await request(app)
+      .get(`/api/products/${VALID_BARCODE}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.image).toBe(
+      'http://assets.test/test-bucket/processed/123e4567-e89b-42d3-a456-426614174000.jpg',
+    );
+  });
+
+  it('passes external (Open Food Facts) image URLs through untouched', async () => {
+    const product = {
+      id: 1,
+      barcode: VALID_BARCODE,
+      name: 'Sourdough',
+      image: 'https://images.openfoodfacts.org/p/123.jpg',
+      status: ProductStatus.VERIFIED,
+    };
+    mockFindUnique.mockResolvedValue(product);
+
+    const res = await request(app)
+      .get(`/api/products/${VALID_BARCODE}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.image).toBe('https://images.openfoodfacts.org/p/123.jpg');
   });
 
   it('fetches from OFF, caches in DB, and returns the product with unverified: false', async () => {
@@ -195,7 +234,7 @@ describe('GET /api/products/:barcode', () => {
       genericName: 'Bread',
       energyKcal: 250,
     });
-    expect(res.body.submission).not.toHaveProperty('productImageUrl');
+    expect(res.body.submission).not.toHaveProperty('productImageKey');
   });
 
   it('returns 404 for a PENDING_REVIEW product when the caller is anonymous', async () => {

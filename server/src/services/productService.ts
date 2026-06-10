@@ -72,7 +72,8 @@ export interface ProductSubmissionInput {
   protein: number | null;
   salt: number | null;
   servingSize: string | null;
-  productImageUrl: string;
+  /** S3 object key (`processed/{uuid}.jpg`) issued by POST /upload-image. */
+  productImageKey: string;
   ingredients: string | null;
 }
 
@@ -210,7 +211,7 @@ function mapPayloadToProduct(payload: ProductSubmissionInput) {
   return {
     name: payload.name,
     brand: payload.brand,
-    image: payload.productImageUrl, // wire `productImageUrl` → schema `image`
+    image: payload.productImageKey, // wire `productImageKey` → schema `image` (key, resolved to a URL at read time)
     genericName: payload.genericName,
     energyKcal: payload.energyKcal,
     fat: payload.fat,

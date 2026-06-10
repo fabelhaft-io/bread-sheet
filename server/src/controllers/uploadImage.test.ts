@@ -42,6 +42,9 @@ const mockUploadImageToS3 = vi.hoisted(() => vi.fn());
 
 vi.mock('../services/imageService.js', () => ({
   uploadImageToS3: mockUploadImageToS3,
+  // productController also imports the read-time resolver; identity is fine here
+  // (upload responses carry keys, not resolved URLs).
+  resolveImageUrl: (image: string | null) => image,
 }));
 
 // ── imagePlausibilityService mock ────────────────────────────────────────────
@@ -147,12 +150,10 @@ describe('POST /api/products/upload-image', () => {
     session.user = { id: 'user-1', email: 'test@test.com', isAnonymous: false };
   });
 
-  it('returns 200 with the S3 URL and photo suggestions on a valid product upload', async () => {
+  it('returns 200 with the S3 object key and photo suggestions on a valid product upload', async () => {
     stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'photo.jpg' });
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
-    mockUploadImageToS3.mockResolvedValue(
-      'http://localhost:4566/breadsheet-images-local/processed/uuid.jpg',
-    );
+    mockUploadImageToS3.mockResolvedValue('processed/uuid.jpg');
 
     const res = await request(app)
       .post('/api/products/upload-image')
@@ -160,7 +161,7 @@ describe('POST /api/products/upload-image', () => {
       .field('kind', 'product');
 
     expect(res.status).toBe(200);
-    expect(res.body.url).toContain('/processed/');
+    expect(res.body.imageKey).toMatch(/^processed\//);
     expect(res.body).toMatchObject({
       name: 'Detected Name',
       brand: 'Detected Brand',
@@ -170,12 +171,10 @@ describe('POST /api/products/upload-image', () => {
     expect(mockUploadImageToS3).toHaveBeenCalledWith(FAKE_JPEG, 'product');
   });
 
-  it('returns 200 with the S3 URL on a valid label image upload', async () => {
+  it('returns 200 with the S3 object key on a valid label image upload', async () => {
     stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 2048, originalname: 'label.jpg' }, 'label');
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
-    mockUploadImageToS3.mockResolvedValue(
-      'http://localhost:4566/breadsheet-images-local/processed/uuid.jpg',
-    );
+    mockUploadImageToS3.mockResolvedValue('processed/uuid.jpg');
 
     const res = await request(app)
       .post('/api/products/upload-image')
@@ -259,7 +258,7 @@ describe('POST /api/products/upload-image', () => {
     const webpBuffer = Buffer.from([0x52, 0x49, 0x46, 0x46]); // RIFF header
     stubMulterFile({ buffer: webpBuffer, mimetype: 'image/webp', size: 512, originalname: 'photo.webp' });
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/webp', ext: 'webp' });
-    mockUploadImageToS3.mockResolvedValue('http://localhost:4566/breadsheet-images-local/processed/uuid.jpg');
+    mockUploadImageToS3.mockResolvedValue('processed/uuid.jpg');
 
     const res = await request(app)
       .post('/api/products/upload-image')
@@ -275,7 +274,7 @@ describe('POST /api/products/upload-image', () => {
     const pngBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     stubMulterFile({ buffer: pngBuffer, mimetype: 'image/png', size: 512, originalname: 'photo.png' });
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/png', ext: 'png' });
-    mockUploadImageToS3.mockResolvedValue('http://localhost:4566/breadsheet-images-local/processed/uuid.jpg');
+    mockUploadImageToS3.mockResolvedValue('processed/uuid.jpg');
 
     const res = await request(app)
       .post('/api/products/upload-image')
@@ -283,7 +282,7 @@ describe('POST /api/products/upload-image', () => {
       .field('kind', 'product');
 
     expect(res.status).toBe(200);
-    expect(res.body.url).toContain('/processed/');
+    expect(res.body.imageKey).toMatch(/^processed\//);
     expect(mockUploadImageToS3).toHaveBeenCalledWith(pngBuffer, 'product');
   });
 
@@ -291,7 +290,7 @@ describe('POST /api/products/upload-image', () => {
     session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
     stubMulterFile({ buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'photo.jpg' });
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
-    mockUploadImageToS3.mockResolvedValue('http://localhost:4566/breadsheet-images-local/processed/uuid.jpg');
+    mockUploadImageToS3.mockResolvedValue('processed/uuid.jpg');
 
     const res = await request(app)
       .post('/api/products/upload-image')
@@ -400,9 +399,7 @@ describe('POST /api/products/upload-image', () => {
       'label',
     );
     mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
-    mockUploadImageToS3.mockResolvedValue(
-      'http://localhost:4566/breadsheet-images-local/processed/uuid.jpg',
-    );
+    mockUploadImageToS3.mockResolvedValue('processed/uuid.jpg');
 
     const res = await request(app)
       .post('/api/products/upload-image')
@@ -410,7 +407,7 @@ describe('POST /api/products/upload-image', () => {
       .field('kind', 'label');
 
     expect(res.status).toBe(200);
-    expect(res.body.url).toContain('/processed/');
+    expect(res.body.imageKey).toMatch(/^processed\//);
     expect(res.body.name).toBeUndefined();
     expect(res.body.brand).toBeUndefined();
   });
