@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   Image,
-  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
@@ -12,6 +10,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { scheduleOnRN } from 'react-native-worklets';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -66,10 +71,14 @@ function scoreColor(score: number): string {
 //
 // UX design:
 //   • Large score badge front and centre
-//   • Horizontal draggable track (snaps to 0.5)
+//   • Horizontal draggable track (snaps to 0.5) — tap anywhere to jump
 //   • –0.5 / +0.5 stepper buttons for fine control
 //   • Filled track colour transitions amber → green
 //   • Tick marks at whole numbers
+//
+// Gesture implementation uses react-native-gesture-handler so the iOS back
+// swipe and the vertical ScrollView are disambiguated at the native level
+// (failOffsetY / activeOffsetX), eliminating the race that PanResponder lost.
 //
 function TasteSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const TRACK_WIDTH = 280;
@@ -77,68 +86,63 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
   const MAX = 10;
   const STEP = 0.5;
 
-  const trackRef = useRef<View>(null);
-  const startX = useRef(0);
-  const startVal = useRef(value);
-  // Refs keep PanResponder callbacks (created once) in sync with the latest props
-  // without requiring the PanResponder to be recreated on every render.
-  const valueRef = useRef(value);
-  const onChangeRef = useRef(onChange);
-  useLayoutEffect(() => {
-    valueRef.current = value;
-    onChangeRef.current = onChange;
-  });
+  // Thumb pixel position drives both the fill width and thumb left offset.
+  const thumbX = useSharedValue((value / MAX) * TRACK_WIDTH);
+  // Captured at gesture start so onUpdate can add translationX to the
+  // original position rather than accumulating deltas frame-by-frame.
+  const startThumbX = useSharedValue(0);
 
-  const thumbAnim = useRef(new Animated.Value((value / MAX) * TRACK_WIDTH)).current;
-
-  // Keep thumb position in sync when value changes via stepper
+  // Keep thumb in sync when value changes from the stepper buttons.
+  // The 0.5 px guard skips redundant springs while the user is dragging
+  // (drag already positions thumbX; the onChange → re-render → effect cycle
+  // would otherwise fire a spring to the exact position it's already at).
   useEffect(() => {
-    Animated.spring(thumbAnim, {
-      toValue: (value / MAX) * TRACK_WIDTH,
-      useNativeDriver: false,
-      speed: 30,
-      bounciness: 4,
-    }).start();
-  }, [thumbAnim, value]);
+    const target = (value / MAX) * TRACK_WIDTH;
+    if (Math.abs(thumbX.value - target) > 0.5) {
+      thumbX.value = withSpring(target, { damping: 15, stiffness: 180 });
+    }
+  }, [value, thumbX]);
 
   const snap = (raw: number) => {
     const clamped = Math.max(MIN, Math.min(MAX, raw));
     return Math.round(clamped / STEP) * STEP;
   };
 
-  const panResponder = useRef(
-    PanResponder.create({
-      // Wait for movement to start before claiming — prevents conflicting with the
-      // vertical ScrollView and the iOS swipe-back navigation gesture on first touch.
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gs) =>
-        Math.abs(gs.dx) > Math.abs(gs.dy) && Math.abs(gs.dx) > 4,
-      // Once the slider owns the gesture, hold it — prevents the iOS navigation
-      // gesture from stealing it mid-drag.
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: (evt) => {
-        startX.current = evt.nativeEvent.pageX;
-        startVal.current = valueRef.current;
-      },
-      onPanResponderMove: (evt) => {
-        const dx = evt.nativeEvent.pageX - startX.current;
-        const delta = (dx / TRACK_WIDTH) * MAX;
-        const snapped = snap(startVal.current + delta);
-        onChangeRef.current(snapped);
-      },
-    })
-  ).current;
-
   const step = (dir: 1 | -1) => {
     onChange(snap(value + dir * STEP));
   };
 
+  // Pan: only activates after clearly horizontal movement; fails on vertical
+  // movement so the ScrollView and iOS back gesture win those races.
+  const panGesture = Gesture.Pan()
+    .activeOffsetX([-8, 8])
+    .failOffsetY([-8, 8])
+    .onBegin(() => {
+      startThumbX.value = thumbX.value;
+    })
+    .onUpdate((e) => {
+      const px = Math.max(0, Math.min(TRACK_WIDTH, startThumbX.value + e.translationX));
+      thumbX.value = px;
+      const snapped = Math.round(Math.max(MIN, Math.min(MAX, (px / TRACK_WIDTH) * MAX)) / STEP) * STEP;
+      scheduleOnRN(onChange, snapped);
+    });
+
+  // Tap: jumps to the tapped position with a snappy spring.
+  const tapGesture = Gesture.Tap()
+    .onEnd((e) => {
+      const px = Math.max(0, Math.min(TRACK_WIDTH, e.x));
+      thumbX.value = withSpring(px, { damping: 25, stiffness: 300 });
+      const snapped = Math.round(Math.max(MIN, Math.min(MAX, (px / TRACK_WIDTH) * MAX)) / STEP) * STEP;
+      scheduleOnRN(onChange, snapped);
+    });
+
+  // Race: the first to activate wins — pan for drags, tap for short presses.
+  const gesture = Gesture.Race(panGesture, tapGesture);
+
+  const fillStyle = useAnimatedStyle(() => ({ width: thumbX.value }));
+  const thumbStyle = useAnimatedStyle(() => ({ left: thumbX.value }));
+
   const color = scoreColor(value);
-  const fillWidth = thumbAnim.interpolate({
-    inputRange: [0, TRACK_WIDTH],
-    outputRange: [0, TRACK_WIDTH],
-    extrapolate: 'clamp',
-  });
 
   return (
     <View style={sliderStyles.container}>
@@ -161,35 +165,35 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
           <Text style={[sliderStyles.stepBtnText, value <= MIN && sliderStyles.stepBtnTextDisabled]}>−</Text>
         </TouchableOpacity>
 
-        {/* Draggable track */}
-        <View
-          ref={trackRef}
-          style={sliderStyles.track}
-          {...panResponder.panHandlers}
-        >
-          {/* Fill */}
-          <Animated.View
-            style={[sliderStyles.trackFill, { width: fillWidth, backgroundColor: color, pointerEvents: 'none' }]}
-          />
-          {/* Tick marks at whole numbers */}
-          {Array.from({ length: 11 }, (_, i) => i).map((n) => (
-            <View
-              key={n}
-              style={[
-                sliderStyles.tick,
-                { left: (n / MAX) * TRACK_WIDTH - 1 },
-                n <= value && sliderStyles.tickFilled,
-              ]}
-            />
-          ))}
-          {/* Thumb */}
-          <Animated.View
-            style={[
-              sliderStyles.thumb,
-              { left: thumbAnim, backgroundColor: color, pointerEvents: 'none' },
-            ]}
-          />
-        </View>
+        {/* Track — wrapped in a taller hit-area view so the thumb's visual
+            overflow is also touchable (track itself is only 8 px tall). */}
+        <GestureDetector gesture={gesture}>
+          <View style={sliderStyles.trackHitArea}>
+            <View style={sliderStyles.track}>
+              {/* Fill */}
+              <Animated.View
+                pointerEvents="none"
+                style={[sliderStyles.trackFill, fillStyle, { backgroundColor: color }]}
+              />
+              {/* Tick marks at whole numbers */}
+              {Array.from({ length: 11 }, (_, i) => i).map((n) => (
+                <View
+                  key={n}
+                  style={[
+                    sliderStyles.tick,
+                    { left: (n / MAX) * TRACK_WIDTH - 1 },
+                    n <= value && sliderStyles.tickFilled,
+                  ]}
+                />
+              ))}
+              {/* Thumb */}
+              <Animated.View
+                pointerEvents="none"
+                style={[sliderStyles.thumb, thumbStyle, { backgroundColor: color }]}
+              />
+            </View>
+          </View>
+        </GestureDetector>
 
         <TouchableOpacity
           style={[sliderStyles.stepBtn, value >= MAX && sliderStyles.stepBtnDisabled]}
@@ -265,6 +269,14 @@ const sliderStyles = StyleSheet.create({
   },
   stepBtnTextDisabled: {
     color: '#aaa',
+  },
+  // Taller transparent wrapper so the thumb's visual overflow is touchable.
+  // The track itself is only 8 px tall, which is too narrow to tap reliably.
+  trackHitArea: {
+    width: 280,
+    height: THUMB_SIZE + 20,
+    justifyContent: 'center',
+    overflow: 'visible',
   },
   track: {
     width: 280,
