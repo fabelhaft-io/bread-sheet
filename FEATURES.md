@@ -268,10 +268,7 @@ User History
 Minor Frontend fix: Screens should be if possible one full screen with no scroll column (currently on iOS it is slightly too high on rating screen and product submission)
 **Acceptance Criteria:**
 - [ ] TODO!!!!
-- [ ] Images of Product in Review isn't shown
-- [ ] Product after two successful reviews is still not ratable by anonymous user (but it's shown)
 - [ ] After adding a product, the slider input moves the screen (like back gesture - screen slides for close)
-- [ ] After adding a product and rating it, you move back to missing product screen!
 
 ### [TICKET-P5-005] Product Image Plausibility & Abuse Gating
 **Goal:** Run an AI plausibility check on uploaded images so the app (1) rejects images that are not the expected subject (a chair, a pet, a selfie) with actionable feedback, (2) reads correct product identity (name/brand/generic name) off the product photo so the submission form pre-fills instead of showing confusingly empty fields, and (3) flags genuinely abusive uploads (sexual / graphic) server-side for moderation. Implementation plan: `docs/P5-005-implementation-plan.md`.

@@ -12,7 +12,7 @@ import {
  * Every image gets resized to a longest-edge cap and re-encoded as JPEG
  * before leaving the device. The Lambda resize (P5-003) is the definitive
  * one, but doing it here too keeps upload payloads small on slow mobile
- * connections and lets us enforce the 5 MB client cap pre-flight.
+ * connections and lets us enforce the 2 MB client cap pre-flight.
  */
 
 export type ImageKind = 'product' | 'label';
@@ -48,9 +48,17 @@ export async function processCaptureForUpload(
   const manipulator = await importImageManipulator();
   let processedUri = uri;
   if (manipulator) {
+    // Detect orientation so the cap applies to the actual longest edge.
+    // Resizing by width alone would leave portrait images taller than intended.
+    const dims = await getImageDimensions(uri);
+    const resizeAction =
+      dims === null || dims.width >= dims.height
+        ? { resize: { width: longestEdge } }
+        : { resize: { height: longestEdge } };
+
     const result = await manipulator.manipulateAsync(
       uri,
-      [{ resize: { width: longestEdge } }],
+      [resizeAction],
       { compress: quality, format: manipulator.SaveFormat.JPEG },
     );
     processedUri = result.uri;
@@ -92,11 +100,30 @@ async function safeFileSize(uri: string): Promise<number | null> {
 type ImageManipulatorModule = {
   manipulateAsync: (
     uri: string,
-    actions: { resize: { width: number } }[],
+    actions: { resize: { width?: number; height?: number } }[],
     options: { compress: number; format: unknown },
   ) => Promise<{ uri: string }>;
   SaveFormat: { JPEG: unknown };
 };
+
+/**
+ * Best-effort image dimension lookup via React Native's Image.getSize.
+ * Returns null if unavailable (jest-expo) so callers can fall back to
+ * width-based resize (safe but slightly over-sized for portrait images).
+ */
+async function getImageDimensions(
+  uri: string,
+): Promise<{ width: number; height: number } | null> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Image } = require('react-native') as typeof import('react-native');
+    return await new Promise((resolve, reject) =>
+      Image.getSize(uri, (w, h) => resolve({ width: w, height: h }), reject),
+    );
+  } catch {
+    return null;
+  }
+}
 
 async function importImageManipulator(): Promise<ImageManipulatorModule | null> {
   try {

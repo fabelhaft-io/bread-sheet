@@ -18,7 +18,7 @@ const router = Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8 MB hard ceiling
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB hard ceiling
 });
 
 function handleUploadError(

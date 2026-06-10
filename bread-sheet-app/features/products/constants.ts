@@ -29,10 +29,10 @@ export const MAX_LABEL_IMAGE_LONGEST_EDGE = 1600;
 
 /**
  * Hard client-side size limit after compression. Anything larger gets an
- * inline error and is not uploaded — the server enforces its own 8 MB cap
+ * inline error and is not uploaded — the server enforces its own 4 MB cap
  * (see P5-003) as defence-in-depth.
  */
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
 /**
  * JPEG quality settings used by `expo-image-manipulator`. Lower for the

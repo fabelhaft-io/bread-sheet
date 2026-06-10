@@ -14,6 +14,10 @@ auth:bearer {
   token: {{accessToken}}
 }
 
+vars:pre-request {
+  baseUrl: http://192.168.178.33:3000
+}
+
 docs {
   Returns the authenticated user's rating history with product details, most recent first.
 }

@@ -185,7 +185,7 @@ describe('POST /api/products/upload-image', () => {
     expect(mockUploadImageToS3).toHaveBeenCalledWith(FAKE_JPEG, 'label');
   });
 
-  it('returns 413 when the file exceeds the 8 MB limit', async () => {
+  it('returns 413 when the file exceeds the 4 MB limit', async () => {
     stubMulterError('LIMIT_FILE_SIZE');
 
     const res = await request(app)
