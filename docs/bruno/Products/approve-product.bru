@@ -1,0 +1,29 @@
+meta {
+  name: Approve product (cast APPROVE vote)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/products/{{barcode}}/verify
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Cast an APPROVE vote on a PENDING_REVIEW product. Registered, non-submitter only.
+
+  Once 2 net-approvals are recorded (approvals > rejections) the product status automatically flips to VERIFIED.
+
+  Response: { verifications: <approval count> }
+
+  Errors:
+  - 401 — unauthenticated
+  - 403 — anonymous user or self-verification attempt ({ error: 'self_verification' })
+  - 404 — product not found ({ error: 'product_not_found' })
+  - 409 — product is not PENDING_REVIEW ({ error: 'product_not_pending' })
+}

@@ -8,10 +8,19 @@
 - [ ] `ALLOWED_ORIGINS` — comma-separated list of production frontend origins (e.g. `https://app.breadsheet.com`). Currently defaults to `http://localhost:8081` which must not reach production
 - [ ] `NODE_ENV=production`
 - [ ] `PORT` — set if different from 3000
+- [ ] `APP_DEEP_LINK_SCHEME=breadsheet` — use the bare scheme for production builds (not `exp+breadsheet`, which is Expo Go only)
+- [ ] `VISION_MODE` — set explicitly (`live` or `llm` in prod; never `mock`, which returns fixture OCR). No default — the server refuses to boot if unset
+- [ ] `PLAUSIBILITY_MODE=gemini` — the upload image plausibility / abuse gate. Must **not** be `mock` in production (`mock` accepts every image, including abusive uploads). No default — the server refuses to boot if unset
+- [ ] `S3_MODE=aws` — selects the S3 backend / addressing style (`localstack` is local dev only; it forces path-style addressing, which LocalStack requires but real S3 deprecates). No default — the server refuses to boot if unset
+- [ ] `S3_BUCKET_NAME` + `AWS_ENDPOINT_URL` — production image bucket and the S3 endpoint the SDK talks to (not the LocalStack URL)
+- [ ] `ASSET_BASE_URL` — public base URL where stored image keys resolve, **including the bucket part**: `https://<bucket>.s3.<region>.amazonaws.com` (or the CDN domain once one fronts the bucket). The DB stores S3 keys only; this is the single switch for where clients fetch images from. No default — the server refuses to boot if unset
+- [ ] **Gemini credentials** — required when `VISION_MODE=llm` or `PLAUSIBILITY_MODE=gemini`. Pick one auth method (validated at startup by `config.ts`):
+  - [ ] **Preferred (keyless):** `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`. Authenticates via ADC / Workload Identity Federation — reuses the `GOOGLE_APPLICATION_CREDENTIALS` WIF mount already used by `live` Vision; the service account needs `roles/aiplatform.user`. No long-lived secret to store or rotate.
+  - [ ] **Alternative:** `GEMINI_API_KEY` (Google AI Studio). Store as a secret, never in the image. Do **not** set alongside `GOOGLE_GENAI_USE_VERTEXAI=true`.
 
 ## Supabase
 
-- [ ]  Settings → Authentication → URL Configuration → Redirect URLs ▎Add breadsheet://** to the allowed list.
+- [ ] Settings → Authentication → URL Configuration → Redirect URLs — add `https://api.breadsheet.com/auth/callback` (the server's `/auth/callback` endpoint, not a custom scheme URL — Supabase rejects non-HTTP schemes)
 
 ## Database
 
@@ -36,7 +45,7 @@
 
 ## Infrastructure
 
-- [ ] Confirm Docker image builds cleanly: `docker compose build`
+- [ ] Confirm the Docker image builds cleanly locally: `docker build ./server` — Docker Compose is local dev only; EKS pulls the image from ECR, not from Compose
 - [ ] ArgoCD sync policy configured for the production cluster
 - [ ] Kubernetes liveness/readiness probes point to `GET /` health check
 - [ ] Resource requests/limits set on the server pod

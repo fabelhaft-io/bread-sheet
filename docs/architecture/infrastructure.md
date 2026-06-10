@@ -19,19 +19,50 @@ docker compose --profile app-dev up -d
 | Service | Port | Purpose |
 |---------|------|---------|
 | PostgreSQL 18-Alpine | 5432 | Primary database (`admin:password@localhost:5432/breadsheet`) |
-| LocalStack | 4566 | AWS service emulation (S3, Lambda, IAM, STS) |
+| LocalStack | 4566 | AWS service emulation (S3, Lambda, IAM, STS, SQS) |
 | Server (app-dev profile) | 3000 | API server with hot-reload via nodemon |
 
 LocalStack allows developers to test S3 uploads and Lambda triggers without an AWS account or cost.
+
+The server reaches LocalStack at `AWS_ENDPOINT_URL=http://localstack:4566` and must run with `S3_MODE=localstack` (set in `docker-compose.yml`): LocalStack requires path-style S3 addressing because virtual-hosted-style hostnames like `breadsheet-images-local.localstack` don't resolve inside the Docker network. Production uses `S3_MODE=aws` (SDK-default virtual-hosted addressing).
+
+Image URLs returned to clients are assembled from `ASSET_BASE_URL` (in `server/.env`), which must point at a **device-reachable** address — locally that is `http://<host-LAN-ip>:4566/breadsheet-images-local` (LocalStack's port 4566 is published on the host). See `docs/architecture/backend.md` § Image Processing.
+
+**Local image pipeline (LocalStack init hook):**
+`scripts/localstack-init.sh` runs on LocalStack startup (`/etc/localstack/init/ready.d/`) and provisions the full local pipeline — the S3 bucket, the `image-resizer` Lambda, and the `s3:ObjectCreated:*` (prefix `raw/`) trigger — mirroring `terraform/` without requiring a local Terraform install. The Lambda bundle is mounted into the container from `server/lambda/imageResizer/dist/bundle/`, so it must be built first:
+
+```sh
+cd server/lambda/imageResizer
+npm install
+npm run build   # outputs dist/bundle/ (JS + sharp Linux x64 binary)
+cd ../..
+docker compose up -d   # init hook deploys the Lambda; re-run after rebuilds via
+                       # docker compose restart localstack
+```
+
+If the bundle is missing the init script logs a warning and skips the Lambda — uploads still work, but `processed/` objects are never written.
+
+**Lambda build for `terraform apply`:**
+Terraform's `archive_file` data source reads the same compiled output from `dist/bundle/`, so the build step above is also required before applying:
+
+```sh
+terraform -chdir=terraform apply -var-file=environments/production.tfvars
+```
+
+The build script installs the Linux x64 variant of sharp into `dist/bundle/node_modules/` regardless of the host OS, producing a Lambda-compatible artifact. Keep the Lambda runtime in `scripts/localstack-init.sh` in sync with `terraform/lambda.tf` (currently `nodejs24.x`).
 
 ---
 
 ## Cloud Infrastructure (Terraform)
 
-`terraform/` is the single source of truth for all AWS resources. Apply via CI or manually:
+`terraform/` is the single source of truth for all AWS resources. Environment-specific variables are in `terraform/environments/`. Apply via CI or manually:
 
 ```sh
-cd terraform && terraform apply
+# Local (LocalStack)
+terraform -chdir=terraform apply -var-file=environments/local.tfvars
+
+# Production
+terraform -chdir=terraform apply -var-file=environments/production.tfvars
 ```
 
 ### Resources provisioned

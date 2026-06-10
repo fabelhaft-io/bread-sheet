@@ -7,13 +7,6 @@ datasource db {
   provider = "postgresql"
 }
 
-model Item {
-  id    Int     @id @default(autoincrement())
-  name  String
-
-  @@map("items")
-}
-
 model User {
   id        String   @id @default(uuid())
   email     String?  @unique // Optional for anonymous users
@@ -23,6 +16,34 @@ model User {
   
   ratings   Rating[]
   groups    GroupMember[]
+
+  submittedProducts   Product[]              @relation("ProductSubmitter")
+  productVerifications ProductVerification[]
+  abuseFlags          UserAbuseFlag[]
+}
+
+// Server-side moderation record raised when an uploaded image is judged to be
+// abusive by the plausibility check. Record-only for now; a moderation dashboard
+// / auto-ban threshold is a later ticket. We track only the count and a
+// free-text reason per flag — not a category.
+model UserAbuseFlag {
+  id        String   @id @default(uuid())
+  userId    String
+  reason    String? // model-provided detail (server-side only, never returned to the client)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum ProductStatus {
+  VERIFIED
+  PENDING_REVIEW
+  REJECTED
+}
+
+enum VerificationVote {
+  APPROVE
+  REJECT
 }
 
 model Product {
@@ -34,6 +55,25 @@ model Product {
   description String?
   
   ratings     Rating[]
+
+  status              ProductStatus @default(VERIFIED) // existing rows = trusted (came from OFF)
+  submittedByUserId   String?
+  submittedBy         User?         @relation("ProductSubmitter", fields: [submittedByUserId], references: [id])
+
+  genericName         String?
+  energyKcal          Float?
+  fat                 Float?
+  saturatedFat        Float?
+  carbohydrates       Float?
+  sugars              Float?
+  protein             Float?
+  salt                Float?
+  servingSize         String?
+  ingredients         String?
+
+  plausibilityFlag    Boolean  @default(false)
+
+  verifications       ProductVerification[]
 }
 
 model Rating {
@@ -42,12 +82,31 @@ model Rating {
   taste     Float    // Taste rating on a 0–10 scale with 0.5 increments
   comment   String?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   userId    String
   user      User     @relation(fields: [userId], references: [id])
-  
+
   productId String
   product   Product  @relation(fields: [productId], references: [id])
+
+  // One rating per user per product. Re-rating upserts the existing row,
+  // so `createdAt` stays as the first submission and `updatedAt` tracks
+  // the latest edit.
+  @@unique([userId, productId])
+}
+
+model ProductVerification {
+  id         String           @id @default(uuid())
+  productId  String
+  userId     String
+  vote       VerificationVote
+  createdAt  DateTime         @default(now())
+
+  product    Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, userId]) // one vote per user per product; second vote overwrites via upsert
 }
 
 model Group {

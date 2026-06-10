@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   Image,
-  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
@@ -12,13 +10,21 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { scheduleOnRN } from 'react-native-worklets';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+} from 'react-native-reanimated';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { ApiError, api } from '@/lib/api';
+import { formatApiError } from '@/lib/format-error';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
 
@@ -29,6 +35,16 @@ interface Product {
   brand: string | null;
   image: string | null;
   description: string | null;
+  /** Present when the product is awaiting peer review (P5-002). */
+  unverified?: boolean;
+  /** Supabase user id of the submitter, when the product was user-contributed. */
+  submittedByUserId?: string | null;
+}
+
+interface UserRating {
+  id: string;
+  taste: number;
+  comment: string | null;
 }
 
 // ─── Taste Score Colour ───────────────────────────────────────────────────────
@@ -55,10 +71,14 @@ function scoreColor(score: number): string {
 //
 // UX design:
 //   • Large score badge front and centre
-//   • Horizontal draggable track (snaps to 0.5)
+//   • Horizontal draggable track (snaps to 0.5) — tap anywhere to jump
 //   • –0.5 / +0.5 stepper buttons for fine control
 //   • Filled track colour transitions amber → green
 //   • Tick marks at whole numbers
+//
+// Gesture implementation uses react-native-gesture-handler so the iOS back
+// swipe and the vertical ScrollView are disambiguated at the native level
+// (failOffsetY / activeOffsetX), eliminating the race that PanResponder lost.
 //
 function TasteSlider({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   const TRACK_WIDTH = 280;
@@ -66,54 +86,63 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
   const MAX = 10;
   const STEP = 0.5;
 
-  const trackRef = useRef<View>(null);
-  const startX = useRef(0);
-  const startVal = useRef(value);
+  // Thumb pixel position drives both the fill width and thumb left offset.
+  const thumbX = useSharedValue((value / MAX) * TRACK_WIDTH);
+  // Captured at gesture start so onUpdate can add translationX to the
+  // original position rather than accumulating deltas frame-by-frame.
+  const startThumbX = useSharedValue(0);
 
-  const thumbAnim = useRef(new Animated.Value((value / MAX) * TRACK_WIDTH)).current;
-
-  // Keep thumb position in sync when value changes via stepper
+  // Keep thumb in sync when value changes from the stepper buttons.
+  // The 0.5 px guard skips redundant springs while the user is dragging
+  // (drag already positions thumbX; the onChange → re-render → effect cycle
+  // would otherwise fire a spring to the exact position it's already at).
   useEffect(() => {
-    Animated.spring(thumbAnim, {
-      toValue: (value / MAX) * TRACK_WIDTH,
-      useNativeDriver: false,
-      speed: 30,
-      bounciness: 4,
-    }).start();
-  }, [thumbAnim, value]);
+    const target = (value / MAX) * TRACK_WIDTH;
+    if (Math.abs(thumbX.value - target) > 0.5) {
+      thumbX.value = withSpring(target, { damping: 15, stiffness: 180 });
+    }
+  }, [value, thumbX]);
 
   const snap = (raw: number) => {
     const clamped = Math.max(MIN, Math.min(MAX, raw));
     return Math.round(clamped / STEP) * STEP;
   };
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (evt) => {
-        startX.current = evt.nativeEvent.pageX;
-        startVal.current = value;
-      },
-      onPanResponderMove: (evt) => {
-        const dx = evt.nativeEvent.pageX - startX.current;
-        const delta = (dx / TRACK_WIDTH) * MAX;
-        const snapped = snap(startVal.current + delta);
-        onChange(snapped);
-      },
-    })
-  ).current;
-
   const step = (dir: 1 | -1) => {
     onChange(snap(value + dir * STEP));
   };
 
+  // Pan: only activates after clearly horizontal movement; fails on vertical
+  // movement so the ScrollView and iOS back gesture win those races.
+  const panGesture = Gesture.Pan()
+    .activeOffsetX([-8, 8])
+    .failOffsetY([-8, 8])
+    .onBegin(() => {
+      startThumbX.value = thumbX.value;
+    })
+    .onUpdate((e) => {
+      const px = Math.max(0, Math.min(TRACK_WIDTH, startThumbX.value + e.translationX));
+      thumbX.value = px;
+      const snapped = Math.round(Math.max(MIN, Math.min(MAX, (px / TRACK_WIDTH) * MAX)) / STEP) * STEP;
+      scheduleOnRN(onChange, snapped);
+    });
+
+  // Tap: jumps to the tapped position with a snappy spring.
+  const tapGesture = Gesture.Tap()
+    .onEnd((e) => {
+      const px = Math.max(0, Math.min(TRACK_WIDTH, e.x));
+      thumbX.value = withSpring(px, { damping: 25, stiffness: 300 });
+      const snapped = Math.round(Math.max(MIN, Math.min(MAX, (px / TRACK_WIDTH) * MAX)) / STEP) * STEP;
+      scheduleOnRN(onChange, snapped);
+    });
+
+  // Race: the first to activate wins — pan for drags, tap for short presses.
+  const gesture = Gesture.Race(panGesture, tapGesture);
+
+  const fillStyle = useAnimatedStyle(() => ({ width: thumbX.value }));
+  const thumbStyle = useAnimatedStyle(() => ({ left: thumbX.value }));
+
   const color = scoreColor(value);
-  const fillWidth = thumbAnim.interpolate({
-    inputRange: [0, TRACK_WIDTH],
-    outputRange: [0, TRACK_WIDTH],
-    extrapolate: 'clamp',
-  });
 
   return (
     <View style={sliderStyles.container}>
@@ -136,35 +165,35 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
           <Text style={[sliderStyles.stepBtnText, value <= MIN && sliderStyles.stepBtnTextDisabled]}>−</Text>
         </TouchableOpacity>
 
-        {/* Draggable track */}
-        <View
-          ref={trackRef}
-          style={sliderStyles.track}
-          {...panResponder.panHandlers}
-        >
-          {/* Fill */}
-          <Animated.View
-            style={[sliderStyles.trackFill, { width: fillWidth, backgroundColor: color, pointerEvents: 'none' }]}
-          />
-          {/* Tick marks at whole numbers */}
-          {Array.from({ length: 11 }, (_, i) => i).map((n) => (
-            <View
-              key={n}
-              style={[
-                sliderStyles.tick,
-                { left: (n / MAX) * TRACK_WIDTH - 1 },
-                n <= value && sliderStyles.tickFilled,
-              ]}
-            />
-          ))}
-          {/* Thumb */}
-          <Animated.View
-            style={[
-              sliderStyles.thumb,
-              { left: thumbAnim, backgroundColor: color, pointerEvents: 'none' },
-            ]}
-          />
-        </View>
+        {/* Track — wrapped in a taller hit-area view so the thumb's visual
+            overflow is also touchable (track itself is only 8 px tall). */}
+        <GestureDetector gesture={gesture}>
+          <View style={sliderStyles.trackHitArea}>
+            <View style={sliderStyles.track}>
+              {/* Fill */}
+              <Animated.View
+                pointerEvents="none"
+                style={[sliderStyles.trackFill, fillStyle, { backgroundColor: color }]}
+              />
+              {/* Tick marks at whole numbers */}
+              {Array.from({ length: 11 }, (_, i) => i).map((n) => (
+                <View
+                  key={n}
+                  style={[
+                    sliderStyles.tick,
+                    { left: (n / MAX) * TRACK_WIDTH - 1 },
+                    n <= value && sliderStyles.tickFilled,
+                  ]}
+                />
+              ))}
+              {/* Thumb */}
+              <Animated.View
+                pointerEvents="none"
+                style={[sliderStyles.thumb, thumbStyle, { backgroundColor: color }]}
+              />
+            </View>
+          </View>
+        </GestureDetector>
 
         <TouchableOpacity
           style={[sliderStyles.stepBtn, value >= MAX && sliderStyles.stepBtnDisabled]}
@@ -241,6 +270,14 @@ const sliderStyles = StyleSheet.create({
   stepBtnTextDisabled: {
     color: '#aaa',
   },
+  // Taller transparent wrapper so the thumb's visual overflow is touchable.
+  // The track itself is only 8 px tall, which is too narrow to tap reliably.
+  trackHitArea: {
+    width: 280,
+    height: THUMB_SIZE + 20,
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
   track: {
     width: 280,
     height: TRACK_HEIGHT,
@@ -306,41 +343,68 @@ export default function ProductScreen() {
   const router = useRouter();
 
   const { addRecentProduct } = useRecentProducts();
-  const { isAnonymous } = useSession();
+  const { isAnonymous, session } = useSession();
+  const userId = session?.user.id ?? null;
 
   const [product, setProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const [existingRating, setExistingRating] = useState<UserRating | null>(null);
   const [taste, setTaste] = useState(5);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    setNotFound(false);
-    setLoadError(null);
-    api.get<Product>(`/api/products/${barcode}`)
-      .then((data) => {
-        if (!cancelled) {
+  // useFocusEffect instead of useEffect so the product data refreshes whenever
+  // this screen is navigated back to (e.g. after a peer review changes the status).
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setNotFound(false);
+      setLoadError(null);
+      setImageError(false);
+      setLoading(true);
+
+      // Fetch the product and the caller's existing rating in parallel. Anonymous
+      // sessions don't have a persistent rating to fetch yet (P5-004), so skip the
+      // /me lookup for them. Any failure on the rating lookup (404 "not rated yet"
+      // or otherwise) degrades to "no existing rating" so it never blocks the
+      // product screen — the user can still submit a fresh rating.
+      const productReq = api.get<Product>(`/api/products/${barcode}`);
+      const ratingReq: Promise<UserRating | null> = isAnonymous
+        ? Promise.resolve(null)
+        : api
+            .get<UserRating>(`/api/ratings/me/${barcode}`)
+            .catch(() => null);
+
+      productReq
+        .then((data) => {
+          if (cancelled) return;
           setProduct(data);
           addRecentProduct({ barcode: data.barcode, name: data.name, brand: data.brand, image: data.image });
-        }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setNotFound(true);
-        } else {
-          setLoadError(err instanceof Error ? err.message : 'Failed to load product');
-        }
-      })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [addRecentProduct, barcode]);
+          return ratingReq.then((rating) => {
+            if (cancelled || !rating) return;
+            setExistingRating(rating);
+            setTaste(rating.taste);
+            setComment(rating.comment ?? '');
+          });
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          if (err instanceof ApiError && err.status === 404) {
+            setNotFound(true);
+          } else {
+            setLoadError(formatApiError(err, 'Could not load this product. Please try again.'));
+          }
+        })
+        .finally(() => { if (!cancelled) setLoading(false); });
+      return () => { cancelled = true; };
+    }, [addRecentProduct, barcode, isAnonymous])
+  );
 
   const handleSubmit = useCallback(async () => {
     if (!product || submitting) return;
@@ -354,11 +418,13 @@ export default function ProductScreen() {
       });
       setSubmitted(true);
     } catch (err: unknown) {
-      setSubmitError(err instanceof Error ? err.message : 'Failed to submit rating');
+      setSubmitError(formatApiError(err, 'Could not submit your rating. Please try again.'));
     } finally {
       setSubmitting(false);
     }
   }, [product, taste, comment, submitting]);
+
+  const isUpdate = existingRating !== null;
 
   if (loading) {
     return (
@@ -413,7 +479,7 @@ export default function ProductScreen() {
             testID="product-not-found-add"
             style={[styles.button, { backgroundColor: colors.tint }]}
             onPress={() =>
-              router.push({
+              router.replace({
                 pathname: '/(app)/add-product',
                 params: { barcode },
               })
@@ -432,7 +498,9 @@ export default function ProductScreen() {
     return (
       <ThemedView style={styles.center}>
         <Text style={styles.successIcon}>🎉</Text>
-        <ThemedText type="title" style={styles.successTitle}>Rating Submitted!</ThemedText>
+        <ThemedText type="title" style={styles.successTitle}>
+          {isUpdate ? 'Rating Updated!' : 'Rating Submitted!'}
+        </ThemedText>
         <ThemedText style={styles.successSubtitle}>
           You gave it a {taste % 1 === 0 ? taste.toFixed(1) : taste}/10 for taste.
         </ThemedText>
@@ -451,13 +519,44 @@ export default function ProductScreen() {
       style={{ flex: 1, backgroundColor: colors.background }}
       contentContainerStyle={styles.scrollContent}
     >
-      {product?.image ? (
-        <Image source={{ uri: product.image }} style={styles.heroImage} resizeMode="cover" />
+      {product?.image && !imageError ? (
+        <Image
+          source={{ uri: product.image }}
+          style={styles.heroImage}
+          resizeMode="cover"
+          onError={() => setImageError(true)}
+        />
       ) : (
         <View style={[styles.heroPlaceholder, { backgroundColor: colors.icon + '22' }]}>
           <Text style={styles.placeholderIcon}>🍞</Text>
         </View>
       )}
+
+      {/*
+        Reviewer banner (P5-002). Shown to registered, non-submitter users
+        when the product is in PENDING_REVIEW. Tapping opens the reviewer
+        screen where the user can approve or reject the submission.
+      */}
+      {product?.unverified && !isAnonymous && product.submittedByUserId !== userId ? (
+        <TouchableOpacity
+          testID="review-product-banner"
+          style={[styles.reviewBanner, { backgroundColor: colors.tint + '22', borderColor: colors.tint }]}
+          onPress={() =>
+            router.push({
+              pathname: '/(app)/review-product/[barcode]',
+              params: { barcode },
+            })
+          }
+        >
+          <Text style={styles.reviewBannerIcon}>🔎</Text>
+          <View style={styles.reviewBannerBody}>
+            <ThemedText style={styles.reviewBannerTitle}>Needs review</ThemedText>
+            <ThemedText style={styles.reviewBannerText}>
+              This product was added by a user — does it look correct?
+            </ThemedText>
+          </View>
+        </TouchableOpacity>
+      ) : null}
 
       <View style={styles.infoSection}>
         <ThemedText type="title" style={styles.productName}>{product?.name}</ThemedText>
@@ -473,8 +572,14 @@ export default function ProductScreen() {
       <View style={[styles.divider, { backgroundColor: colors.icon + '33' }]} />
 
       <View style={styles.ratingSection}>
-        <ThemedText type="subtitle" style={styles.sectionTitle}>How does it taste?</ThemedText>
-        <ThemedText style={styles.sectionHint}>Drag the slider or use − / + to set your score.</ThemedText>
+        <ThemedText type="subtitle" style={styles.sectionTitle}>
+          {isUpdate ? 'Your rating' : 'How does it taste?'}
+        </ThemedText>
+        <ThemedText style={styles.sectionHint}>
+          {isUpdate
+            ? 'You rated this already — adjust the score or comment to update.'
+            : 'Drag the slider or use − / + to set your score.'}
+        </ThemedText>
 
         <TasteSlider value={taste} onChange={setTaste} />
 
@@ -509,7 +614,9 @@ export default function ProductScreen() {
           {submitting ? (
             <ActivityIndicator color={colors.background} size="small" />
           ) : (
-            <Text style={[styles.buttonText, { color: colors.background }]}>Submit Rating</Text>
+            <Text style={[styles.buttonText, { color: colors.background }]}>
+              {isUpdate ? 'Update Rating' : 'Submit Rating'}
+            </Text>
           )}
         </TouchableOpacity>
       </View>
@@ -633,5 +740,31 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     opacity: 0.6,
     marginTop: 8,
+  },
+  reviewBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  reviewBannerIcon: {
+    fontSize: 22,
+  },
+  reviewBannerBody: {
+    flex: 1,
+  },
+  reviewBannerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  reviewBannerText: {
+    fontSize: 13,
+    opacity: 0.8,
+    marginTop: 2,
+    lineHeight: 18,
   },
 });

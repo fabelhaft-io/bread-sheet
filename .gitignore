@@ -143,3 +143,6 @@ tsconfig.tsbuildinfo
 /server/src/generated
 server/combined.log
 server/error.log
+
+# Terraform
+terraform/.terraform/

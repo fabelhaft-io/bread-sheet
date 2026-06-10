@@ -5,6 +5,7 @@
 - [ ] `EXPO_PUBLIC_API_URL` — set to the production server URL (e.g. `https://api.breadsheet.com`). Currently defaults to `http://localhost:3000`
 - [ ] `EXPO_PUBLIC_SUPABASE_URL` — production Supabase project URL
 - [ ] `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` — production Supabase anon key
+- [ ] `EXPO_PUBLIC_AUTH_REDIRECT_URL` — set to `https://api.breadsheet.com/auth/callback` (the server's redirect endpoint that bounces users back into the app after email verification)
 
 ## Supabase
 
@@ -24,6 +25,7 @@
 
 - [ ] Confirm `EXPO_PUBLIC_API_URL` is HTTPS in production — the app will send Bearer tokens over this connection
 - [ ] No `console.log` statements containing tokens or user data
+- [ ] Consider replacing the `breadsheet://` custom scheme deep link with iOS Universal Links and Android App Links — custom schemes can be claimed by any app on the device, HTTPS deep links cannot. Requires hosting `.well-known/apple-app-site-association` and `.well-known/assetlinks.json` on the production domain and configuring `associatedDomains` in `app.json`
 
 ## App Store
 

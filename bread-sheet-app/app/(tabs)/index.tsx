@@ -9,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 
 import { Colors } from '@/constants/theme';
@@ -151,7 +152,7 @@ function RatingCard({
         </View>
         {entry.comment ? (
           <Text style={[cardStyles.comment, { color: iconColor }]} numberOfLines={2}>
-            "{entry.comment}"
+            {'"'}{entry.comment}{'"'}
           </Text>
         ) : null}
       </View>
@@ -234,6 +235,7 @@ export default function HomeScreen() {
   const colorScheme = useColorScheme() ?? 'light';
   const colors = Colors[colorScheme];
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { session, isAnonymous } = useSession();
   const { recentProducts } = useRecentProducts();
 
@@ -284,7 +286,7 @@ export default function HomeScreen() {
       }
     >
       {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.background }]}>
+      <View style={[styles.header, { backgroundColor: colors.background, marginTop: insets.top + 12 }]}>
         <Text style={[styles.greeting, { color: colors.icon }]}>{greeting}</Text>
         <Text style={[styles.headline, { color: colors.text }]}>
           {isAnonymous ? 'Welcome, Guest 👋' : `Welcome back 👋`}
@@ -368,7 +370,6 @@ const styles = StyleSheet.create({
   },
   header: {
     marginHorizontal: 16,
-    marginTop: 20,
     marginBottom: 4,
     padding: 20,
     borderRadius: 16,

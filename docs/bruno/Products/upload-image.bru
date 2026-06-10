@@ -1,0 +1,66 @@
+meta {
+  name: Upload image (product or label)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/products/upload-image
+  body: multipart-form
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:multipart-form {
+  image: @file()
+  kind: product
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    const body = res.getBody();
+    if (body.imageKey) {
+      bru.setEnvVar('productImageKey', body.imageKey);
+      console.log('productImageKey set to', body.imageKey);
+    }
+    // For kind=product the response also carries front-of-pack suggestions.
+    if (body.name || body.brand || body.genericName) {
+      console.log('photo suggestions', {
+        name: body.name,
+        brand: body.brand,
+        genericName: body.genericName,
+      });
+    }
+  }
+}
+
+docs {
+  Multipart upload. The image is run through an AI plausibility / abuse gate (P5-005)
+  BEFORE being stored, so a rejected image is never persisted.
+
+  Success (200):
+    - kind=product → { imageKey, name, brand, genericName } — `imageKey` is the S3
+      object key (processed/{uuid}.jpg) of the eventual resized image; the server
+      resolves keys to public URLs (ASSET_BASE_URL) when serving products.
+      name/brand/genericName are front-of-pack suggestions read off the photo (any
+      may be null). The post-response script stores `imageKey` as productImageKey
+      so Submit product can reuse it.
+    - kind=label   → { imageKey } only.
+
+  Set the image field to a JPEG / PNG / WebP / GIF / TIFF / AVIF file (8 MB hard cap).
+  Set kind to either 'product' or 'label'.
+
+  Failure codes:
+    - 400 (missing image / bad kind)
+    - 413 (over 8 MB)
+    - 415 (unsupported format)
+    - 422 { error: 'image_rejected', reason } — plausibility rejection (not a product /
+      too blurry / abusive). Abusive uploads additionally record a server-side
+      UserAbuseFlag; the client only ever sees a generic reason for those.
+
+  Note: with PLAUSIBILITY_MODE=mock (the local/test default) every image is accepted.
+  Set PLAUSIBILITY_MODE=gemini (and GEMINI_API_KEY) to exercise the real gate.
+}

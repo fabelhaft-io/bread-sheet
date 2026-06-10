@@ -14,7 +14,8 @@ bread-sheet-app/
 │   ├── (app)/                   # Authenticated screens without the tab bar (product detail, add/edit product, review screens)
 │   └── (account)/               # Account management screens (change email/password, upgrade, verify)
 ├── features/                    # Business logic grouped by domain
-│   └── auth/                    # Auth actions and validation (no UI)
+│   ├── auth/                    # Auth actions and validation (no UI)
+│   └── products/                # Product submission flow — API helpers, OCR, image processing, types (no UI)
 ├── hooks/                       # React context and custom hooks
 ├── lib/                         # Third-party client singletons + small utilities (Supabase, API, pending-return-to)
 ├── components/                  # Shared UI components and design primitives
@@ -203,3 +204,48 @@ On web, confirmation dialogs use `window.confirm` (Alert.alert buttons are unsup
 - **Supabase is the single source of truth** for auth state — never manage session tokens manually in app code.
 - **`isAnonymous`** from `useSession()` is the canonical way to branch UI between guest and registered users — do not inspect `session.user` directly in screens.
 - **Email validation** is centralised in `features/auth/` — do not duplicate in screens.
+- **HTTP errors must go through `formatApiError`.** `lib/api.ts` throws an `ApiError` (carrying `status` and `body`); `lib/format-error.ts` exposes `formatApiError(err, fallback?)` which maps the error to safe, user-facing copy. Screens that surface caught errors **must not** display `err.message` directly — that is the path that previously leaked Prisma constraint dumps into the iOS UI. The helper produces stable copy per status class (401, 403, 404, 409, 415, 422, 429, 5xx) and for 5xx always returns the caller-supplied `fallback` so internal server text never reaches the screen.
+- **Native-optional modules** used by the product-submission flow (`@react-native-ml-kit/text-recognition`, `expo-image-picker`, `expo-image-manipulator`, `expo-file-system/legacy`) are loaded via guarded `require()` inside `features/products/`. This keeps jest-expo tests free of native shims and lets the UI gracefully fall back to manual entry if the runtime bundle doesn't ship the module.
+- **Colocated `*.test.tsx` files** under `app/` are excluded from the Metro bundle by `metro.config.js` (`resolver.blockList`). Without this, Expo Router's `require.context` would register them as routes and try to bundle `@testing-library/react-native` for the native runtime, which fails because it imports Node's `console`. Jest doesn't go through Metro, so tests still run via `npm test`.
+
+---
+
+## Product Submission (TICKET-P5-002)
+
+The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with all business logic under `features/products/`:
+
+| File | Responsibility |
+|------|---------------|
+| `constants.ts` | `MIN_OCR_LENGTH`, image size caps, JPEG quality targets — must match the backend contract defined in P5-003 |
+| `types.ts` | `ProductSubmission`, `ExtractedLabel`, `ProductDetail` — shared wire types |
+| `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct` |
+| `ocr.ts` | `recogniseLabelText` — thin wrapper over `@react-native-ml-kit/text-recognition`, returns `{rawText, unavailable}` |
+| `image-picker.ts` | `captureImage` — camera or library, returns the raw URI |
+| `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError`. Logs one `[image]` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
+| `extract.ts` | `extractFromLabelImage` — orchestrates OCR-then-backend: text path when OCR text ≥ `MIN_OCR_LENGTH`, image fallback otherwise, never throws. Logs one `[extract]` line per attempt (OCR availability, text length, chosen path) |
+
+### Capture feedback
+
+`processCaptureForUpload` (the resize + recompress) runs synchronously-awaited inside the screen's `handleCapture`. Because it can take a noticeable beat on Android, the screen tracks a `processingSlot` (`'product' | 'label' | null`) and renders an in-slot indicator — an `ActivityIndicator` plus a "Processing photo…" label (testID `${slot}-photo-slot-processing`) — in place of the empty placeholder while the resize is in flight. The slot's Camera/Library buttons are disabled for the duration. Only the active slot shows the indicator; the other is unaffected. The indicator is indeterminate (a spinner, not a progress bar) because `expo-image-manipulator` does not surface resize progress.
+
+### Reviewer flow
+
+`app/(app)/review-product/[barcode].tsx` is the reviewer screen for peer approval. It's surfaced from the product detail screen via a "Needs review" banner that is shown when:
+- the product response carries `unverified: true`
+- the caller is registered (not anonymous)
+- the caller is not the submitter (`submittedByUserId !== session.user.id`)
+
+The reviewer screen renders every submitted field — including `null` values, shown as "Not provided" — so the reviewer can judge completeness. "Looks correct" calls `POST /api/products/:barcode/verify`; "Something looks wrong" calls `DELETE /api/products/:barcode/verify` (reused as the "no" vote channel).
+
+---
+
+## Product Detail & Rating (`app/(app)/product/[barcode].tsx`)
+
+The product screen does two GETs in parallel on mount:
+
+1. `GET /api/products/:barcode` — load-blocking. A `404` flips the screen to the "Product not found" state (P5-001).
+2. `GET /api/ratings/me/:barcode` — issued only for registered users. **Any failure (including the `404` that means "not rated yet") degrades silently to "no existing rating"** so an outage on this optional lookup never blocks the product screen.
+
+When the rating lookup returns a row, the slider and comment field are pre-populated with the existing values, the section title flips from "How does it taste?" to "Your rating", and the submit button reads "Update Rating" instead of "Submit Rating". The success screen mirrors the same wording ("Rating Updated!" vs "Rating Submitted!").
+
+Submission always calls `POST /api/ratings`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven entirely off whether the pre-load fetch found an existing rating.

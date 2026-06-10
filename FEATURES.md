@@ -176,19 +176,26 @@ User History
 - Run manipulation after capture/selection, before showing the preview — the preview should already display the processed version.
 - If the processed file still exceeds **5 MB**, show an inline error ("Photo is too large — please try again in better lighting or closer to the subject") and block the upload.
 **Acceptance Criteria:**
-- [ ] User can photograph the product and the nutritional label from within the screen.
-- [ ] On-device OCR runs locally after the label photo is captured (no network request at this stage).
-- [ ] If OCR text is sufficient, only the raw text (not the image) is sent to the backend.
-- [ ] If OCR text is insufficient, the label image is sent as a fallback for backend vision inference.
-- [ ] All images are resized and compressed client-side before upload using `expo-image-manipulator`.
-- [ ] Images exceeding 5 MB after compression show an inline error and are not uploaded.
-- [ ] All three fill modes work correctly (manual, pre-fill+edit, accept-all).
-- [ ] Required-field validation prevents submission of incomplete data.
-- [ ] Product display photo uploads to S3; URL is included in the submission payload.
-- [ ] On successful submission, the user is navigated to the product screen showing the PENDING_REVIEW state and a confirmation toast.
-- [ ] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit.
-- [ ] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection.
-- [ ] The submitter of a product does not see the reviewer banner for their own submission.
+- [x] User can photograph the product and the nutritional label from within the screen. *(client skeleton — uses `expo-image-picker` with camera + library fallback)*
+- [x] On-device OCR runs locally after the label photo is captured (no network request at this stage). *(client skeleton — `features/products/ocr.ts` gracefully degrades when the native module isn't installed)*
+- [x] If OCR text is sufficient, only the raw text (not the image) is sent to the backend.
+- [x] If OCR text is insufficient, the label image is sent as a fallback for backend vision inference.
+- [x] All images are resized and compressed client-side before upload using `expo-image-manipulator`.
+- [x] Images exceeding 5 MB after compression show an inline error and are not uploaded.
+- [x] All three fill modes work correctly (manual, pre-fill+edit, accept-all).
+- [x] Required-field validation prevents submission of incomplete data.
+- [ ] Product display photo uploads to S3; URL is included in the submission payload. *(client sends to `POST /api/products/upload-image`; backend endpoint pending P5-003)*
+- [ ] On successful submission, the user is navigated to the product screen showing the PENDING_REVIEW state and a confirmation toast. *(client navigates; backend `POST /api/products` shipped via P5-003/T3 — full end-to-end still depends on P5-003/T4 image upload)*
+- [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(client handles 422 — server-side plausibility checks pending P5-003)*
+- [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx` shipped; `unverified` + `submittedByUserId` in GET response shipped in P5-003/T8)*
+- [x] The submitter of a product does not see the reviewer banner for their own submission.
+
+**Implementation status (client skeleton, 2026-04-17):**
+- Client-side multi-step flow and reviewer screen are shipped in `bread-sheet-app/app/(app)/add-product.tsx` and `app/(app)/review-product/[barcode].tsx`.
+- Business logic lives in `features/products/` (`api.ts`, `extract.ts`, `ocr.ts`, `image-picker.ts`, `image-processing.ts`, `constants.ts`, `types.ts`) — screens stay UI-only per the `features/` convention.
+- `MIN_OCR_LENGTH = 50` is exported from `features/products/constants.ts`; the backend (P5-003) must reference the same value.
+- Native modules (`@react-native-ml-kit/text-recognition`, `expo-image-picker`, `expo-image-manipulator`) are consumed via guarded `require()` so jest-expo tests pass without them. The user must install them and rebuild the native client before the full flow works end-to-end.
+- `POST /api/products` — shipped (P5-003/T3). `POST /api/products/upload-image` — shipped (P5-003/T4). `POST /api/products/extract-label` text path — shipped (P5-003/T5). Image path returns `501` (pending T6). `POST/DELETE /api/products/:barcode/verify` — shipped (P5-003/T7). `GET /api/products/:barcode` `unverified`/`submittedByUserId`/`submission` augmentation — shipped (P5-003/T8).
 
 ### [TICKET-P5-003] Backend: Label Extraction, Submission, & Peer Verification
 **Goal:** Provide three backend capabilities: (1) structure nutritional data from on-device OCR text (primary) or a label image (fallback); (2) validate and normalise incoming images server-side; (3) accept product submissions from registered users and gate promotion to `VERIFIED` behind peer review by a second registered user.
@@ -238,62 +245,60 @@ User History
 - Add `plausibilityFlag: Boolean` to `Product` (default `false`) — set when AI considers data unusual but acceptable.
 - Add new model `ProductVerification`: `userId`, `barcode`, `createdAt` — composite unique key on `(userId, barcode)` to prevent duplicate votes.
 **Acceptance Criteria:**
-- [ ] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403`.
+- [x] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403`. *(text path via T5; image path pending T6)*
 - [ ] Images larger than 8 MB are rejected with `413` before any processing occurs.
 - [ ] Images in unexpected formats are converted to JPEG via `sharp`; unsupported formats return `415`.
 - [ ] Format detection uses magic bytes, not `Content-Type`.
 - [ ] After upload, a Lambda automatically resizes images to the appropriate cap and writes to the `processed/` S3 prefix.
 - [ ] The API returns the predicted `processed/` URL immediately without waiting for the Lambda.
-- [ ] `POST /products/extract-label` accepts raw OCR text and returns structured nutritional fields via Claude text API.
-- [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Claude vision inference.
-- [ ] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present.
-- [ ] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`.
-- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason.
-- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted.
-- [ ] `POST /products/:barcode/verify` records a verification from a registered non-submitter; returns `403` if the caller is the submitter.
-- [ ] After 2 distinct verifications, the product is automatically promoted to `VERIFIED` and the OFF sync is enqueued.
-- [ ] `DELETE /products/:barcode/verify` removes the caller's verification if the threshold has not yet been reached.
-- [ ] `PENDING_REVIEW` products return `unverified: true` in the response and are hidden from anonymous users.
-- [ ] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products.
+- [x] `POST /products/extract-label` accepts raw OCR text and returns structured nutritional fields. *(T5: hand-rolled regex parser, English + German; Claude/Vision approach superseded — see implementation plan)*
+- [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Google Cloud Vision inference. *(pending T6)*
+- [x] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present. *(text path T5; image path returns 501 until T6)*
+- [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
+- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(image plausibility shipped in **P5-005** — the product/label photo is gated at upload time; nutritional-value plausibility for text submissions still deferred)*
+- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — nutritional-value flagging not yet implemented)*
+- [x] `POST /products/:barcode/verify` casts an `APPROVE` vote from a registered non-submitter; returns `403` if the caller is the submitter. *(P5-003/T7)*
+- [ ] After 2 net-approvals the product is automatically promoted to `VERIFIED`; OFF sync is enqueued. *(threshold flip shipped in T7; OFF sync enqueue deferred to P5-004)*
+- [x] `DELETE /products/:barcode/verify` casts a `REJECT` vote (non-submitter only); 2 net-rejections flip status to `REJECTED`. *(P5-003/T7 — overloaded REJECT channel, not a retraction)*
+- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8)*
+- [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
-### [TICKET-P5-004] Open Food Facts Contribution Sync
-**Goal:** Automatically contribute user-verified product data back to the Open Food Facts (OFF) project using their write API, closing the loop between local submissions and the upstream open dataset.
-**Logic:**
-- Sync is triggered when a product or edit reaches `VERIFIED` status via peer review (not at submission time — plausibility checks gate quality, but peer approval gates OFF contribution).
-- Sync runs as a **node-cron scheduled job inside the existing `server/` process**, polling every 5 minutes for queued items. This keeps the infra simple for now; the job can be extracted to a Lambda later without changing the queue contract.
-- **New product sync:**
-  1. Fetch all `VERIFIED` products with `offSyncStatus: QUEUED`.
-  2. Submit to the OFF Product Add API (`POST https://world.openfoodfacts.org/cgi/product_jqm2.pl`) using the registered OFF bot account.
-  3. Upload product image to OFF's image endpoint.
-  4. On success: set `offSyncStatus: SYNCED`, store `offProductUrl`.
-  5. On failure: increment `offSyncAttempts`, set `offRetryAt` (exponential back-off). After 5 failures: set `offSyncStatus: FAILED` and notify the submitter **in-app** (not email — keeps the notification infrastructure simple and consistent with the rest of the app).
-- **Edit sync (triggered when a `ProductEdit` reaches `status: APPLIED`):**
-  1. Fetch the `ProductEdit` record and its `proposedChanges` JSON.
-  2. Submit only the changed fields to OFF using the same product write API (partial update — OFF uses the barcode to identify the existing entry and merges the provided fields).
-  3. Re-upload image to OFF only if `productImageUrl` is in `proposedChanges`.
-  4. Same retry and failure logic as new product sync; failure notification goes to the edit author.
-- Image assets (product photo) are pushed to OFF's image upload endpoint; the label photo is never stored or sent.
-- All sync activity is idempotent — re-running on the same barcode updates the existing OFF entry rather than creating a duplicate.
-**Schema additions to `Product`:**
-- `offSyncStatus`: `QUEUED | SYNCING | SYNCED | FAILED`
-- `offSyncAttempts: Int`
-- `offRetryAt: DateTime?`
-- `offProductUrl: String?`
-**Notes:**
-- OFF requires an account with edit rights; credentials stored in server env vars (`OFF_USERNAME`, `OFF_PASSWORD`).
-- Respect OFF's rate limits (no more than ~100 writes/hour for bot accounts).
-- All sync activity should be idempotent — re-running on the same product must not create duplicates (use barcode as the OFF product key).
+### [TICKET-P5-004] Anonymous users and FE Fixes
+**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. 
+Minor Frontend fix: Screens should be if possible one full screen with no scroll column (currently on iOS it is slightly too high on rating screen and product submission)
 **Acceptance Criteria:**
-- [ ] Products promoted to `VERIFIED` via peer review are automatically submitted to Open Food Facts.
-- [ ] Peer-verified product edits (from P5-005) are synced to OFF as updates to the existing product entry, not as new submissions.
-- [ ] Product images are uploaded to OFF alongside structured data.
-- [ ] Sync failures retry with exponential back-off and cap at 5 attempts.
-- [ ] After 5 failed attempts, the product is marked `REJECTED` and the submitter is notified.
-- [ ] Sync is idempotent — re-submitting the same barcode to OFF does not create a duplicate entry.
-- [ ] `OFF_USERNAME` and `OFF_PASSWORD` are stored in env vars, never hard-coded.
+- [ ] TODO!!!!
+- [ ] After adding a product, the slider input moves the screen (like back gesture - screen slides for close)
 
-### [TICKET-P5-005] Product Editing & Peer-Review of Changes
+### [TICKET-P5-005] Product Image Plausibility & Abuse Gating
+**Goal:** Run an AI plausibility check on uploaded images so the app (1) rejects images that are not the expected subject (a chair, a pet, a selfie) with actionable feedback, (2) reads correct product identity (name/brand/generic name) off the product photo so the submission form pre-fills instead of showing confusingly empty fields, and (3) flags genuinely abusive uploads (sexual / graphic) server-side for moderation. Implementation plan: `docs/P5-005-implementation-plan.md`.
+**Where it runs:** Inside `POST /api/products/upload-image`, on the in-memory buffer **before** the S3 write — so a rejected image is never persisted (no orphan objects). Both `kind=product` and `kind=label` uploads are gated.
+**Provider / config:** New `imagePlausibilityService.ts` using Gemini multimodal, behind a dedicated `PLAUSIBILITY_MODE` env var (`mock | gemini`, no default — fail-fast). `mock` accepts all (local/test). Independent of `VISION_MODE`. (`tesseract` VISION_MODE was removed in this ticket.)
+**Verdict contract:**
+- `ok` → upload proceeds. For `product` photos the same call returns front-of-pack `name`/`brand`/`genericName` suggestions; these win those three fields over label OCR on the form (label fills them only if the photo left them blank). Nutrition fields still come from label extraction.
+- `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.
+- `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `reason`, `createdAt`) is recorded server-side — count + free-text reason only, no category. The model's specific reason is never returned to the client.
+**Client:** Product photo is uploaded at capture time (not at submit) so rejection feedback and identity suggestions arrive before the review step; the submit step reuses the already-uploaded URL.
+**Schema:** New `UserAbuseFlag` model (`userId`, `reason?`, `createdAt`); `User.abuseFlags` relation. Deliberately no category enum — we only track the per-user count and a free-text reason. Record-only — a moderation dashboard / auto-ban threshold is a later ticket.
+**Acceptance Criteria:**
+- [x] A clearly non-product product photo is rejected (`422`) with actionable copy; nothing is written to S3.
+- [x] A blurry/unusable photo is rejected (`422`) advising a retake; nothing is written.
+- [x] A valid product photo returns `200` with `name`/`brand`/`genericName` suggestions and the `processed/` URL.
+- [x] Abusive content on **either** `kind=product` or `kind=label` returns `422` and records a `UserAbuseFlag`; nothing is written to S3.
+- [x] Non-abusive rejections do not create a `UserAbuseFlag`.
+- [x] `PLAUSIBILITY_MODE` is validated at startup; `gemini` without `GEMINI_API_KEY` throws; an invalid value throws.
+- [x] The client pre-fills the form from the upload suggestions (photo wins name/brand/genericName) and surfaces rejection reasons inline with a retake affordance; submit reuses the uploaded URL.
+- [x] `tesseract` removed from `VISION_MODE`; no remaining references in code or docs (historical dated plan docs excepted).
+- [ ] Nutritional-value plausibility (kcal ranges, macro sums) on `POST /products` — still deferred to a follow-up.
+
+### [TICKET-P5-006] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.
+**Key design decisions (resolved 2026-05-16):**
+- **Everyone goes through the proposal flow for VERIFIED products, including the original submitter.** There is no special-case bypass for the user who originally created the product — once peer-verified, every change requires fresh peer review. The PENDING_REVIEW correction path (`PATCH /products/:barcode`) is the *only* shortcut, and it only applies while the product hasn't been verified yet.
+- **Ratings persist across edits.** When an edit is APPLIED, the `Product.id` is preserved, so all existing `Rating` rows continue to reference the same product. This is intentional — the same physical product is being described, just with corrected metadata; tasters' opinions remain valid.
+- **Track both original author and last modifier.** Keep `Product.submittedByUserId` pointing at whoever originally created the row (it never changes after creation). Add a new `Product.lastModifiedByUserId` that is updated whenever an edit is APPLIED. This gives audit clarity without losing original-author attribution.
+- **The "one pending edit per barcode" rule is enforced at the database layer**, not only by an API-level 409. See the partial unique index in the schema section.
+- **Ship the full proposal model in one go** — no smaller MVP cut. The `PATCH` reset-and-revote on PENDING_REVIEW is the only lite path; every change to a VERIFIED product goes through the explicit `ProductEdit` proposal.
 **Frontend — Edit entry point:**
 - On the Product Detail screen, show an **"Edit product"** icon/button for registered users. Hidden entirely for anonymous users (no tooltip, no disabled state — just absent).
 - If the product has `status: PENDING_REVIEW`, the button label changes to **"Correct this submission"** to signal the different intent. Tapping it still opens the same edit form pre-filled with current data, but the submit path is different (see backend section below).
@@ -325,10 +330,11 @@ User History
 - Reuses the P5-004 sync infrastructure. On `APPLIED`, enqueue an OFF update for the changed fields only (partial update via the OFF product write API). Image fields are re-uploaded to OFF if they changed.
 - Sync is idempotent — uses the barcode as the OFF product key, so repeated syncs update rather than duplicate.
 **Schema additions:**
+- Add to `Product`: `lastModifiedByUserId: String?` — references the user whose edit was most recently APPLIED. Set by the edit-resolution job at the moment a `ProductEdit` flips to APPLIED. Stays `null` until the first applied edit. `submittedByUserId` is intentionally left untouched on edit so the original-author attribution is preserved permanently.
 - New model `ProductEdit`: `id`, `barcode` (FK → Product), `authorUserId`, `originalValues` (JSON — snapshot of the product fields at submission time), `proposedChanges` (JSON — field name → new value), `status` (`PENDING | APPLIED | REJECTED | EXPIRED`), `createdAt`, `expiresAt`. Capturing `originalValues` at submission time ensures the diff screen always shows the correct baseline even if the product record changes later.
 - New model `ProductEditVote`: `id`, `editId` (FK → ProductEdit), `userId`, `vote` (`APPROVE | REJECT`), `createdAt`. Composite unique key on `(editId, userId)`.
 - New model `ProductEditDismissal`: `id`, `editId` (FK → ProductEdit), `userId`, `createdAt`. Composite unique key on `(editId, userId)`. Used to persist dismissals server-side across devices.
-- Constraint: only one `ProductEdit` with `status: PENDING` allowed per barcode at a time (enforced at DB level with a partial unique index).
+- **DB-level "one pending edit per barcode" constraint.** Add a partial unique index in the migration: `CREATE UNIQUE INDEX one_pending_edit_per_product ON "ProductEdit" ("barcode") WHERE "status" = 'PENDING';`. This is the source of truth — the API's 409 response is a friendly mirror, but the database refuses the second insert even if two requests race. Prisma can declare this via `@@unique` does not support partial conditions directly, so use a raw migration step (`prisma migrate dev` will accept hand-written SQL inside the migration file).
 **Acceptance Criteria:**
 - [ ] Registered users see an "Edit product" button on the Product Detail screen; anonymous users do not.
 - [ ] For `PENDING_REVIEW` products, the button label is "Correct this submission" and submitting calls `PATCH /products/:barcode` (reset path).
@@ -347,19 +353,69 @@ User History
 - [ ] Mixed votes (1–1) wait for a third voter rather than resolving early.
 - [ ] Pending edits with no votes after 30 days are expired by a cleanup job.
 - [ ] Verified edits are synced to OFF as updates to the existing product entry.
+- [ ] The original submitter of a VERIFIED product must use the same proposal flow as any other user — no bypass path exists.
+- [ ] When an edit is APPLIED, the existing `Rating` rows on the product remain attached and unchanged.
+- [ ] When an edit is APPLIED, `Product.lastModifiedByUserId` is set to the edit's `authorUserId`; `Product.submittedByUserId` is unchanged.
+- [ ] Attempting to create a second `PENDING` `ProductEdit` for the same barcode fails at the database level (partial unique index violation), not only at the API layer.
 
 ## Phase 6: Social
 
-### [TICKET-P6-001] Group Management
-**Goal:** Enable private sharing contexts.
+### [TICKET-P6-001]  Add Product Categories
+Allow easy selection to see own votes in categories (e.g. what wine I liked, what cigars, what cocktails)
+
+### [TICKET-P6-002] Group Management
+**Goal:** Enable private sharing contexts. E.g., a household shares ratings for basic foods while enabling different opinios.
 **Logic:**
 - Users create a group -> generate shareable code.
 - Other users join via code.
 - Feed filtering: "My Groups" vs "Global".
+- Group votes: Show highest vote with member and average (if the same, don't show highest vote)
+- If you are part in a group and vote for a product - set default if always for group or private
+- If you join a group, select if you want to share no votes, all votes, some votes, select categories
+- If you are a member, in detail tab of group, share votes afterwards
 **Acceptance Criteria:**
 - [ ] User can create a group.
 - [ ] User can join a group with a code.
 - [ ] Ratings can be filtered by group context.
+- 
+### [TICKET-P6-004] User Scenario - Supermarket Lookup
+- If rating (personal or group) is already given, show not a rating screen but a rating overview (personal, groups (same logic, highest with user, and median))
+
+### [TICKET-P6-005] Open Food Facts Contribution Sync
+**Goal:** Automatically contribute user-verified product data back to the Open Food Facts (OFF) project using their write API, closing the loop between local submissions and the upstream open dataset.
+**Logic:**
+- Sync is triggered when a product or edit reaches `VERIFIED` status via peer review (not at submission time — plausibility checks gate quality, but peer approval gates OFF contribution).
+- Sync runs as a **node-cron scheduled job inside the existing `server/` process**, polling every 5 minutes for queued items. This keeps the infra simple for now; the job can be extracted to a Lambda later without changing the queue contract.
+- **New product sync:**
+    1. Fetch all `VERIFIED` products with `offSyncStatus: QUEUED`.
+    2. Submit to the OFF Product Add API (`POST https://world.openfoodfacts.org/cgi/product_jqm2.pl`) using the registered OFF bot account.
+    3. Upload product image to OFF's image endpoint.
+    4. On success: set `offSyncStatus: SYNCED`, store `offProductUrl`.
+    5. On failure: increment `offSyncAttempts`, set `offRetryAt` (exponential back-off). After 5 failures: set `offSyncStatus: FAILED` and notify the submitter **in-app** (not email — keeps the notification infrastructure simple and consistent with the rest of the app).
+- **Edit sync (triggered when a `ProductEdit` reaches `status: APPLIED`):**
+    1. Fetch the `ProductEdit` record and its `proposedChanges` JSON.
+    2. Submit only the changed fields to OFF using the same product write API (partial update — OFF uses the barcode to identify the existing entry and merges the provided fields).
+    3. Re-upload image to OFF only if `productImageUrl` is in `proposedChanges`.
+    4. Same retry and failure logic as new product sync; failure notification goes to the edit author.
+- Image assets (product photo) are pushed to OFF's image upload endpoint; the label photo is never stored or sent.
+- All sync activity is idempotent — re-running on the same barcode updates the existing OFF entry rather than creating a duplicate.
+  **Schema additions to `Product`:**
+- `offSyncStatus`: `QUEUED | SYNCING | SYNCED | FAILED`
+- `offSyncAttempts: Int`
+- `offRetryAt: DateTime?`
+- `offProductUrl: String?`
+  **Notes:**
+- OFF requires an account with edit rights; credentials stored in server env vars (`OFF_USERNAME`, `OFF_PASSWORD`).
+- Respect OFF's rate limits (no more than ~100 writes/hour for bot accounts).
+- All sync activity should be idempotent — re-running on the same product must not create duplicates (use barcode as the OFF product key).
+  **Acceptance Criteria:**
+- [ ] Products promoted to `VERIFIED` via peer review are automatically submitted to Open Food Facts.
+- [ ] Peer-verified product edits (from P5-005) are synced to OFF as updates to the existing product entry, not as new submissions.
+- [ ] Product images are uploaded to OFF alongside structured data.
+- [ ] Sync failures retry with exponential back-off and cap at 5 attempts.
+- [ ] After 5 failed attempts, the product is marked `REJECTED` and the submitter is notified.
+- [ ] Sync is idempotent — re-submitting the same barcode to OFF does not create a duplicate entry.
+- [ ] `OFF_USERNAME` and `OFF_PASSWORD` are stored in env vars, never hard-coded.
 
 ## Phase 7: Auth Enhancements
 
@@ -399,10 +455,17 @@ User History
 - [ ] A non-member cannot read any data from a group they do not belong to.
 - [ ] A group `MEMBER` cannot perform admin-only actions (delete group, manage members, regenerate code).
 - [ ] A group `ADMIN` can perform all admin-only actions within their group.
+- [ ] A Moderator or ADMIN can allow products directly
 - [ ] Ownership guards are implemented as composable middleware, not adD-hoc per-controller checks.
 - [ ] All new authorization rules are covered by integration tests.
 
 # Future Plans and Ideas
+
+## Ensure offline usability
+Snappy startup and offline usability - cached user votes and products on device (in supermarkets the mobile connection is often poor)
+
+## Tracing id and Idempotency
+Help tracing the path of requests to different systems with tracing and span ids, detect duplicated requests with idempotency keys
 
 ## Release
 - Create Terms and Conditions
@@ -412,5 +475,13 @@ User History
 - iOS Appstore Process
 
 ## User Engagement
-- Create User Role "Moderator" which can review multiple products in a row
+- Create User Role "Moderator" which can review multiple products in a row and their vote (or that of an admin) finalizes review (so a single vote is enough to accept/decline)
 
+## Non-ISBN Products
+- Enable user to rate more general products without a explicit code (e.g. not food)
+
+## Search by name
+- Enable users to search for products by name instead of isbn code
+
+## Pro Users can set own pictures
+- Low Prio, enable users to replace picture with a better one (at least for themselfs)

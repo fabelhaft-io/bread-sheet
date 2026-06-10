@@ -33,6 +33,7 @@ Anonymous (guest) users have a Supabase UUID and session but no email or usernam
 | `submittedByUserId` | `Product.submittedByUserId` | Pseudonymous | Links product to user UUID |
 | Edit proposals | `ProductEdit.*` | No (content); pseudonymous (authorUserId) | |
 | Edit votes | `ProductEditVote.*` | Pseudonymous | `userId` only; vote itself is not PII |
+| Peer verification vote | `ProductVerification.vote` | Pseudonymous | `userId` links vote to user UUID; `vote` value (`APPROVE`/`REJECT`) is not PII |
 
 ### 1.3 Behavioural / Derived Data
 
@@ -64,18 +65,21 @@ Anonymous (guest) users have a Supabase UUID and session but no email or usernam
 
 **`[TODO: Legal review]`** Confirm Supabase's DPA (Data Processing Agreement) is signed and the project region aligns with your data residency requirements.
 
-### 2.2 Anthropic Claude API
+### 2.2 Google Cloud Vision API
 
 **Data sent:**
-- `POST /products/extract-label` (text path): raw OCR text extracted from a nutritional label — typically ingredient lists and nutritional tables. No PII.
-- `POST /products/extract-label` (vision path): a compressed JPEG of a nutritional label. No PII if the user photographed the label correctly, but the user could inadvertently include background content.
-- `POST /products` and `PATCH /products/:barcode`: product name, brand, and nutritional values for plausibility checking. No PII.
+- `POST /products/extract-label` (image path only, fallback): a compressed JPEG of a nutritional label. No PII if the user photographed the label correctly, but the user could inadvertently include background content.
 
-**Purpose:** Structuring unstructured text into JSON fields; detecting implausible or nonsensical product data.
+**Not sent to any external API:**
+- `POST /products/extract-label` (text path, primary): raw OCR text is structured entirely by a local regex parser (`labelExtractionService.ts`) — no data leaves the server.
 
-**Retention:** Anthropic's API usage policy governs whether prompts are used for model training. At the time of writing, API inputs are not used for training by default unless opted in. **`[TODO: Legal review]`** Verify Anthropic's current DPA status and confirm whether a Business Associate Agreement or equivalent is needed.
+**Purpose:** Extracting raw text from a nutritional label image when on-device OCR yields insufficient text (image fallback path only).
 
-**Mitigation:** The label vision path should only be called as a fallback when on-device OCR yields insufficient text. This minimises the volume of image data sent to Anthropic.
+**Authentication:** Application Default Credentials (ADC) via Workload Identity Federation in production — no service account JSON key is stored.
+
+**Retention:** Google's Cloud Vision API does not retain request data for model training by default. **`[TODO: Legal review]`** Verify Google's current DPA status and confirm the Cloud Vision data-processing terms align with your data residency requirements.
+
+**Mitigation:** The image path is only called as a fallback when on-device OCR yields insufficient text (`rawText` length < `MIN_OCR_LENGTH = 50`). This minimises the volume of image data sent externally.
 
 ### 2.3 Open Food Facts (OFF)
 
@@ -133,7 +137,7 @@ User ─────────────────────────
  │         │                                        │
  │       Group (id, name, inviteCode)               │
  │                                                  │
- ├─── ProductVerification (userId, barcode)         │
+ ├─── ProductVerification (productId, userId, vote)  │
  │                                                  │
  ├─── ProductEdit (id, barcode, authorUserId,       │
  │        originalValues, proposedChanges, status)  │
@@ -165,7 +169,7 @@ Full schema with types and constraints: `server/prisma/schema.prisma`.
 | Anonymous session data | Legitimate interest (Art. 6(1)(f)) | Allows immediate app use without registration |
 | Product submissions | Legitimate interest | Contributing to an open food database |
 | OFF contribution | Legitimate interest | Improving public food data; user informed at submission |
-| Label text/image sent to Claude API | Legitimate interest | Necessary for label extraction feature; no PII |
+| Label image sent to Google Cloud Vision | Legitimate interest | Fallback path only when on-device OCR yields insufficient text; no PII |
 
 ### 5.2 User Rights
 
@@ -200,7 +204,7 @@ Full schema with types and constraints: `server/prisma/schema.prisma`.
 ## 6. Outstanding Action Items
 
 - [ ] Sign Supabase DPA; confirm EU data residency for production project.
-- [ ] Confirm Anthropic API data-use policy; obtain DPA if required.
+- [ ] Confirm Google Cloud Vision API data-use policy; obtain DPA if required.
 - [ ] Add one-time consent prompt before first product photo submission, informing users of OFF contribution and ODbL licensing.
 - [ ] Implement `GET /users/me/export` (data portability).
 - [ ] Implement `DELETE /users/me` (right to erasure).

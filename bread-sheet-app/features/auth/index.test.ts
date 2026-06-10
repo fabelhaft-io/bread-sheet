@@ -1,9 +1,15 @@
 import { isValidEmail, signIn, signUp, signOut, signInAsGuest, upgradeAccount } from './index';
 import { supabase } from '@/lib/supabase';
 
-jest.mock('expo-linking', () => ({
-  createURL: jest.fn(() => 'myapp://'),
-}));
+const TEST_REDIRECT_URL = 'http://localhost:3000/auth/callback';
+
+beforeAll(() => {
+  process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL = TEST_REDIRECT_URL;
+});
+
+afterAll(() => {
+  delete process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL;
+});
 
 jest.mock('@/lib/supabase', () => ({
   supabase: {
@@ -60,7 +66,7 @@ describe('signUp', () => {
     expect(mockAuth.signUp).toHaveBeenCalledWith({
       email: 'a@b.com',
       password: 'secret',
-      options: { emailRedirectTo: 'myapp://' },
+      options: { emailRedirectTo: TEST_REDIRECT_URL },
     });
   });
 });
@@ -79,7 +85,7 @@ describe('upgradeAccount', () => {
     await upgradeAccount('a@b.com', 'newpass');
     expect(mockAuth.updateUser).toHaveBeenCalledWith(
       { email: 'a@b.com', password: 'newpass' },
-      { emailRedirectTo: 'myapp://' },
+      { emailRedirectTo: TEST_REDIRECT_URL },
     );
   });
 });

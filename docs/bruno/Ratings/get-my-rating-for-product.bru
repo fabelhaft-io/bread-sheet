@@ -1,0 +1,23 @@
+meta {
+  name: Get my rating for product
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/ratings/me/{{barcode}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  Returns the authenticated caller's rating for the given product, or 404 if they haven't rated it yet.
+  Used by the product screen to pre-populate the slider and comment field on a return visit.
+
+  Errors:
+  - 404 — product not found in the local cache, OR product exists but the caller has not rated it.
+}
