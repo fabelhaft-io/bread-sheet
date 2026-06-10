@@ -458,13 +458,14 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] A non-member cannot read any data from a group they do not belong to.
 - [ ] A group `MEMBER` cannot perform admin-only actions (delete group, manage members, regenerate code).
 - [ ] A group `ADMIN` can perform all admin-only actions within their group.
+- [ ] A Moderator or ADMIN can allow products directly
 - [ ] Ownership guards are implemented as composable middleware, not adD-hoc per-controller checks.
 - [ ] All new authorization rules are covered by integration tests.
 
 # Future Plans and Ideas
 
 ## Ensure offline usability
-Snappy startup - cached user votes and products on device (in supermarkets the mobile connection is often poor)
+Snappy startup and offline usability - cached user votes and products on device (in supermarkets the mobile connection is often poor)
 
 ## Tracing id and Idempotency
 Help tracing the path of requests to different systems with tracing and span ids, detect duplicated requests with idempotency keys
@@ -477,7 +478,7 @@ Help tracing the path of requests to different systems with tracing and span ids
 - iOS Appstore Process
 
 ## User Engagement
-- Create User Role "Moderator" which can review multiple products in a row
+- Create User Role "Moderator" which can review multiple products in a row and their vote (or that of an admin) finalizes review (so a single vote is enough to accept/decline)
 
 ## Non-ISBN Products
 - Enable user to rate more general products without a explicit code (e.g. not food)
