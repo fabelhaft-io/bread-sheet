@@ -8,7 +8,8 @@ services:
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=breadsheet
     volumes:
-      - db_data:/var/lib/postgresql/data
+      # Postgres 18+ stores data in a version-specific subdir; mount the parent.
+      - db_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin -d breadsheet"]
       interval: 5s
@@ -50,8 +51,10 @@ services:
       - ./server/src:/usr/src/app/src
       # Mount prisma directory to persist schema and migration changes
       - ./server/prisma:/usr/src/app/prisma
-      # Mount host ADC credentials for VISION_MODE=live (run 'gcloud auth application-default login' on the host first)
-      - ${APPDATA}/gcloud/application_default_credentials.json:/root/.config/gcloud/application_default_credentials.json:ro
+      # Mount host ADC credentials for VISION_MODE=live (run 'gcloud auth application-default login' on the host first).
+      # GCLOUD_ADC_PATH points at the host ADC file; set it in the root .env per-OS (Linux: ~/.config/gcloud/...,
+      # Windows: %APPDATA%\gcloud\...). See .env.example.
+      - ${GCLOUD_ADC_PATH}:/root/.config/gcloud/application_default_credentials.json:ro
     profiles:
       - app-dev
 
@@ -63,10 +66,12 @@ services:
     environment:
       - SERVICES=s3,lambda,iam,sts,sqs
       - DEBUG=1
-      - DOCKER_HOST=unix:///var/run/docker.sock # Required for Lambda execution
+      - DOCKER_HOST=unix:///var/run/podman.sock # Required for Lambda execution
       - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}
     volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock"
+      # Docker
+      #- "/var/run/docker.sock:/var/run/docker.sock"
+      - "${XDG_RUNTIME_DIR}/podman/podman.sock:/var/run/podman.sock"
       - localstack_data:/var/lib/localstack
       - ./scripts/localstack-init.sh:/etc/localstack/init/ready.d/init-buckets.sh:ro
       # image-resizer Lambda bundle — build on the host first:
