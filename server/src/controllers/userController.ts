@@ -9,10 +9,16 @@ export const syncUser = async (req: AuthRequest, res: Response, next: NextFuncti
   try {
     const { id, email } = req.user!;
 
+    // Supabase anonymous users carry an empty-string email (''), not undefined.
+    // `email` is @unique, and Postgres treats '' as a real value (so a second
+    // anonymous user collides), but allows multiple NULLs. Normalise any
+    // falsy email to null so anonymous sessions don't violate the constraint.
+    const normalizedEmail = email || null;
+
     const user = await prisma.user.upsert({
       where: { id },
-      update: { email: email ?? null },
-      create: { id, email: email ?? null },
+      update: { email: normalizedEmail },
+      create: { id, email: normalizedEmail },
     });
 
     logger.info(`User synced: ${user.id}`);

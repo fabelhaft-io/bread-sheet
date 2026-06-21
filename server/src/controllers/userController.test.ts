@@ -3,6 +3,7 @@ import request from 'supertest';
 
 const mockUserUpsert = vi.hoisted(() => vi.fn());
 const mockRatingFindMany = vi.hoisted(() => vi.fn());
+const authUser = vi.hoisted(() => ({ current: { id: 'user-1', email: 'test@test.com' } as { id: string; email?: string } }));
 
 vi.mock('../db.js', () => ({
   default: {
@@ -13,7 +14,7 @@ vi.mock('../db.js', () => ({
 
 vi.mock('../middlewares/authMiddleware.js', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { id: 'user-1', email: 'test@test.com' };
+    req.user = { ...authUser.current };
     next();
   },
   requireRegistered: (_req: any, _res: any, next: any) => next(),
@@ -30,6 +31,7 @@ import app from '../app.js';
 describe('POST /api/users/sync', () => {
   beforeEach(() => {
     mockUserUpsert.mockReset();
+    authUser.current = { id: 'user-1', email: 'test@test.com' };
   });
 
   it('upserts the user and returns 200 with the user record', async () => {
@@ -49,11 +51,32 @@ describe('POST /api/users/sync', () => {
       create: { id: 'user-1', email: 'test@test.com' },
     });
   });
+
+  it('normalises the empty-string email of anonymous users to null', async () => {
+    // Supabase anonymous sessions carry email: '' — writing that as-is would
+    // collide on the unique email constraint for a second anonymous user.
+    authUser.current = { id: 'anon-1', email: '' };
+    const user = { id: 'anon-1', email: null, username: null, avatar: null };
+    mockUserUpsert.mockResolvedValue(user);
+
+    const res = await request(app)
+      .post('/api/users/sync')
+      .set('Authorization', 'Bearer token')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(mockUserUpsert).toHaveBeenCalledWith({
+      where: { id: 'anon-1' },
+      update: { email: null },
+      create: { id: 'anon-1', email: null },
+    });
+  });
 });
 
 describe('GET /api/users/me/ratings', () => {
   beforeEach(() => {
     mockRatingFindMany.mockReset();
+    authUser.current = { id: 'user-1', email: 'test@test.com' };
   });
 
   it('returns the authenticated user\'s ratings ordered by newest first', async () => {
