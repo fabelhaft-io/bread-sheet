@@ -263,6 +263,31 @@ Keep the Lambda runtime in `scripts/localstack-init.sh` in sync with `terraform/
 
 In production, Vertex AI is the only Gemini path (`GOOGLE_GENAI_USE_VERTEXAI=true`) and Vision uses `live`. Both resolve ADC through **Workload Identity Federation** — `GOOGLE_APPLICATION_CREDENTIALS` points at a WIF credential config file mounted via a Kubernetes ConfigMap, and the service account needs `roles/cloudvision.user` + `roles/aiplatform.user`. No service-account JSON key or `GEMINI_API_KEY` is stored anywhere. See `docs/server-production.md`.
 
+### Deploy to AWS (dev environment)
+
+The `terraform/` root provisions a full cloud environment (VPC + EKS + RDS + ECR + S3 + image-resizer Lambda). The `dev` environment uses cheap sizing (`t3.small` nodes, `db.t4g.micro`, single NAT). **This creates real, billable AWS resources** and requires AWS credentials.
+
+```sh
+# 1. One-time: create the remote state bucket (see infrastructure.md)
+aws s3 mb s3://breadsheet-tfstate --region us-east-1
+
+# 2. Init (selects the dev backend + downloads modules) and apply
+terraform -chdir=terraform init -backend-config=environments/dev.s3.tfbackend
+terraform -chdir=terraform apply -var-file=environments/dev.tfvars
+
+# 3. Build + push the server image to the new ECR repo
+ECR=$(terraform -chdir=terraform output -raw ecr_repository_url)
+aws ecr get-login-password | docker login --username AWS --password-stdin "${ECR%/*}"
+docker build -t "$ECR:latest" server/ && docker push "$ECR:latest"
+
+# 4. Configure kubectl, create the app Secret, and apply the manifests
+aws eks update-kubeconfig --name "$(terraform -chdir=terraform output -raw cluster_name)"
+# create bread-sheet-server-secrets (DATABASE_URL/SUPABASE_*/GEMINI_API_KEY) — see infrastructure.md
+kubectl apply -f terraform/k8s/
+```
+
+To validate the terraform without credentials (no apply): `terraform -chdir=terraform init -backend=false && terraform -chdir=terraform validate`. Full runbook (remote-state bootstrap, IRSA, secret creation): [`docs/architecture/infrastructure.md`](docs/architecture/infrastructure.md).
+
 ## Running on Windows
 
 The project is developed on Linux/Podman, but it runs on Windows with Docker too. Use a **native Windows terminal (PowerShell or CMD)** — not WSL2 — and adapt as follows:

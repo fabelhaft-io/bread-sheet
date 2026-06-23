@@ -55,15 +55,54 @@ The build script installs the Linux x64 variant of sharp into `dist/bundle/node_
 
 ## Cloud Infrastructure (Terraform)
 
-`terraform/` is the single source of truth for all AWS resources. Environment-specific variables are in `terraform/environments/`. Apply via CI or manually:
+`terraform/` is the single source of truth for all AWS resources. Environment-specific
+variables are in `terraform/environments/`. There are three environments — `local`
+(LocalStack), `dev`, and `production` — selected by the `-var-file` you pass.
+
+**Cloud resources are gated.** The VPC, EKS, RDS, ECR, and IRSA resources are created only
+when `localstack_endpoint == ""` (real AWS). The `local` environment keeps `localstack_endpoint`
+set, so it provisions **only** the S3 bucket + image-resizer Lambda — the rest evaluate to
+`count = 0`. The gate is `local.cloud_count` in `locals.tf`.
+
+### Remote state (S3 backend)
+
+State lives in an S3 backend with one key per environment (`<env>/terraform.tfstate`). The
+backend is configured partially in `backend.tf`; concrete bucket/key/region come from a
+per-environment `*.tfbackend` file at init time. Locking uses the S3-native lock file
+(`use_lockfile`, Terraform ≥ 1.10) — no DynamoDB table.
+
+**One-time bootstrap** (the state bucket must exist before the first `init`):
 
 ```sh
-# Local (LocalStack)
-terraform -chdir=terraform apply -var-file=environments/local.tfvars
-
-# Production
-terraform -chdir=terraform apply -var-file=environments/production.tfvars
+aws s3 mb s3://breadsheet-tfstate --region us-east-1
+aws s3api put-bucket-versioning --bucket breadsheet-tfstate \
+  --versioning-configuration Status=Enabled
 ```
+
+> The repo still contains a legacy committed `terraform/terraform.tfstate` (LocalStack state).
+> Once the remote backend is adopted, remove it from version control
+> (`git rm --cached terraform/terraform.tfstate*`) — `.gitignore` already excludes future
+> state files.
+
+### Apply
+
+```sh
+# Init selects the backend + downloads modules. Re-run when switching environments.
+terraform -chdir=terraform init -backend-config=environments/dev.s3.tfbackend
+
+# dev
+terraform -chdir=terraform apply -var-file=environments/dev.tfvars
+
+# production
+terraform -chdir=terraform init -backend-config=environments/production.s3.tfbackend
+terraform -chdir=terraform apply -var-file=environments/production.tfvars
+
+# Local (LocalStack) — backend targets LocalStack's emulated S3
+terraform -chdir=terraform init -backend-config=environments/local.s3.tfbackend
+terraform -chdir=terraform apply -var-file=environments/local.tfvars
+```
+
+To validate config without AWS credentials (no apply): `init -backend=false` then `validate`.
 
 ### Resources provisioned
 
@@ -112,9 +151,36 @@ A "pull-based" GitOps model: ArgoCD watches the manifest repository and applies 
 2. Applies it to the EKS cluster.
 3. Kubernetes performs a rolling update: new pods with the new image start before old pods terminate.
 
-### Kubernetes Manifests (`/k8s`)
+### Kubernetes Manifests (`terraform/k8s/`)
 
-YAML files declaring the desired cluster state (Deployments, Services, Ingress). ArgoCD treats these as the authoritative source.
+YAML files declaring the desired cluster state. ArgoCD treats these as the authoritative source
+(`argocd-application.yaml` points at this path).
+
+| File | Purpose |
+|------|---------|
+| `deployment.yaml` | Server Deployment. An `initContainer` runs `npm run db:deploy` (Prisma migrate) before the server starts; probes hit `GET /`. Image is `ECR_REPOSITORY_URL:<tag>` — CI rewrites the tag to the Git SHA. |
+| `service.yaml` | `LoadBalancer` Service exposing the API on port 80 → container 3000. |
+| `configmap.yaml` | Non-secret env (matches `server/src/configs/config.ts`): `S3_MODE=aws`, `S3_BUCKET_NAME`, `ASSET_BASE_URL`, `VISION_MODE`, `PLAUSIBILITY_MODE`, etc. |
+| `secret.yaml` | **Template only** — `DATABASE_URL`, `SUPABASE_*`, `GEMINI_API_KEY`. Create the real Secret out-of-band (see below); never commit values. |
+| `serviceaccount.yaml` | `bread-sheet-server` SA, annotated with the IRSA role ARN (S3 access without static keys). |
+
+**Deploy to dev (after `terraform apply`):**
+
+```sh
+aws eks update-kubeconfig --name "$(terraform -chdir=terraform output -raw cluster_name)"
+
+# Annotate the SA with the IRSA role, fill ECR image, then create the secret from
+# the RDS-managed credential + Supabase/Gemini keys:
+kubectl create secret generic bread-sheet-server-secrets -n default \
+  --from-literal=DATABASE_URL='postgresql://breadsheet:<pw>@<rds-endpoint>:5432/breadsheet' \
+  --from-literal=SUPABASE_URL='https://<project>.supabase.co' \
+  --from-literal=SUPABASE_PUBLISHABLE_DEFAULT_KEY='<key>' \
+  --from-literal=GEMINI_API_KEY='<key>'
+
+kubectl apply -f terraform/k8s/
+```
+
+The RDS master password is managed by AWS in Secrets Manager (`terraform output rds_master_secret_arn`) — read it from there rather than setting one manually. The `ASSET_BASE_URL` and the image-resizer Lambda/S3 wiring are identical to production.
 
 ---
 

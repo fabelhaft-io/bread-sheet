@@ -4,7 +4,9 @@ metadata:
   name: bread-sheet-server-svc
   namespace: default
 spec:
-  type: ClusterIP # Use LoadBalancer to expose externally via an ELB
+  # LoadBalancer provisions an ELB so the dev API is reachable from devices/Expo.
+  # Use ClusterIP instead if fronting with an Ingress / API gateway.
+  type: LoadBalancer
   selector:
     app: bread-sheet-server
   ports:

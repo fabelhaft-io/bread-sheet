@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bread-sheet-server-config
+  namespace: default
+# Non-secret runtime config. Every key here is validated at startup by
+# server/src/configs/config.ts — missing/invalid values crash the pod by design
+# (fail-fast, no silent defaults). Secrets live in the Secret, not here.
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  AWS_REGION: "us-east-1"
+  # Real AWS S3 (SDK-default virtual-hosted addressing).
+  S3_MODE: "aws"
+  S3_BUCKET_NAME: "breadsheet-images-dev"
+  # Public base URL where stored image KEYS resolve. Replace with the bucket's
+  # public/CDN URL, e.g. https://breadsheet-images-dev.s3.us-east-1.amazonaws.com
+  ASSET_BASE_URL: "https://breadsheet-images-dev.s3.us-east-1.amazonaws.com"
+  VISION_MODE: "mock"
+  PLAUSIBILITY_MODE: "mock"
+  # breadsheet for a production/standalone build; exp+breadsheet for Expo Go.
+  APP_DEEP_LINK_SCHEME: "breadsheet"

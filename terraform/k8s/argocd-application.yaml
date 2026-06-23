@@ -6,9 +6,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/your-username/bread-sheet.git' # Your repo URL
+    repoURL: 'https://github.com/fabelhaft-io/bread-sheet.git'
     targetRevision: HEAD
-    path: k8s # The directory ArgoCD should watch
+    path: terraform/k8s # The directory ArgoCD should watch
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: default
