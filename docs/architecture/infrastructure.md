@@ -55,6 +55,11 @@ The build script installs the Linux x64 variant of sharp into `dist/bundle/node_
 
 ## Cloud Infrastructure (Terraform)
 
+> **Cost note:** the EKS stack below runs ~$170/mo idle — heavily oversized for a small private
+> app. For a cheap (~$15–30/mo) always-on production on AWS, see
+> [`cheap-prod-fargate.md`](cheap-prod-fargate.md), which replaces EKS with ECS Fargate while
+> keeping this stack as a spin-up-and-destroy learning sandbox.
+
 `terraform/` is the single source of truth for all AWS resources. Environment-specific
 variables are in `terraform/environments/`. There are three environments — `local`
 (LocalStack), `dev`, and `production` — selected by the `-var-file` you pass.

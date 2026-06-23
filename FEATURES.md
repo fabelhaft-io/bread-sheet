@@ -485,3 +485,13 @@ Help tracing the path of requests to different systems with tracing and span ids
 
 ## Pro Users can set own pictures
 - Low Prio, enable users to replace picture with a better one (at least for themselfs)
+
+## Infrastructure cost optimization
+- Prod runs on ECS Fargate + RDS (see `docs/architecture/cheap-prod-fargate.md`). RDS `db.t4g.micro`
+  is free for the first 12 months on the AWS free tier, then ~$13/mo.
+- **After the free-tier year**, revisit the database to handle cost: migrate from managed RDS to a
+  containerized Postgres (Postgres container + EBS volume, or a Postgres sidecar task) to push the DB
+  cost toward ~$0. Trade-off: you take over backups (nightly `pg_dump` to S3) and lose managed
+  failover — acceptable for a small private app.
+- Other levers if needed: drop to a smaller Fargate task, or evaluate Aurora Serverless v2
+  auto-pause. Keep the EKS sandbox branch destroyed when not actively learning.
