@@ -206,6 +206,7 @@ Architecture and data documentation lives in `docs/architecture/`:
 | `backend.md` | Express API — middleware stack, endpoints, data model, image pipeline, background jobs |
 | `infrastructure.md` | Terraform/AWS resources, Docker Compose local dev, GitOps deployment pipeline |
 | `cheap-prod-fargate.md` | Plan: low-cost always-on prod on ECS Fargate (replaces EKS); EKS kept as a sandbox |
+| `fargate-handbuild.md` | Living runbook: build the Fargate stack by hand (learn-by-doing) then import to Terraform; tracks per-step status |
 | `data.md` | Data inventory, third-party flows, user content rights, GDPR obligations |
 
 Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.usebruno.com/). Copy `docs/bruno/environments/.env.example` to `docs/bruno/environments/.env` and fill in your Supabase credentials. Run **Auth › Sign in with password** (or **Sign in anonymously**) once — the post-response script stores the JWT in `accessToken` automatically. All other requests use it via their bearer auth.

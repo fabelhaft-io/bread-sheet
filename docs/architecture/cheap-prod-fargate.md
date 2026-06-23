@@ -143,6 +143,9 @@ Because each stack uses a **distinct remote-state key**, they never collide. The
 
 ## Implementation outline
 
+> Being built **hands-on first** (console/CLI) then imported to Terraform — progress tracked in
+> [`fargate-handbuild.md`](fargate-handbuild.md).
+
 With the decisions above, the build is:
 
 1. Add `ecs.tf` — cluster, task definition (GHCR image; command `db:deploy && start`), service
