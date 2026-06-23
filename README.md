@@ -265,28 +265,29 @@ In production, Vertex AI is the only Gemini path (`GOOGLE_GENAI_USE_VERTEXAI=tru
 
 ### Deploy to AWS (dev environment)
 
-The `terraform/` root provisions a full cloud environment (VPC + EKS + RDS + ECR + S3 + image-resizer Lambda). The `dev` environment uses cheap sizing (`t3.small` nodes, `db.t4g.micro`, single NAT). **This creates real, billable AWS resources** and requires AWS credentials.
+The `terraform/` root provisions a full cloud environment (VPC + EKS + RDS + S3 + image-resizer Lambda + GCP Workload Identity Federation). The `dev` environment uses cheap sizing (`t3.small` nodes, `db.t4g.micro`, single NAT). **This creates real, billable AWS resources** and requires AWS credentials (and a GCP project for live Vision/Vertex). The server image is hosted **free** on GitHub Container Registry — no ECR.
 
 ```sh
 # 1. One-time: create the remote state bucket (see infrastructure.md)
 aws s3 mb s3://breadsheet-tfstate --region us-east-1
 
-# 2. Init (selects the dev backend + downloads modules) and apply
+# 2. Set gcp_project (+ optionally lock allowed_cidrs to your IP) in
+#    terraform/environments/dev.tfvars, then init + apply
 terraform -chdir=terraform init -backend-config=environments/dev.s3.tfbackend
 terraform -chdir=terraform apply -var-file=environments/dev.tfvars
 
-# 3. Build + push the server image to the new ECR repo
-ECR=$(terraform -chdir=terraform output -raw ecr_repository_url)
-aws ecr get-login-password | docker login --username AWS --password-stdin "${ECR%/*}"
-docker build -t "$ECR:latest" server/ && docker push "$ECR:latest"
+# 3. The server image is built & pushed to ghcr.io by GitHub Actions
+#    (.github/workflows/build-image.yml) on push to main — nothing to do locally.
 
-# 4. Configure kubectl, create the app Secret, and apply the manifests
+# 4. Configure kubectl, create the app Secret + WIF cred config, apply manifests
 aws eks update-kubeconfig --name "$(terraform -chdir=terraform output -raw cluster_name)"
-# create bread-sheet-server-secrets (DATABASE_URL/SUPABASE_*/GEMINI_API_KEY) — see infrastructure.md
+# create bread-sheet-server-secrets (DATABASE_URL/SUPABASE_*) + gcp-wif-cred-config,
+# fill the manifest placeholders (IRSA ARN, GCP project, WIF audience, your IP) —
+# full runbook in infrastructure.md
 kubectl apply -f terraform/k8s/
 ```
 
-To validate the terraform without credentials (no apply): `terraform -chdir=terraform init -backend=false && terraform -chdir=terraform validate`. Full runbook (remote-state bootstrap, IRSA, secret creation): [`docs/architecture/infrastructure.md`](docs/architecture/infrastructure.md).
+To validate the terraform without credentials (no apply): `terraform -chdir=terraform init -backend=false && terraform -chdir=terraform validate`. Full runbook (remote-state bootstrap, IRSA, keyless Google Cloud via WIF, secret creation, IP firewall): [`docs/architecture/infrastructure.md`](docs/architecture/infrastructure.md).
 
 ## Running on Windows
 

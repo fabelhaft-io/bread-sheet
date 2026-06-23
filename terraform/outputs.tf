@@ -12,11 +12,6 @@ output "cluster_endpoint" {
   value       = one(module.eks[*].cluster_endpoint)
 }
 
-output "ecr_repository_url" {
-  description = "ECR repo to push the server image to (CI: docker push <this>:<git-sha>)."
-  value       = one(aws_ecr_repository.server[*].repository_url)
-}
-
 output "rds_endpoint" {
   description = "RDS endpoint host:port for assembling DATABASE_URL."
   value       = one(module.rds[*].db_instance_endpoint)
@@ -35,4 +30,14 @@ output "server_irsa_role_arn" {
 output "images_bucket" {
   description = "S3 bucket for product images."
   value       = aws_s3_bucket.images.bucket
+}
+
+output "gcp_wif_provider" {
+  description = "Full WIF provider resource name — pass to `gcloud iam workload-identity-pools create-cred-config` to generate the pod credential config."
+  value       = one(google_iam_workload_identity_pool_provider.eks_oidc[*].name)
+}
+
+output "gcp_service_account_email" {
+  description = "GCP service account the pod impersonates (Vision/Vertex). Used by create-cred-config --service-account."
+  value       = one(google_service_account.server[*].email)
 }

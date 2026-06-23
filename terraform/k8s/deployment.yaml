@@ -20,16 +20,15 @@ spec:
       # `db:deploy` = prisma migrate deploy && prisma generate (server/package.json).
       initContainers:
         - name: migrate
-          # CI rewrites the tag to the pushed Git SHA. Replace the repo host with
-          # terraform output `ecr_repository_url`.
-          image: ECR_REPOSITORY_URL:latest
+          # Public GHCR image; CI rewrites the tag to the pushed Git SHA.
+          image: ghcr.io/fabelhaft-io/bread-sheet-server:latest
           command: ["npm", "run", "db:deploy"]
           envFrom:
             - secretRef:
                 name: bread-sheet-server-secrets
       containers:
         - name: server
-          image: ECR_REPOSITORY_URL:latest
+          image: ghcr.io/fabelhaft-io/bread-sheet-server:latest
           ports:
             - containerPort: 3000
           envFrom:
@@ -37,6 +36,14 @@ spec:
                 name: bread-sheet-server-config
             - secretRef:
                 name: bread-sheet-server-secrets
+          volumeMounts:
+            # Projected SA token + WIF cred config — keyless Google Cloud auth.
+            - name: gcp-token
+              mountPath: /var/run/secrets/gcp
+              readOnly: true
+            - name: gcp-wif-cred-config
+              mountPath: /etc/gcp
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /
@@ -56,3 +63,17 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+      volumes:
+        # Kubernetes mints a short-lived token for the pod's ServiceAccount.
+        # `audience` MUST match the WIF credential config's `audience` field
+        # (//iam.googleapis.com/<gcp_wif_provider output>).
+        - name: gcp-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: //iam.googleapis.com/REPLACE_WITH_gcp_wif_provider_OUTPUT
+                  expirationSeconds: 3600
+                  path: token
+        - name: gcp-wif-cred-config
+          configMap:
+            name: gcp-wif-cred-config

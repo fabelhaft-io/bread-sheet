@@ -26,6 +26,17 @@ variable "s3_bucket_name" {
 # ── Cloud (VPC / EKS / RDS) — only used when localstack_endpoint == "" ─────────
 # Defaults are sized for a cheap dev environment; override in production.tfvars.
 
+variable "allowed_cidrs" {
+  type        = list(string)
+  description = "Source CIDRs allowed to reach the public surfaces (EKS API endpoint). Lock to your /32 for a private dev env; ['0.0.0.0/0'] is open to the world."
+  default     = ["0.0.0.0/0"]
+
+  validation {
+    condition     = length(var.allowed_cidrs) > 0
+    error_message = "allowed_cidrs must contain at least one CIDR."
+  }
+}
+
 variable "vpc_cidr" {
   type        = string
   description = "CIDR block for the VPC."
@@ -108,4 +119,32 @@ variable "db_deletion_protection" {
   type        = bool
   description = "Protect the RDS instance from accidental deletion."
   default     = false
+}
+
+# ── GCP Workload Identity Federation (keyless Vision / Vertex AI) ──────────────
+# Lets the server pod authenticate to Google Cloud via its EKS ServiceAccount
+# token — no key file. Only created for real-AWS environments with the toggle on.
+
+variable "enable_google_wif" {
+  type        = bool
+  description = "Provision GCP Workload Identity Federation so the server pod can call Cloud Vision / Vertex AI keylessly."
+  default     = true
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID hosting Vision/Vertex AI. Required when enable_google_wif is true."
+  default     = ""
+}
+
+variable "gcp_location" {
+  type        = string
+  description = "GCP location for Vertex AI (e.g. europe-west1). Maps to GOOGLE_CLOUD_LOCATION."
+  default     = "europe-west1"
+}
+
+variable "gcp_wif_pool_id" {
+  type        = string
+  description = "Workload Identity Pool ID to create for the EKS cluster."
+  default     = "eks-breadsheet"
 }

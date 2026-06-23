@@ -113,9 +113,9 @@ Local dev uses Docker Compose:
 - PostgreSQL 18-Alpine on port 5432 (`admin:password@localhost:5432/breadsheet`)
 - LocalStack on port 4566 (emulates S3, Lambda, IAM, STS)
 
-Cloud environments (`dev`, `production`) run on EKS (Terraform-provisioned: VPC + EKS + RDS + ECR + S3 + image-resizer Lambda) with ArgoCD for GitOps. Database migrations run as an initContainer (`npm run db:deploy`) before the server pod starts.
+Cloud environments (`dev`, `production`) run on EKS (Terraform-provisioned: VPC + EKS + RDS + S3 + image-resizer Lambda) with ArgoCD for GitOps. Database migrations run as an initContainer (`npm run db:deploy`) before the server pod starts. The server **container image** is published to **GitHub Container Registry** (`ghcr.io/fabelhaft-io/bread-sheet-server`, free public package) by `.github/workflows/build-image.yml` — not ECR.
 
-**Terraform layout (`terraform/`):** one root, three environments selected by `-var-file` (`environments/{local,dev,production}.tfvars`). Cloud resources (VPC/EKS/RDS/ECR/IRSA in `network.tf`/`eks.tf`/`rds.tf`/`ecr.tf`/`irsa.tf`) are gated on `local.cloud_count` — created only when `localstack_endpoint == ""`, so the `local` environment provisions S3 + Lambda only. State is an S3 remote backend with per-env keys (`backend.tf` + `environments/<env>.s3.tfbackend`). The server pod accesses S3 via IRSA (no static keys). k8s manifests live in `terraform/k8s/`. See `docs/architecture/infrastructure.md` for the bootstrap + apply runbook.
+**Terraform layout (`terraform/`):** one root, three environments selected by `-var-file` (`environments/{local,dev,production}.tfvars`). Cloud resources (VPC/EKS/RDS/IRSA in `network.tf`/`eks.tf`/`rds.tf`/`irsa.tf`, plus GCP WIF in `gcp-wif.tf`) are gated on `local.cloud_count` — created only when `localstack_endpoint == ""`, so the `local` environment provisions S3 + Lambda only. State is an S3 remote backend with per-env keys (`backend.tf` + `environments/<env>.s3.tfbackend`). The server pod accesses S3 via IRSA, and Google Cloud (Vision/Vertex) via **Workload Identity Federation** — both keyless (no static keys). k8s manifests live in `terraform/k8s/`. See `docs/architecture/infrastructure.md` for the bootstrap + apply runbook.
 
 ## Coding Conventions
 

@@ -7,6 +7,13 @@ spec:
   # LoadBalancer provisions an ELB so the dev API is reachable from devices/Expo.
   # Use ClusterIP instead if fronting with an Ingress / API gateway.
   type: LoadBalancer
+  # Firewall: only these source CIDRs may reach the ELB. The cloud provider
+  # translates this into the ELB security group ingress rules. Replace with your
+  # /32 (curl -s ifconfig.me) to keep the dev API private. Remove (or set
+  # 0.0.0.0/0) to open it. NOTE: this is honoured by the in-tree CLB and by NLBs;
+  # it does NOT apply to an internet-facing ALB created by the AWS LB Controller.
+  loadBalancerSourceRanges:
+    - "REPLACE_WITH_YOUR_IP/32"
   selector:
     app: bread-sheet-server
   ports:

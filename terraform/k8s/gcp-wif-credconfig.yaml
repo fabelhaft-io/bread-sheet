@@ -1,0 +1,37 @@
+# Workload Identity Federation credential config for the server pod.
+#
+# This file contains NO secret — it only tells the google-auth libraries to read
+# the projected ServiceAccount token and exchange it via GCP STS. Generate the
+# real contents once after `terraform apply` (values come from terraform outputs
+# gcp_wif_provider + gcp_service_account_email):
+#
+#   gcloud iam workload-identity-pools create-cred-config \
+#     "$(terraform -chdir=terraform output -raw gcp_wif_provider)" \
+#     --service-account="$(terraform -chdir=terraform output -raw gcp_service_account_email)" \
+#     --credential-source-file=/var/run/secrets/gcp/token \
+#     --credential-source-type=text \
+#     --output-file=credential-configuration.json
+#
+#   kubectl create configmap gcp-wif-cred-config -n default \
+#     --from-file=credential-configuration.json
+#
+# The `audience` field in the generated JSON is what the pod's projected token
+# must request — copy it into deployment.yaml's serviceAccountToken.audience.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gcp-wif-cred-config
+  namespace: default
+data:
+  credential-configuration.json: |
+    {
+      "type": "external_account",
+      "audience": "//iam.googleapis.com/REPLACE_WITH_gcp_wif_provider_OUTPUT",
+      "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+      "token_url": "https://sts.googleapis.com/v1/token",
+      "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/REPLACE_WITH_gcp_service_account_email:generateAccessToken",
+      "credential_source": {
+        "file": "/var/run/secrets/gcp/token",
+        "format": { "type": "text" }
+      }
+    }

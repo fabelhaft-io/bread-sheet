@@ -24,6 +24,11 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.2"
     }
+    # GCP Workload Identity Federation for keyless Vision/Vertex auth (gcp-wif.tf).
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 6.0"
+    }
   }
 }
 
@@ -49,4 +54,12 @@ provider "aws" {
     sts    = var.localstack_endpoint
     sqs    = var.localstack_endpoint
   }
+}
+
+# Only used by the GCP WIF resources (gcp-wif.tf), which are created for real-AWS
+# cloud environments. project/region are empty for the local environment, where
+# no google resources are instantiated, so the provider is never invoked.
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_location
 }

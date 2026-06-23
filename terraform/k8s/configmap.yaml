@@ -16,7 +16,18 @@ data:
   # Public base URL where stored image KEYS resolve. Replace with the bucket's
   # public/CDN URL, e.g. https://breadsheet-images-dev.s3.us-east-1.amazonaws.com
   ASSET_BASE_URL: "https://breadsheet-images-dev.s3.us-east-1.amazonaws.com"
-  VISION_MODE: "mock"
-  PLAUSIBILITY_MODE: "mock"
+  # Live Google Cloud: real OCR (Cloud Vision) + real abuse gate (Gemini/Vertex).
+  VISION_MODE: "live"
+  PLAUSIBILITY_MODE: "gemini"
+  # Keyless Vertex/Vision auth via Workload Identity Federation — no GEMINI_API_KEY.
+  GOOGLE_GENAI_USE_VERTEXAI: "true"
+  GOOGLE_CLOUD_PROJECT: "REPLACE_GCP_PROJECT_ID"
+  GOOGLE_CLOUD_LOCATION: "europe-west1"
+  # Points the google-auth libs at the WIF credential config mounted from the
+  # gcp-wif-cred-config ConfigMap (see deployment.yaml volumes).
+  GOOGLE_APPLICATION_CREDENTIALS: "/etc/gcp/credential-configuration.json"
+  # CORS allowlist (app.ts). Defaults to localhost:8081 if unset, which would
+  # block a deployed web client. Comma-separated; harmless for the RN mobile app.
+  ALLOWED_ORIGINS: "http://localhost:8081"
   # breadsheet for a production/standalone build; exp+breadsheet for Expo Go.
   APP_DEEP_LINK_SCHEME: "breadsheet"

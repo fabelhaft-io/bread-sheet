@@ -14,7 +14,8 @@ module "eks" {
   name               = local.cluster_name
   kubernetes_version = var.cluster_version
 
-  endpoint_public_access = true
+  endpoint_public_access       = true
+  endpoint_public_access_cidrs = var.allowed_cidrs
 
   # Grant the principal running `terraform apply` cluster-admin so kubectl works
   # immediately after provisioning.
