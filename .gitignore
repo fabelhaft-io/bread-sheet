@@ -155,6 +155,9 @@ crash.*.log
 # Variable files that may contain secrets
 *.tfvars
 *.tfvars.json
+# ...except the per-environment tfvars, which hold only non-secret sizing/config
+# (secrets are sourced from Secrets Manager / k8s Secrets, never from tfvars).
+!terraform/environments/*.tfvars
 # Override files
 override.tf
 override.tf.json
