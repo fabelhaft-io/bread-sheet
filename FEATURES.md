@@ -467,6 +467,13 @@ Snappy startup and offline usability - cached user votes and products on device 
 ## Tracing id and Idempotency
 Help tracing the path of requests to different systems with tracing and span ids, detect duplicated requests with idempotency keys
 
+## Data Classification
+Well Architected Framework - Security / Data Protection: What data categories are used, what data is stored for how long, how must it be managed, how is it protected (at rest and in transit)
+
+## Threat Modeling
+Well Architected Framework - Security/ Application Security
+in Pipeline and Security of the Pipeline (Static Code analysis SAST, Dynamic DAST, secrets scanning, and general security tests, dependency management)
+
 ## Release
 - Create Terms and Conditions
 - Create Data Protection Documentation
