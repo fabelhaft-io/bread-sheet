@@ -26,8 +26,8 @@ importing the result into Terraform. Update the status fields as we go.
 
 | Item | Status | Notes |
 |---|---|---|
-| AWS credentials working (`aws sts get-caller-identity`) | ⬜ | Run `! aws configure` (or `! aws configure sso`) in-session. |
-| Region chosen | ⬜ | **Proposed: `eu-central-1` (Frankfurt)** — EU users, aligns with GCP `europe-west1`. Confirm. |
+| AWS credentials working (`aws sts get-caller-identity`) | ✅ | Authenticated as `arn:aws:iam::493942067033:user/JanoDev` (non-root IAM admin user). Never create root access keys; root is MFA-locked and unused. |
+| Region chosen | ✅ | **`eu-west-1` (Ireland)** — EU, close to GCP `europe-west1`, typically cheapest EU region. |
 | Common tag applied to everything | ⬜ | e.g. `project=bread-sheet` (+ `env=prod`). Eases cost tracking, cleanup, import. |
 
 ---
