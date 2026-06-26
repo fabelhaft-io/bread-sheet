@@ -27,7 +27,7 @@ terraform {
     # GCP Workload Identity Federation for keyless Vision/Vertex auth (gcp-wif.tf).
     google = {
       source  = "hashicorp/google"
-      version = "~> 6.0"
+      version = "~> 7.38"
     }
   }
 }
