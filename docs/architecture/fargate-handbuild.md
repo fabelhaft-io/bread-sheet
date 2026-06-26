@@ -42,7 +42,7 @@ section as it's fleshed out.
 | 1  | [Network foundation (VPC, subnets, IGW, routes; no NAT)](#objective-1--network-foundation-vpc) | ✅ |
 | 2  | [Security groups (ALB SG, task SG, RDS SG)](#objective-2--security-groups)                     | ✅ |
 | 3  | [RDS PostgreSQL (`db.t4g.micro`, single-AZ, private)](#objective-3--rds-postgresql)            | ✅ |
-| 4  | Container image on GHCR (already produced by CI)                                               | 🔄 |
+| 4  | [Container image on GHCR](#objective-4--container-image-on-ghcr)                               | ✅ |
 | 5  | IAM roles (ECS task role + execution role)                                                     | ⬜ |
 | 6  | ECS cluster (Fargate)                                                                          | ⬜ |
 | 7  | [Task definition (image, env, secrets, migrate command) + CD pipeline](#objective-7--task-definition--cd-pipeline) | ⬜ |
@@ -203,6 +203,33 @@ the DB subnet group contains **only** the two private subnets, and note the inst
 
 ---
 
+## Objective 4 — Container image on GHCR  ✅
+
+**Built:** `.github/workflows/build-image.yml` lived only on a feature branch until session 5; once
+**merged to `main`** it ran and produced `ghcr.io/fabelhaft-io/bread-sheet-server` at tags
+**`:b8ab5ac…`** (the merge SHA) and **`:latest`**. The package is **Public** (anonymous pull
+confirmed). The workflow's actions were bumped to the Node 24 runtime (`checkout@v5`,
+`login-action@v4`, `build-push-action@v7`) to clear the Node 20 deprecation warnings.
+
+**Verified image facts (drive later objectives):**
+- **Architecture `linux/amd64`, single-arch** → the Fargate task must be **CPU architecture =
+  X86_64**, *not* ARM64. (Graviton/ARM Fargate would need a multi-arch or arm64 build first — the
+  `t4g` RDS being Graviton is unrelated.)
+- **Exposed port `3000/tcp`** → matches the Task SG and the ALB target group.
+- **Entrypoint `docker-entrypoint.sh` + Cmd `node dist/server.js`** → the migrate command
+  ([Objective 7](#objective-7--task-definition--cd-pipeline)) overrides this as an ECS `command`;
+  check how `docker-entrypoint.sh` forwards its args so `db:deploy` runs before serving.
+
+Because the package is public, the [Objective 5](#build-order--status) execution role needs **no
+GHCR pull credentials**. The task definition pins the immutable **`:<git-sha>`** tag.
+
+**Definition of done:**
+- [x] CI builds and pushes the server image on merge to `main` — `:<git-sha>` + `:latest`.
+- [x] Workflow actions on the Node 24 runtime (no Node 20 deprecation warnings).
+- [x] **Package visibility is Public** — anonymous registry pull succeeds (no image-pull secret).
+
+---
+
 ## Objective 7 — Task definition + CD pipeline  ⬜
 
 > Detail for the task definition itself (image, env, secrets, the inline migrate+serve command) is
@@ -318,3 +345,12 @@ Filled in as resources are created; drives the Terraform import phase (objective
   `db.t4g.micro`, single-AZ, private, encrypted, RDS SG only, IAM auth on). Claude verified
   read-only against all done-criteria — **Objective 3 ✅**, import map updated. Next: Objective 4
   (container image on GHCR).
+- _Session 5:_ Designed the CD pipeline (dev auto-deploy + gated prod promotion via GitHub
+  Environment, keyless GitHub-OIDC deployer role, ECS rolling-deploy mechanic, Terraform task-def
+  drift) and wrote it up as the [Objective 7](#objective-7--task-definition--cd-pipeline) detail.
+  Found Objective 4's premise was false — `build-image.yml` was only on a feature branch and had
+  never run. Merged to `main`; first image built (`…/bread-sheet-server:b8ab5ac…` + `:latest`) and
+  bumped the workflow actions to Node 24. Package set **Public**; Claude verified anonymous pull and
+  read the image config — `linux/amd64`, port `3000`, entrypoint `docker-entrypoint.sh` +
+  `node dist/server.js`. **Objective 4 ✅**. Next: Objective 5 (IAM roles — task + execution +
+  the GitHub-OIDC deployer role for CD).
