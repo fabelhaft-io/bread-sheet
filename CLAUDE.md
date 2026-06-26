@@ -113,7 +113,9 @@ Local dev uses Docker Compose:
 - PostgreSQL 18-Alpine on port 5432 (`admin:password@localhost:5432/breadsheet`)
 - LocalStack on port 4566 (emulates S3, Lambda, IAM, STS)
 
-Production runs on EKS (Terraform-provisioned) with ArgoCD for GitOps. Database migrations run as a Kubernetes Job or initContainer before the server pod starts.
+Cloud environments (`dev`, `production`) run on EKS (Terraform-provisioned: VPC + EKS + RDS + S3 + image-resizer Lambda) with ArgoCD for GitOps. Database migrations run as an initContainer (`npm run db:deploy`) before the server pod starts. The server **container image** is published to **GitHub Container Registry** (`ghcr.io/fabelhaft-io/bread-sheet-server`, free public package) by `.github/workflows/build-image.yml` — not ECR.
+
+**Terraform layout (`terraform/`):** one root, three environments selected by `-var-file` (`environments/{local,dev,production}.tfvars`). Cloud resources (VPC/EKS/RDS/IRSA in `network.tf`/`eks.tf`/`rds.tf`/`irsa.tf`, plus GCP WIF in `gcp-wif.tf`) are gated on `local.cloud_count` — created only when `localstack_endpoint == ""`, so the `local` environment provisions S3 + Lambda only. State is an S3 remote backend with per-env keys (`backend.tf` + `environments/<env>.s3.tfbackend`). The server pod accesses S3 via IRSA, and Google Cloud (Vision/Vertex) via **Workload Identity Federation** — both keyless (no static keys). k8s manifests live in `terraform/k8s/`. See `docs/architecture/infrastructure.md` for the bootstrap + apply runbook.
 
 ## Coding Conventions
 
@@ -203,6 +205,8 @@ Architecture and data documentation lives in `docs/architecture/`:
 | `frontend.md` | Expo/React Native app — routing, auth layers, state management, key patterns |
 | `backend.md` | Express API — middleware stack, endpoints, data model, image pipeline, background jobs |
 | `infrastructure.md` | Terraform/AWS resources, Docker Compose local dev, GitOps deployment pipeline |
+| `cheap-prod-fargate.md` | Plan: low-cost always-on prod on ECS Fargate (replaces EKS); EKS kept as a sandbox |
+| `fargate-handbuild.md` | Living runbook: build the Fargate stack by hand (learn-by-doing) then import to Terraform; tracks per-step status |
 | `data.md` | Data inventory, third-party flows, user content rights, GDPR obligations |
 
 Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.usebruno.com/). Copy `docs/bruno/environments/.env.example` to `docs/bruno/environments/.env` and fill in your Supabase credentials. Run **Auth › Sign in with password** (or **Sign in anonymously**) once — the post-response script stores the JWT in `accessToken` automatically. All other requests use it via their bearer auth.
@@ -211,6 +215,7 @@ Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.us
 
 Architecture decisions are tracked in `docs/architecture-decision-records/`. Current ADRs:
 - `0001-auth-provider.md` — Why Supabase Auth was chosen over alternatives
+- `0002-rds-database-credentials.md` — RDS auth: SSM password now, keyless IAM auth (Prisma driver adapter + `pg` password callback) deferred as a post-build adaptation
 
 ## Mandatory Post-Implementation Steps
 

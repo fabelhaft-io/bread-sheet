@@ -467,6 +467,13 @@ Snappy startup and offline usability - cached user votes and products on device 
 ## Tracing id and Idempotency
 Help tracing the path of requests to different systems with tracing and span ids, detect duplicated requests with idempotency keys
 
+## Data Classification
+Well Architected Framework - Security / Data Protection: What data categories are used, what data is stored for how long, how must it be managed, how is it protected (at rest and in transit)
+
+## Threat Modeling
+Well Architected Framework - Security/ Application Security
+in Pipeline and Security of the Pipeline (Static Code analysis SAST, Dynamic DAST, secrets scanning, and general security tests, dependency management)
+
 ## Release
 - Create Terms and Conditions
 - Create Data Protection Documentation
@@ -485,3 +492,13 @@ Help tracing the path of requests to different systems with tracing and span ids
 
 ## Pro Users can set own pictures
 - Low Prio, enable users to replace picture with a better one (at least for themselfs)
+
+## Infrastructure cost optimization
+- Prod runs on ECS Fargate + RDS (see `docs/architecture/cheap-prod-fargate.md`). RDS `db.t4g.micro`
+  is free for the first 12 months on the AWS free tier, then ~$13/mo.
+- **After the free-tier year**, revisit the database to handle cost: migrate from managed RDS to a
+  containerized Postgres (Postgres container + EBS volume, or a Postgres sidecar task) to push the DB
+  cost toward ~$0. Trade-off: you take over backups (nightly `pg_dump` to S3) and lose managed
+  failover — acceptable for a small private app.
+- Other levers if needed: drop to a smaller Fargate task, or evaluate Aurora Serverless v2
+  auto-pause. Keep the EKS sandbox branch destroyed when not actively learning.

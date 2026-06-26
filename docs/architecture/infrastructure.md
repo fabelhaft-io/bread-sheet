@@ -55,15 +55,72 @@ The build script installs the Linux x64 variant of sharp into `dist/bundle/node_
 
 ## Cloud Infrastructure (Terraform)
 
-`terraform/` is the single source of truth for all AWS resources. Environment-specific variables are in `terraform/environments/`. Apply via CI or manually:
+> **Cost note:** the EKS stack below runs ~$170/mo idle — heavily oversized for a small private
+> app. For a cheap (~$15–30/mo) always-on production on AWS, see
+> [`cheap-prod-fargate.md`](cheap-prod-fargate.md), which replaces EKS with ECS Fargate while
+> keeping this stack as a spin-up-and-destroy learning sandbox.
+
+`terraform/` is the single source of truth for all AWS resources. Environment-specific
+variables are in `terraform/environments/`. There are three environments — `local`
+(LocalStack), `dev`, and `production` — selected by the `-var-file` you pass.
+
+**Cloud resources are gated.** The VPC, EKS, RDS, and IRSA resources (plus GCP Workload Identity
+Federation) are created only when `localstack_endpoint == ""` (real AWS). The `local` environment
+keeps `localstack_endpoint` set, so it provisions **only** the S3 bucket + image-resizer Lambda —
+the rest evaluate to `count = 0`. The gate is `local.cloud_count` in `locals.tf` (GCP WIF adds a
+second toggle, `var.enable_google_wif`, via `local.gcp_count`).
+
+**Container image.** The server image is **not** in ECR — it's published to the free
+**GitHub Container Registry** (`ghcr.io/fabelhaft-io/bread-sheet-server`, public package) by
+`.github/workflows/build-image.yml` on push to `main`. EKS pulls the public package with no
+imagePullSecret.
+
+**Keyless Google Cloud (Vision/Vertex).** `gcp-wif.tf` provisions a Workload Identity Pool +
+OIDC provider trusting the EKS cluster OIDC issuer, a GCP service account with
+`roles/cloudvision.user` + `roles/aiplatform.user`, and a `workloadIdentityUser` binding for the
+`default:bread-sheet-server` ServiceAccount. The pod projects its SA token and exchanges it for
+short-lived GCP credentials — no key file. Requires `gcp_project` (and uses the `hashicorp/google`
+provider). See § Live Google Cloud below.
+
+### Remote state (S3 backend)
+
+State lives in an S3 backend with one key per environment (`<env>/terraform.tfstate`). The
+backend is configured partially in `backend.tf`; concrete bucket/key/region come from a
+per-environment `*.tfbackend` file at init time. Locking uses the S3-native lock file
+(`use_lockfile`, Terraform ≥ 1.10) — no DynamoDB table.
+
+**One-time bootstrap** (the state bucket must exist before the first `init`):
 
 ```sh
-# Local (LocalStack)
-terraform -chdir=terraform apply -var-file=environments/local.tfvars
-
-# Production
-terraform -chdir=terraform apply -var-file=environments/production.tfvars
+aws s3 mb s3://breadsheet-tfstate --region us-east-1
+aws s3api put-bucket-versioning --bucket breadsheet-tfstate \
+  --versioning-configuration Status=Enabled
 ```
+
+> The repo still contains a legacy committed `terraform/terraform.tfstate` (LocalStack state).
+> Once the remote backend is adopted, remove it from version control
+> (`git rm --cached terraform/terraform.tfstate*`) — `.gitignore` already excludes future
+> state files.
+
+### Apply
+
+```sh
+# Init selects the backend + downloads modules. Re-run when switching environments.
+terraform -chdir=terraform init -backend-config=environments/dev.s3.tfbackend
+
+# dev
+terraform -chdir=terraform apply -var-file=environments/dev.tfvars
+
+# production
+terraform -chdir=terraform init -backend-config=environments/production.s3.tfbackend
+terraform -chdir=terraform apply -var-file=environments/production.tfvars
+
+# Local (LocalStack) — backend targets LocalStack's emulated S3
+terraform -chdir=terraform init -backend-config=environments/local.s3.tfbackend
+terraform -chdir=terraform apply -var-file=environments/local.tfvars
+```
+
+To validate config without AWS credentials (no apply): `init -backend=false` then `validate`.
 
 ### Resources provisioned
 
@@ -72,10 +129,13 @@ terraform -chdir=terraform apply -var-file=environments/production.tfvars
 | VPC, subnets, security groups | AWS Networking | Isolated network for EKS and RDS |
 | EKS Cluster + managed node groups | Amazon EKS | Kubernetes cluster for the API server |
 | PostgreSQL instance | Amazon RDS | Managed production database |
-| Container registry | Amazon ECR | Stores versioned server Docker images |
 | Object storage | Amazon S3 | Product images (`raw/` and `processed/` prefixes) |
 | Image resize function | AWS Lambda | S3-triggered; resizes uploaded images asynchronously |
 | Dead-letter queue | Amazon SQS | Captures Lambda failures for ops alerting |
+| WIF pool + provider + service account | Google Cloud (via `hashicorp/google`) | Keyless Vision/Vertex auth for the server pod |
+
+The **container registry is external**: the server image lives in GitHub Container Registry
+(`ghcr.io/fabelhaft-io/bread-sheet-server`), not AWS — see § Container image above.
 
 ### S3 bucket layout
 
@@ -101,10 +161,9 @@ A "pull-based" GitOps model: ArgoCD watches the manifest repository and applies 
 
 ### CI Pipeline (GitHub Actions — triggered on push to `main`)
 
-1. **Test** — run full test suites (`npm test` in `server/` and `bread-sheet-app/`).
-2. **Build image** — `docker build -t <ecr-repo>/bread-sheet-server:$GIT_SHA .`
-3. **Push to ECR** — image tagged with the Git commit SHA.
-4. **Update manifest** — pipeline checks out the K8s manifest repo and updates the `image` tag in `deployment.yaml` to the new SHA, then commits and pushes.
+1. **Test** — run full test suites (`npm test` in `server/` and `bread-sheet-app/`) — `.github/workflows/test.yml`.
+2. **Build & push image** — `.github/workflows/build-image.yml` builds `server/Dockerfile` and pushes `ghcr.io/<owner>/bread-sheet-server` tagged with both `:$GIT_SHA` and `:latest`, authenticating with the built-in `GITHUB_TOKEN` (no registry secret to manage).
+3. **Update manifest** — update the `image` tag in `deployment.yaml` to the new SHA (commit/push for ArgoCD to pick up).
 
 ### ArgoCD (Continuous Deployment)
 
@@ -112,9 +171,47 @@ A "pull-based" GitOps model: ArgoCD watches the manifest repository and applies 
 2. Applies it to the EKS cluster.
 3. Kubernetes performs a rolling update: new pods with the new image start before old pods terminate.
 
-### Kubernetes Manifests (`/k8s`)
+### Kubernetes Manifests (`terraform/k8s/`)
 
-YAML files declaring the desired cluster state (Deployments, Services, Ingress). ArgoCD treats these as the authoritative source.
+YAML files declaring the desired cluster state. ArgoCD treats these as the authoritative source
+(`argocd-application.yaml` points at this path).
+
+| File | Purpose |
+|------|---------|
+| `deployment.yaml` | Server Deployment. An `initContainer` runs `npm run db:deploy` (Prisma migrate) before the server starts; probes hit `GET /`. Image is `ghcr.io/fabelhaft-io/bread-sheet-server:<tag>`. Mounts the projected SA token + WIF cred config for keyless Google Cloud. |
+| `service.yaml` | `LoadBalancer` Service exposing the API on port 80 → container 3000. `loadBalancerSourceRanges` restricts the ELB to your IP (firewall). |
+| `configmap.yaml` | Non-secret env (matches `server/src/configs/config.ts`): `S3_MODE=aws`, `S3_BUCKET_NAME`, `ASSET_BASE_URL`, `VISION_MODE=live`, `PLAUSIBILITY_MODE=gemini`, `GOOGLE_*` (WIF), `ALLOWED_ORIGINS`. |
+| `secret.yaml` | **Template only** — `DATABASE_URL`, `SUPABASE_*` (no `GEMINI_API_KEY`; Google auth is keyless). Create the real Secret out-of-band (below); never commit values. |
+| `serviceaccount.yaml` | `bread-sheet-server` SA, annotated with the IRSA role ARN (S3 access without static keys). |
+| `gcp-wif-credconfig.yaml` | Non-secret WIF credential config ConfigMap — generated once from terraform outputs (below). |
+
+**Deploy to dev (after `terraform apply`):**
+
+```sh
+aws eks update-kubeconfig --name "$(terraform -chdir=terraform output -raw cluster_name)"
+
+# 1. App secret — DB (RDS-managed password from Secrets Manager) + Supabase.
+kubectl create secret generic bread-sheet-server-secrets -n default \
+  --from-literal=DATABASE_URL='postgresql://breadsheet:<pw>@<rds-endpoint>:5432/breadsheet' \
+  --from-literal=SUPABASE_URL='https://<project>.supabase.co' \
+  --from-literal=SUPABASE_PUBLISHABLE_DEFAULT_KEY='<key>'
+
+# 2. WIF credential config (keyless Google Cloud) — see gcp-wif-credconfig.yaml header.
+gcloud iam workload-identity-pools create-cred-config \
+  "$(terraform -chdir=terraform output -raw gcp_wif_provider)" \
+  --service-account="$(terraform -chdir=terraform output -raw gcp_service_account_email)" \
+  --credential-source-file=/var/run/secrets/gcp/token --credential-source-type=text \
+  --output-file=credential-configuration.json
+kubectl create configmap gcp-wif-cred-config -n default --from-file=credential-configuration.json
+# Copy the JSON's `audience` into deployment.yaml's serviceAccountToken.audience,
+# fill GOOGLE_CLOUD_PROJECT in configmap.yaml, the IRSA ARN in serviceaccount.yaml,
+# and your IP in service.yaml loadBalancerSourceRanges.
+
+# 3. Apply the rest.
+kubectl apply -f terraform/k8s/
+```
+
+The RDS master password is managed by AWS in Secrets Manager (`terraform output rds_master_secret_arn`) — read it from there rather than setting one manually.
 
 ---
 

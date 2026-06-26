@@ -6,12 +6,15 @@ WORKDIR /usr/src/app
 RUN apk add --no-cache openssl
 
 # Install dependencies
-# This also runs 'prisma generate' via the postinstall script
 COPY package*.json ./
 RUN npm ci
 
-# Copy source code and build
+# Copy source code, generate the Prisma client, and build.
+# prisma.config.ts resolves env("DATABASE_URL") at load time, but `generate` never
+# connects to the DB, so a placeholder satisfies the config. The real URL is supplied
+# at runtime (compose env), where db:deploy regenerates against the live database.
 COPY . .
+RUN DATABASE_URL="postgresql://placeholder" npx prisma generate
 RUN npm run build
 
 EXPOSE 3000

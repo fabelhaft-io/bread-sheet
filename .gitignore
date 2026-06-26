@@ -145,4 +145,23 @@ server/combined.log
 server/error.log
 
 # Terraform
-terraform/.terraform/
+**/.terraform/*
+# State files
+*.tfstate
+*.tfstate.*
+# Crash logs
+crash.log
+crash.*.log
+# Variable files that may contain secrets
+*.tfvars
+*.tfvars.json
+# ...except the per-environment tfvars, which hold only non-secret sizing/config
+# (secrets are sourced from Secrets Manager / k8s Secrets, never from tfvars).
+!terraform/environments/*.tfvars
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# Plan output
+*.tfplan

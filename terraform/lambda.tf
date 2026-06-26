@@ -51,12 +51,12 @@ data "archive_file" "image_resizer" {
 # ── Lambda function ───────────────────────────────────────────────────────────
 
 resource "aws_lambda_function" "image_resizer" {
-  function_name    = "image-resizer"
-  role             = aws_iam_role.image_resizer.arn
-  handler          = "index.handler"
-  runtime          = "nodejs24.x"
-  timeout          = 30
-  memory_size      = 512
+  function_name = "image-resizer"
+  role          = aws_iam_role.image_resizer.arn
+  handler       = "index.handler"
+  runtime       = "nodejs24.x"
+  timeout       = 30
+  memory_size   = 512
 
   filename         = data.archive_file.image_resizer.output_path
   source_code_hash = data.archive_file.image_resizer.output_base64sha256
