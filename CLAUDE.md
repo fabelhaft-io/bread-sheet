@@ -215,6 +215,7 @@ Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.us
 
 Architecture decisions are tracked in `docs/architecture-decision-records/`. Current ADRs:
 - `0001-auth-provider.md` — Why Supabase Auth was chosen over alternatives
+- `0002-rds-database-credentials.md` — RDS auth: SSM password now, keyless IAM auth (Prisma driver adapter + `pg` password callback) deferred as a post-build adaptation
 
 ## Mandatory Post-Implementation Steps
 
