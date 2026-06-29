@@ -9,39 +9,32 @@ const level =
   process.env.LOG_LEVEL ??
   (isTest ? 'warn' : isProduction ? 'info' : 'debug');
 
+// Always log to stdout — this is a containerised app, and the runtime collector
+// (ECS `awslogs` driver → CloudWatch) only ships stdout/stderr. File transports
+// would write to the container's ephemeral disk where nothing reads them and the
+// logs vanish on task restart. Production emits JSON (machine-parseable in
+// CloudWatch); dev uses a printf format that reads better in a terminal. Either
+// way the visible level is driven by LOG_LEVEL via `level` above.
+const consoleFormat = isProduction
+  ? winston.format.combine(
+      winston.format.timestamp(),
+      winston.format.errors({ stack: true }),
+      winston.format.json(),
+    )
+  : winston.format.combine(
+      winston.format.colorize(),
+      winston.format.timestamp({ format: 'HH:mm:ss.SSS' }),
+      winston.format.printf(({ timestamp, level, message, stack, ...meta }) => {
+        const metaKeys = Object.keys(meta);
+        const metaStr = metaKeys.length ? ` ${JSON.stringify(meta)}` : '';
+        const stackStr = stack ? `\n${stack}` : '';
+        return `${timestamp} ${level} ${message}${metaStr}${stackStr}`;
+      }),
+    );
+
 const logger = winston.createLogger({
   level,
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.errors({ stack: true }),
-    winston.format.json(),
-  ),
-  transports: [
-    // - Write all logs with importance level of `error` or less to `error.log`
-    // - Write all logs with importance level of `info` or less to `combined.log`
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' }),
-  ],
+  transports: [new winston.transports.Console({ format: consoleFormat })],
 });
-
-// In non-production environments also mirror to the console so the operator
-// can see what's happening as requests come in. A printf-style format reads
-// far better in a terminal than the JSON we ship to file transports.
-if (!isProduction) {
-  logger.add(
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.timestamp({ format: 'HH:mm:ss.SSS' }),
-        winston.format.printf(({ timestamp, level, message, stack, ...meta }) => {
-          const metaKeys = Object.keys(meta);
-          const metaStr = metaKeys.length ? ` ${JSON.stringify(meta)}` : '';
-          const stackStr = stack ? `\n${stack}` : '';
-          return `${timestamp} ${level} ${message}${metaStr}${stackStr}`;
-        }),
-      ),
-    }),
-  );
-}
 
 export default logger;
