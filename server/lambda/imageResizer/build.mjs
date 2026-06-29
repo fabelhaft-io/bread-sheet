@@ -16,10 +16,16 @@
  */
 
 import { build } from 'esbuild';
-import { rmSync, mkdirSync, existsSync, writeFileSync } from 'node:fs';
+import { rmSync, mkdirSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 
 const bundleDir = 'dist/bundle';
+
+// Pin the bundled sharp to the exact version declared in this package's
+// dependencies, so the Lambda binary never drifts from the version developed
+// and tested against (dependabot bumps package.json; this stays in sync).
+const sharpVersion = JSON.parse(readFileSync('package.json', 'utf8'))
+  .dependencies.sharp;
 
 // Clean previous build
 if (existsSync('dist')) rmSync('dist', { recursive: true });
@@ -43,7 +49,7 @@ await build({
 // keeps the development sharp install untouched and cross-platform.
 writeFileSync(
   `${bundleDir}/package.json`,
-  JSON.stringify({ dependencies: { sharp: '0.34.0' } }),
+  JSON.stringify({ dependencies: { sharp: sharpVersion } }),
 );
 // Sharp 0.33+ ships prebuilt binaries via optional dependencies. npm filters
 // which optional deps to install based on --os / --cpu / --libc. Lambda's
