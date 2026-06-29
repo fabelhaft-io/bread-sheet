@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { getGcpWorkloadIdentityClient } from './services/gcpWorkloadIdentity.js';
 
 let _client: GoogleGenAI | null = null;
 
@@ -8,10 +9,12 @@ let _client: GoogleGenAI | null = null;
  * chosen by environment, never by calling code, so the Gemini-calling services
  * run byte-for-byte identically in local dev and production:
  *
- *   - `GOOGLE_GENAI_USE_VERTEXAI=true` → Vertex AI via Application Default
- *     Credentials. In production ADC resolves through Workload Identity
- *     Federation (keyless); no `GEMINI_API_KEY` is needed. Requires
- *     `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`.
+ *   - `GOOGLE_GENAI_USE_VERTEXAI=true` → Vertex AI. On Fargate, auth is the
+ *     keyless Workload Identity Federation client (`getGcpWorkloadIdentityClient`,
+ *     when `GCP_WORKLOAD_IDENTITY_AUDIENCE`/`GCP_SERVICE_ACCOUNT_EMAIL` are set);
+ *     otherwise it falls back to default ADC (e.g. `gcloud auth application-default
+ *     login` locally). No `GEMINI_API_KEY` is needed. Requires `GOOGLE_CLOUD_PROJECT`
+ *     and `GOOGLE_CLOUD_LOCATION`.
  *   - otherwise → Gemini Developer API with `GEMINI_API_KEY` (local default).
  *
  * The required-variable combinations are validated at startup in
@@ -29,7 +32,16 @@ export function getGeminiClient(): GoogleGenAI {
         'GOOGLE_GENAI_USE_VERTEXAI=true requires GOOGLE_CLOUD_PROJECT and GOOGLE_CLOUD_LOCATION',
       );
     }
-    _client = new GoogleGenAI({ vertexai: true, project, location });
+    // On Fargate, authenticate keylessly via Workload Identity Federation (the
+    // task role impersonates the GCP service account); locally this is null and
+    // GoogleGenAI falls back to default ADC.
+    const authClient = getGcpWorkloadIdentityClient();
+    _client = new GoogleGenAI({
+      vertexai: true,
+      project,
+      location,
+      ...(authClient ? { googleAuthOptions: { authClient } } : {}),
+    });
     return _client;
   }
 

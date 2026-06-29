@@ -164,7 +164,8 @@ VISION_MODE=mock                          # mock | live | llm  (no default — m
 # For `live` (Google Cloud Vision OCR) locally: run `gcloud auth application-default login` on the
 # HOST machine (not inside Docker). docker-compose mounts the resulting ADC file into the container
 # at /root/.config/gcloud/application_default_credentials.json automatically.
-# In prod: GOOGLE_APPLICATION_CREDENTIALS=/etc/gcp/wif-credentials.json (mounted ConfigMap)
+# In prod (Fargate): keyless via Workload Identity Federation — see the GCP_WORKLOAD_IDENTITY_* vars
+# below; both the Vision and Gemini/Vertex clients use it. No credential file is mounted.
 # For `llm` (Gemini multimodal — image → ExtractedLabel JSON in one call):
 
 # Image plausibility / abuse gate on uploads (P5-005). Independent of VISION_MODE.
@@ -174,11 +175,19 @@ PLAUSIBILITY_MODE=mock                     # mock | gemini  (no default — must
 # services/geminiClient.ts). Auth method is chosen by env — the calling code is identical:
 #   - Local default: GEMINI_API_KEY (Google AI Studio Developer API).
 GEMINI_API_KEY=...                        # required unless GOOGLE_GENAI_USE_VERTEXAI=true
-#   - Prod (keyless): Vertex AI via ADC / Workload Identity Federation — set the three below
-#     INSTEAD of GEMINI_API_KEY; reuses the live-Vision WIF mount. SA needs roles/aiplatform.user.
+#   - Prod (keyless): Vertex AI via Workload Identity Federation — set the vars below INSTEAD of
+#     GEMINI_API_KEY. SA needs roles/aiplatform.user.
 # GOOGLE_GENAI_USE_VERTEXAI=true
 # GOOGLE_CLOUD_PROJECT=...
 # GOOGLE_CLOUD_LOCATION=europe-west1
+#
+# GCP Workload Identity Federation (Fargate, keyless). When BOTH are set, services/gcpWorkloadIdentity.ts
+# builds a google-auth AwsClient that federates the ECS *task role* into GCP and impersonates the SA;
+# the Gemini (Vertex) and Cloud Vision clients use it. Unset (local) → default ADC. AWS creds come from
+# the ECS container endpoint via the AWS SDK default provider chain (NOT IMDS — IMDS doesn't serve
+# task-role creds on Fargate). Set BOTH or neither.
+# GCP_WORKLOAD_IDENTITY_AUDIENCE=//iam.googleapis.com/projects/<num>/locations/global/workloadIdentityPools/<pool>/providers/<provider>
+# GCP_SERVICE_ACCOUNT_EMAIL=<sa>@<project>.iam.gserviceaccount.com
 
 # Deep link scheme used by GET /auth/callback to bounce users back into the app after email
 # verification. exp+breadsheet for Expo Go; breadsheet for a production build.

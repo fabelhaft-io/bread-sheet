@@ -1,5 +1,6 @@
 import { ImageAnnotatorClient } from '@google-cloud/vision';
 import logger from '../logger.js';
+import { getGcpWorkloadIdentityClient } from './gcpWorkloadIdentity.js';
 
 const VALID_VISION_MODES = ['mock', 'live', 'llm'] as const;
 export type VisionMode = (typeof VALID_VISION_MODES)[number];
@@ -20,13 +21,15 @@ export function getVisionMode(): VisionMode {
 }
 
 // Lazily constructed and memoized — never instantiated in mock mode.
-// Auth is handled entirely by ADC: in prod GOOGLE_APPLICATION_CREDENTIALS points
-// to a Workload Identity Federation credential config mounted via ConfigMap.
+// Auth: on Fargate, the keyless Workload Identity Federation client (the task role
+// impersonates the GCP service account); locally it is null and the client falls
+// back to default ADC (e.g. `gcloud auth application-default login`).
 let _client: ImageAnnotatorClient | null = null;
 
 function getVisionClient(): ImageAnnotatorClient {
   if (_client) return _client;
-  _client = new ImageAnnotatorClient();
+  const authClient = getGcpWorkloadIdentityClient();
+  _client = new ImageAnnotatorClient(authClient ? { authClient } : undefined);
   return _client;
 }
 

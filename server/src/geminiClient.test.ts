@@ -16,6 +16,9 @@ const GEMINI_ENV = [
   'GOOGLE_GENAI_USE_VERTEXAI',
   'GOOGLE_CLOUD_PROJECT',
   'GOOGLE_CLOUD_LOCATION',
+  'GCP_WORKLOAD_IDENTITY_AUDIENCE',
+  'GCP_SERVICE_ACCOUNT_EMAIL',
+  'AWS_REGION',
 ];
 
 function clearEnv() {
@@ -60,6 +63,27 @@ describe('getGeminiClient', () => {
       project: 'breadsheet-prod',
       location: 'europe-west1',
     });
+  });
+
+  it('passes the Workload Identity auth client to Vertex when WIF is configured', async () => {
+    process.env.GOOGLE_GENAI_USE_VERTEXAI = 'true';
+    process.env.GOOGLE_CLOUD_PROJECT = 'breadsheet-496522';
+    process.env.GOOGLE_CLOUD_LOCATION = 'europe-west1';
+    process.env.GCP_WORKLOAD_IDENTITY_AUDIENCE =
+      '//iam.googleapis.com/projects/1054240616692/locations/global/workloadIdentityPools/breadsheet-dev/providers/aws-ecs';
+    process.env.GCP_SERVICE_ACCOUNT_EMAIL =
+      'breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com';
+    process.env.AWS_REGION = 'eu-west-1';
+    const { getGeminiClient } = await import('./geminiClient.js');
+
+    getGeminiClient();
+
+    const opts = constructorSpy.mock.calls[0][0] as {
+      vertexai: boolean;
+      googleAuthOptions?: { authClient?: unknown };
+    };
+    expect(opts.vertexai).toBe(true);
+    expect(opts.googleAuthOptions?.authClient).toBeDefined();
   });
 
   it('throws when Vertex is enabled without project/location', async () => {
