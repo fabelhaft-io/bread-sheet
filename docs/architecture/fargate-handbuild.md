@@ -46,11 +46,11 @@ section as it's fleshed out.
 | 5  | [IAM roles (task + execution + CI deployer)](#objective-5--iam-roles-task--execution--ci-deployer) | ✅ |
 | 6  | [S3 image bucket (+ resize pipeline, reuse TF)](#objective-6--s3-image-bucket)                 | ✅ |
 | 7  | [ECS cluster (Fargate)](#objective-7--ecs-cluster-fargate)                                     | ✅ |
-| 8  | [Task definition (image, env, secrets, migrate command) + CD pipeline](#objective-8--task-definition--cd-pipeline) | 🔄 |
+| 8  | [Task definition (image, env, secrets, migrate command) + CD pipeline](#objective-8--task-definition--cd-pipeline) | ✅ |
 | 9  | [ALB + target group + ACM cert + HTTPS listener](#objective-9--alb--target-group--acm-cert--https-listener) | ✅ |
 | 10 | [ECS service (wires task → target group)](#objective-10--ecs-service)                          | ✅ |
 | 11 | Route 53 record → ALB (A-alias `server.dev.bread-sheet.com` → ALB)                             | ✅ |
-| 12 | GCP Workload Identity Federation (AWS provider trusting the task role)                         | ⬜ |
+| 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | 🔄 |
 | 13 | [Secrets in SSM Parameter Store (`DATABASE_URL`, `SUPABASE_*`)](#objective-13--secrets-in-ssm-parameter-store) | ✅ |
 | 14 | Import everything into Terraform                                                               | ⬜ |
 | 15 | Post Build Adaptions                                                                           | ⬜ |
@@ -433,7 +433,10 @@ the noted decision, and the `Project`/`Stage` tags are present. The import map g
 
 ---
 
-## Objective 8 — Task definition + CD pipeline  🔄
+## Objective 8 — Task definition + CD pipeline  ✅
+
+> **Part A ✅** (task-def artifact) · **Part B ✅** (dev CD verified — merge to `main` auto-deploys,
+> keyless; rev `:6` rolled out Session 14) · **prod promotion deferred** until a prod stage exists.
 
 > Two halves: **(A) the task definition** — the static artifact describing *how to run one task*
 > (registered now, inspectable immediately), and **(B) the CD pipeline** that registers new
@@ -572,14 +575,17 @@ different cluster/service + an approval wall.
       `:<sha>` image (`amazon-ecs-render-task-definition`) → `amazon-ecs-deploy-task-definition`
       (`wait-for-service-stability`), `concurrency: deploy-dev`. **Task def is fetched from AWS, not a
       repo file**, so CD only swaps the image and never clobbers the hand-built env/secrets.
-- [ ] **Prerequisite — fix the deployer policy ARN** (AWS-side): `DeployToService` resource must be
-      `service/breadsheet-server-dev/breadsheet-dev-server-service` (currently the stale
-      `service/breadsheet-dev/breadsheet-dev-server`). CD `update-service` `AccessDenied`s until fixed.
-- [ ] **Verify on next merge to `main`:** push auto-deploys to the dev service (new revision at
-      `:<sha>`, waits `services-stable`).
+- [x] **Deployer policy ARN fixed** (AWS-side): `DeployToService` resource now
+      `service/breadsheet-server-dev/breadsheet-dev-server-service` — confirmed working (CD's
+      `update-service` succeeded, no `AccessDenied`).
+- [x] **Verified on merge to `main`** (Session 14): the run's `build` → `deploy-dev` both succeeded
+      keylessly (OIDC); the service rolled to **revision `:6`** (`rolloutState COMPLETED`, running 1)
+      pinned to the merge SHA `c5881051…`, and `https://server.dev.bread-sheet.com/` still returns
+      `200`.
 - [x] Task def pins the immutable `:<git-sha>` tag, not `:latest`. — the render step injects
-      `…:${{ github.sha }}`.
-- [ ] Rollback verified: re-deploying the previous task-def revision restores the old image.
+      `…:${{ github.sha }}`; active rev `:6` image is `…:c5881051…`.
+- [ ] Rollback (optional, untested): `aws ecs update-service --task-definition breadsheet-dev-server:5`
+      restores the previous image; ECS keeps revisions, so it's a one-liner. Verify when convenient.
 - [ ] **Prod (deferred — no prod stage yet):** a gated release (tag/release/dispatch +
       `environment: production` reviewer) promoting the **same `:<sha>`** to the prod service. Build
       when the prod cluster/service exists.
@@ -828,6 +834,132 @@ service is wired to the target group with container `server:3000` and that the f
 
 ---
 
+## Objective 12 — GCP Workload Identity Federation  🔄
+
+> **12a (GCP federation) ✅** — pool `breadsheet-dev` + AWS provider `aws-ecs` (scoped to the task
+> role), SA `breadsheet-dev-vision` (`aiplatform.user`), `workloadIdentityUser` bound to the task-role
+> principalSet. **12b (app wiring + mode flip) ⬜.**
+
+> Keyless GCP access from the Fargate task — so the app calls **Vertex AI (Gemini)** and **Cloud
+> Vision** as a GCP service account **without any service-account key**, using its **AWS task-role
+> identity** as the federation source. Two halves: **(12a) the GCP federation** (hand-build — the
+> focus of this objective) and **(12b) the app credential wiring** (a code change, with a real
+> Fargate-specific gotcha). The existing `terraform/gcp-wif.tf` is the **EKS/OIDC** variant — it
+> federates a Kubernetes SA token; Fargate needs a different trust source (an **AWS provider**), so
+> this is a parallel build, not a reuse.
+
+**Why WIF (and why an AWS provider):** the app authenticates to GCP purely through **ADC**
+(`geminiClient.ts` → `new GoogleGenAI({ vertexai: true })`; `visionService.ts` → `new
+ImageAnnotatorClient()` — both implicit). In prod, ADC must resolve to a **keyless** credential. WIF
+lets GCP **trust an external identity** and exchange it for a short-lived token that **impersonates a
+GCP service account** — no key ever created. For EKS the external identity was a k8s OIDC token; on
+Fargate it's the **AWS task role**, so the WIF pool needs an **AWS provider** (GCP trusts an AWS
+account + verifies an STS `GetCallerIdentity` the caller signs with its AWS creds).
+
+**The runtime chain (what happens on a Gemini/Vision call):**
+1. The container holds the **task role** (`breadsheet-dev-ecs-task`) creds via the ECS container
+   credentials endpoint.
+2. Google ADC signs an STS `GetCallerIdentity` request with those AWS creds and presents it to **GCP
+   STS** (`sts.googleapis.com`).
+3. GCP STS verifies it against the pool's **AWS provider** (trusts account `493942067033`), checks
+   the **attribute condition** (only the task role), and returns a **federated token**.
+4. That token **impersonates** the GCP SA (`roles/iam.workloadIdentityUser`), which carries
+   `roles/aiplatform.user` + `roles/cloudvision.user`.
+5. The app calls Vertex/Vision **as the SA**. No key, no static secret.
+
+### 12a — the GCP federation (hand-build)
+
+GCP context: project `breadsheet-496522` (number **`1054240616692`**); APIs `aiplatform`, `vision`,
+`iam`, `iamcredentials` already enabled — **also enable `sts.googleapis.com`** (the token-exchange
+endpoint). Build:
+
+- **Workload Identity Pool** — e.g. `breadsheet-dev` (no pool exists yet).
+- **AWS provider** in the pool — `--account-id=493942067033`. **Scope it to the task role** with an
+  **attribute condition** so *only* `breadsheet-dev-ecs-task` can federate, not every role in the
+  account, e.g.
+  `assertion.arn.startsWith('arn:aws:sts::493942067033:assumed-role/breadsheet-dev-ecs-task/')`.
+  Map `google.subject = assertion.arn` (+ the `attribute.aws_role` mapping for the principal below).
+- **Service account** `breadsheet-dev-vision` — grant `roles/aiplatform.user` (Vertex/Gemini).
+  **Note:** `roles/cloudvision.user` **does not exist** (the EKS `gcp-wif.tf` references it — a latent
+  bug to fix before import). Cloud Vision (`VISION_MODE=live`) does **no resource-level IAM** — it's
+  authorized by API-enablement + an authenticated SA + billing, so a same-project SA needs no Vision
+  role. If a live OCR call ever 403s, add `roles/serviceusage.serviceUsageConsumer` — not
+  speculatively.
+- **Impersonation binding** — grant `roles/iam.workloadIdentityUser` on that SA to the **task-role
+  principalSet**:
+  `principalSet://iam.googleapis.com/projects/1054240616692/locations/global/workloadIdentityPools/breadsheet-dev/attribute.aws_role/arn:aws:sts::493942067033:assumed-role/breadsheet-dev-ecs-task`.
+
+This is two layers of scoping (provider attribute condition **and** the principalSet on the binding)
+— both pin the trust to exactly the Fargate task role.
+
+### 12b — app credential wiring (code change) + the Fargate gotcha
+
+The app reaches GCP via ADC, normally pointed at a **WIF credential-config JSON**
+(`GOOGLE_APPLICATION_CREDENTIALS`) generated by
+`gcloud iam workload-identity-pools create-cred-config … --aws`. That JSON holds **no secret** — just
+the pool/provider/SA references + instructions for *where to get the AWS creds*.
+
+⚠️ **The Fargate gotcha — the cred-config's default AWS source doesn't work on Fargate.** The `--aws`
+cred-config emits **EC2 IMDS** URLs (`169.254.169.254`) to fetch the AWS creds + region. **Fargate
+does not serve task-role creds via IMDS** — they come from the **container credentials endpoint**
+(`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, `169.254.170.2`). Google's auth library uses AWS **env
+vars** if present, else **IMDS** — and on Fargate *neither* is populated, so the out-of-the-box
+cred-config fails to fetch creds.
+
+**Resolution — a programmatic AWS credential supplier.** Construct a `GoogleAuth` / external-account
+client with a custom **`AwsSecurityCredentialsSupplier`** backed by `@aws-sdk/credential-providers`
+(`fromContainerMetadata()` / `fromNodeProviderChain()` — these natively read the ECS container
+endpoint), and pass that auth into the genai + Vision clients instead of relying on implicit ADC. This
+is a small change to `geminiClient.ts` + `visionService.ts` (inject a shared auth). With the supplier
+in code, you may not need the JSON file at all — the pool/provider/SA + supplier can be configured
+programmatically.
+
+**Then flip the env** (task-def `environment`, plain — not secrets): `GOOGLE_GENAI_USE_VERTEXAI=true`,
+`GOOGLE_CLOUD_PROJECT=breadsheet-496522`, `GOOGLE_CLOUD_LOCATION=europe-west1`, and move
+`VISION_MODE`/`PLAUSIBILITY_MODE` off `mock` (`llm`/`gemini`). Ship via the CD pipeline (Objective 8B).
+
+**Staged approach (recommended):** build + verify **12a** first (the GCP side is independently
+checkable), then do **12b** (supplier + flip modes) as its own change so a federation bug and a
+code bug don't tangle.
+
+**Definition of done:**
+- [x] `sts.googleapis.com` enabled; Workload Identity Pool `breadsheet-dev` exists (ACTIVE).
+- [x] An **AWS provider** `aws-ecs` (`account-id=493942067033`) with an **attribute condition**
+      scoping to `assumed-role/breadsheet-dev-ecs-task` only (verified ACTIVE).
+- [x] SA `breadsheet-dev-vision` with `roles/aiplatform.user` (Vertex/Gemini). Cloud Vision needs no
+      role — `roles/cloudvision.user` doesn't exist; API-enablement + authenticated SA suffices.
+- [x] `roles/iam.workloadIdentityUser` bound to the **task-role principalSet** on that SA (verified).
+- [x] App wired (`services/gcpWorkloadIdentity.ts`): a google-auth `AwsClient` with a programmatic
+      `AwsSecurityCredentialsSupplier` backed by the AWS SDK default provider chain (reads the ECS
+      container endpoint, **not** IMDS). Injected into the genai (`googleAuthOptions.authClient`) +
+      Vision (`{ authClient }`) clients; `null` → default ADC locally. Added
+      `@aws-sdk/credential-provider-node` dep. Typecheck + full suite green (413 tests, incl. new
+      `gcpWorkloadIdentity.test.ts`). **Not yet deployed.**
+- [ ] Task-def env flipped (plain `environment`): `GOOGLE_GENAI_USE_VERTEXAI=true`,
+      `GOOGLE_CLOUD_PROJECT=breadsheet-496522`, `GOOGLE_CLOUD_LOCATION=europe-west1`,
+      `GCP_WORKLOAD_IDENTITY_AUDIENCE=//iam.googleapis.com/projects/1054240616692/locations/global/workloadIdentityPools/breadsheet-dev/providers/aws-ecs`,
+      `GCP_SERVICE_ACCOUNT_EMAIL=breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com`, and
+      `PLAUSIBILITY_MODE=gemini` / `VISION_MODE=llm` (off `mock`). **Deploy the code first**, then flip.
+- [ ] **End-to-end:** an upload exercising plausibility/extraction succeeds against real
+      Vertex/Vision (logs show a successful call, no auth error).
+- [ ] WIF pool/provider/SA recorded for the import map.
+
+**First-timer tip (not a clickpath):** the mental flip from the EKS setup is the **trust source** —
+*OIDC token* (k8s) becomes *AWS STS identity* (the task role), so it's a **`create-aws`** provider,
+not `create-oidc`. Scope it to the **one role** (attribute condition) — an unscoped AWS provider
+trusts *every* identity in the account. The single thing that will bite you is the **IMDS-vs-container
+endpoint** gap above: a cred-config that works on your laptop/EC2 will silently fail on Fargate until
+the programmatic supplier is in place — so verify the GCP side independently first, then expect to
+touch app code for 12b. Keep the Vertex **location** to a Gemini-supported region (`europe-west1`).
+
+**Verification:** Claude will run (read-only) `gcloud iam workload-identity-pools describe` +
+`… providers describe` (account-id + attribute condition), `gcloud iam service-accounts get-iam-policy`
+(the `workloadIdentityUser` binding to the task-role principalSet) and
+`gcloud projects get-iam-policy` (the SA's `aiplatform.user`/`cloudvision.user`). The true end-to-end
+proof is a real upload after 12b — checking the task logs for a successful Vertex/Vision response.
+
+---
+
 ## Objective 13 — Secrets in SSM Parameter Store  ✅
 
 > Pulled forward (before Objectives 8–10) because the task definition's `secrets` block references
@@ -959,6 +1091,10 @@ Filled in as resources are created; drives the Terraform import phase (objective
 | HTTP:80 listener (301→HTTPS) | (under the ALB above) | `aws_lb_listener.http_redirect` | ⬜ |
 | ECS service | `…:service/breadsheet-server-dev/breadsheet-dev-server-service` | `aws_ecs_service.server` | ⬜ |
 | Route 53 A-alias record | `server.dev.bread-sheet.com` → ALB (in zone `Z08021021I2ON3AX4JM0`) | `aws_route53_record.server` | ⬜ |
+| GCP WIF pool | `breadsheet-dev` (project `breadsheet-496522`/`1054240616692`) | `google_iam_workload_identity_pool.aws` | ⬜ |
+| GCP WIF AWS provider | `aws-ecs` (account `493942067033`, scoped to task role) | `google_iam_workload_identity_pool_provider.aws_ecs` | ⬜ |
+| GCP service account | `breadsheet-dev-vision@…` (`aiplatform.user`) | `google_service_account.vision` | ⬜ |
+| GCP SA impersonation binding | `workloadIdentityUser` → task-role principalSet | `google_service_account_iam_member.wif` | ⬜ |
 | S3 images bucket | `breadsheet-dev-s3-493942067033-eu-west-1-an` | `aws_s3_bucket.images` | ⬜ |
 | — bucket public-access block | (same bucket) | `aws_s3_bucket_public_access_block.images` | ⬜ |
 | — bucket ownership controls | (same bucket) | `aws_s3_bucket_ownership_controls.images` | ⬜ |
@@ -1065,3 +1201,15 @@ Filled in as resources are created; drives the Terraform import phase (objective
   11 ✅**, import map updated. Wrote **ECS Service** + **Route 53 alias** sections in the personal
   knowledge hub. Remaining: 8B (CD pipeline + deployer-ARN fix), 12 (GCP WIF), 14 (Terraform import),
   15 (post-build adaptations). Next: Objective 8B or 12.
+- _Session 14:_ Built **Objective 8B (dev CD)**: added a `deploy-dev` job to `build-image.yml`
+  (`needs: build`) — keyless GitHub-OIDC → fetch active task def (`describe-task-definition` + `jq`
+  strip) → render `:<sha>` image → `amazon-ecs-deploy-task-definition` with
+  `wait-for-service-stability`, `concurrency: deploy-dev`. Chose **fetch-task-def-from-AWS over a repo
+  file** so CD only swaps the image (never clobbers the hand-built env/secrets). Fixed the deployer
+  policy ARN (`service/breadsheet-server-dev/breadsheet-dev-server-service`). Discussed why the role
+  ARN/account id are **not secrets** (OIDC trust is the boundary; if anything use `vars`, not Secrets
+  — deferred to prod/Environments) and walked through **`iam:PassRole`** (the deployer *passes* the
+  task/exec roles to ECS, scoped to those two ARNs + `PassedToService=ecs-tasks` — an escalation
+  guard). Merged to main; Claude watched the run — `build`+`deploy-dev` green, service rolled to
+  **rev `:6`** (`COMPLETED`, pinned to the merge SHA), still serving `200`. **Objective 8 ✅** (dev;
+  prod promotion deferred). Next: Objective 12 (GCP WIF), then 14 (Terraform import).
