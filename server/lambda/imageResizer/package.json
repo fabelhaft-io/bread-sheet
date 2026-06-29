@@ -7,13 +7,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "sharp": "^0.34.0"
+    "sharp": "^0.35.2"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.0.0",
-    "@types/aws-lambda": "^8.10.0",
-    "@types/node": "^24.0.0",
-    "esbuild": "^0.25.0",
-    "typescript": "^5.0.0"
+    "@aws-sdk/client-s3": "^3.1075.0",
+    "@types/aws-lambda": "^8.10.162",
+    "@types/node": "^26.0.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^6.0.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }
