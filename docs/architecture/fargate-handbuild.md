@@ -50,7 +50,7 @@ section as it's fleshed out.
 | 9  | [ALB + target group + ACM cert + HTTPS listener](#objective-9--alb--target-group--acm-cert--https-listener) | ✅ |
 | 10 | [ECS service (wires task → target group)](#objective-10--ecs-service)                          | ✅ |
 | 11 | Route 53 record → ALB (A-alias `server.dev.bread-sheet.com` → ALB)                             | ✅ |
-| 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | 🔄 |
+| 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | ✅ |
 | 13 | [Secrets in SSM Parameter Store (`DATABASE_URL`, `SUPABASE_*`)](#objective-13--secrets-in-ssm-parameter-store) | ✅ |
 | 14 | Import everything into Terraform                                                               | ⬜ |
 | 15 | Post Build Adaptions                                                                           | ⬜ |
@@ -941,12 +941,12 @@ code bug don't tangle.
       Vision (`{ authClient }`) clients; `null` → default ADC locally. Added
       `@aws-sdk/credential-provider-node` dep. Typecheck + full suite green (413 tests, incl. new
       `gcpWorkloadIdentity.test.ts`). **Not yet deployed.**
-- [ ] Task-def env flipped (plain `environment`): `GOOGLE_GENAI_USE_VERTEXAI=true`,
+- [x] Task-def env flipped (plain `environment`): `GOOGLE_GENAI_USE_VERTEXAI=true`,
       `GOOGLE_CLOUD_PROJECT=breadsheet-496522`, `GOOGLE_CLOUD_LOCATION=europe-west1`,
       `GCP_WORKLOAD_IDENTITY_AUDIENCE=//iam.googleapis.com/projects/1054240616692/locations/global/workloadIdentityPools/breadsheet-dev/providers/aws-ecs`,
       `GCP_SERVICE_ACCOUNT_EMAIL=breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com`, and
       `PLAUSIBILITY_MODE=gemini` / `VISION_MODE=llm` (off `mock`). **Deploy the code first**, then flip.
-- [ ] **End-to-end:** an upload exercising plausibility/extraction succeeds against real
+- [x] **End-to-end:** an upload exercising plausibility/extraction succeeds against real
       Vertex/Vision (logs show a successful call, no auth error).
 - [ ] WIF pool/provider/SA recorded for the import map.
 
@@ -1099,7 +1099,8 @@ Filled in as resources are created; drives the Terraform import phase (objective
 | Route 53 A-alias record | `server.dev.bread-sheet.com` → ALB (in zone `Z08021021I2ON3AX4JM0`) | `aws_route53_record.server` | ⬜ |
 | GCP WIF pool | `breadsheet-dev` (project `breadsheet-496522`/`1054240616692`) | `google_iam_workload_identity_pool.aws` | ⬜ |
 | GCP WIF AWS provider | `aws-ecs` (account `493942067033`, scoped to task role) | `google_iam_workload_identity_pool_provider.aws_ecs` | ⬜ |
-| GCP service account | `breadsheet-dev-vision@…` (`aiplatform.user`) | `google_service_account.vision` | ⬜ |
+| GCP service account | `breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` (uniqueId `107807807341293118930`) | `google_service_account.vision` | ⬜ |
+| GCP project role binding (`aiplatform.user` → SA) | `breadsheet-496522 roles/aiplatform.user serviceAccount:breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` | `google_project_iam_member.vision_aiplatform` | ⬜ |
 | GCP SA impersonation binding | `workloadIdentityUser` → task-role principalSet | `google_service_account_iam_member.wif` | ⬜ |
 | S3 images bucket | `breadsheet-dev-s3-493942067033-eu-west-1-an` | `aws_s3_bucket.images` | ⬜ |
 | — bucket public-access block | (same bucket) | `aws_s3_bucket_public_access_block.images` | ⬜ |
