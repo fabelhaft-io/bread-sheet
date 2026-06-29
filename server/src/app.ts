@@ -12,6 +12,12 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:8081')
 
 const app = express();
 
+// Behind the Fargate ALB, the client IP arrives in X-Forwarded-For. Trust the
+// single ALB hop so req.ip resolves to the real client and express-rate-limit
+// keys per-client (not per-ALB). Must stay 1 unless another proxy (e.g.
+// CloudFront) is added in front of the ALB.
+app.set('trust proxy', 1);
+
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json());
 
