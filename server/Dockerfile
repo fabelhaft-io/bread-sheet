@@ -2,8 +2,17 @@ FROM node:24-alpine
 
 WORKDIR /usr/src/app
 
-# Install OpenSSL (required for Prisma on Alpine)
-RUN apk add --no-cache openssl
+# Install OpenSSL (required for Prisma on Alpine) + ca-certificates (so the
+# RDS bundle download below can verify Amazon's public cert).
+RUN apk add --no-cache openssl ca-certificates
+
+# Ship the AWS RDS global CA bundle. The pg driver adapter verifies the RDS server
+# certificate against this (DB_SSL=verify-full) — it is not in Node's default trust
+# store, so without it the TLS handshake aborts ("could not accept SSL connection:
+# EOF detected"). Downloaded at build so it stays current with AWS's CA rotations.
+RUN mkdir -p certs \
+  && wget -qO certs/rds-global-bundle.pem \
+     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
 # Install dependencies
 COPY package*.json ./

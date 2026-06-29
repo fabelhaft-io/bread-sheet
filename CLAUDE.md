@@ -138,6 +138,18 @@ Never use inline fallback values for environment variables that configure runtim
 PORT=3000
 NODE_ENV=development
 DATABASE_URL="postgresql://admin:password@localhost:5432/breadsheet"
+
+# TLS for the runtime pg connection pool (the `@prisma/adapter-pg` driver adapter in
+# src/db.ts — a different TLS stack from the Prisma migration engine). No default —
+# must be explicit: disabled | verify-full.
+#   - disabled    : local Postgres (docker-compose) speaks no TLS.
+#   - verify-full : RDS. Verifies the server cert against the RDS CA bundle shipped
+#                   in the Docker image (configs/databaseConfig.ts strips `sslmode`
+#                   from the URL and sets ssl:{ ca, rejectUnauthorized:true }).
+# Note: pg >= 8.22 treats URL `sslmode=require` as verify-full against the *default*
+# trust store, which the RDS CA is NOT in — so relying on the URL alone aborts the
+# handshake at query time ("could not accept SSL connection: EOF"). Hence this var.
+DB_SSL=disabled
 SUPABASE_URL=...
 SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
 

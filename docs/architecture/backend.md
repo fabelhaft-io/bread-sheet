@@ -47,6 +47,8 @@ Applied in order in `app.ts`:
 
 Authorization guards (6–8) are composable and applied at the **router layer**, not inside controllers.
 
+`app.ts` also sets `app.set('trust proxy', 1)` ahead of the stack. In the deployed environment the server sits behind the Fargate ALB, which forwards the real client IP in `X-Forwarded-For`. Trusting the single ALB hop makes `req.ip` resolve to the actual client so the IP-keyed limiters (`apiLimiter`, `syncLimiter`) throttle per client rather than per ALB, and avoids `express-rate-limit`'s `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` error. The value is `1` (not `true`) so forged `X-Forwarded-For` headers can't be used to dodge limits; bump it only if another proxy (e.g. CloudFront) is added in front of the ALB.
+
 ---
 
 ## Logging
