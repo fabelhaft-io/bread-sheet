@@ -1,7 +1,7 @@
-name: Build & push server image
+name: Build, push & deploy server image
 
-# Builds server/Dockerfile and pushes to GitHub Container Registry (free).
-# The package is public, so EKS pulls it with no imagePullSecret.
+# Builds server/Dockerfile and pushes to GitHub Container Registry (free, public),
+# then continuously deploys the new image to the dev ECS/Fargate service.
 on:
   push:
     branches: [main]
@@ -38,3 +38,59 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
+
+  # Continuous deployment to the dev ECS service. Registers a new task-definition
+  # revision pinned to the freshly-built :<sha> image and rolls the service to it.
+  # Keyless: assumes the deployer IAM role via GitHub OIDC (no stored AWS keys).
+  deploy-dev:
+    name: Deploy to dev (ECS)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required to request the OIDC token for AWS
+    # Never let two deploys race the same service.
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    env:
+      AWS_REGION: eu-west-1
+      CLUSTER: breadsheet-server-dev
+      SERVICE: breadsheet-dev-server-service
+      TASK_FAMILY: breadsheet-dev-server
+      CONTAINER: server
+    steps:
+      - name: Configure AWS credentials (OIDC, keyless)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::493942067033:role/breadsheet-dev-deployer
+          aws-region: ${{ env.AWS_REGION }}
+
+      # AWS is the source of truth for the task def (hand-built now, Terraform-owned
+      # later), so fetch the active revision and strip the read-only fields that
+      # register-task-definition rejects — we only swap the image below.
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query 'taskDefinition' --output json \
+            | jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                      .compatibilities, .registeredAt, .registeredBy)' \
+            > task-def.json
+
+      - name: Render new image into the task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-def.json
+          container-name: ${{ env.CONTAINER }}
+          image: ${{ env.IMAGE }}:${{ github.sha }}
+
+      # Registers the rendered revision, calls update-service, and blocks until
+      # the rolling deployment reaches steady state — so a bad rollout fails CI.
+      - name: Deploy to ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.SERVICE }}
+          cluster: ${{ env.CLUSTER }}
+          wait-for-service-stability: true
