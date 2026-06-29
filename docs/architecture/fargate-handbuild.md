@@ -52,7 +52,7 @@ section as it's fleshed out.
 | 11 | Route 53 record → ALB (A-alias `server.dev.bread-sheet.com` → ALB)                             | ✅ |
 | 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | ✅ |
 | 13 | [Secrets in SSM Parameter Store (`DATABASE_URL`, `SUPABASE_*`)](#objective-13--secrets-in-ssm-parameter-store) | ✅ |
-| 14 | Import everything into Terraform                                                               | ⬜ |
+| 14 | [Import the hand-built stack into Terraform](#objective-14--import-the-hand-built-stack-into-terraform) | ⬜ |
 | 15 | Post Build Adaptions                                                                           | ⬜ |
 
 ---
@@ -1042,6 +1042,143 @@ exist under `/breadsheet/dev/`, and re-read the execution role's inline policy
 
 ---
 
+## Objective 14 — Import the hand-built stack into Terraform  ⬜
+
+> The payoff of the whole build: bring every hand-built **dev** resource under Terraform **in place**
+> (no recreate — dev keeps serving), driving `terraform plan` to a **zero-diff no-op**. The
+> [import map](#import-map) already lists all ~35 resources with their AWS IDs and planned TF
+> addresses — this objective turns that table into HCL + state, slice by slice in dependency order.
+
+**Decisions locked in (Session 16):**
+- **Import in place, never recreate.** Dev is live (`https://server.dev.bread-sheet.com/` → `200`); we
+  *adopt* the running resources into state, we do **not** destroy/re-apply them.
+- **Raw resources, no modules.** Drop the `terraform-aws-modules/{vpc,eks,rds}` modules — the import map
+  targets raw addresses (`aws_vpc.main`, `aws_subnet.public["az1"]`), and raw resources import cleanly
+  one-to-one. Modules scatter dozens of internal addresses (`module.vpc.aws_subnet.public[0]`, …) that
+  are painful to import and re-key.
+- **Delete the EKS stack** (`eks.tf`, `irsa.tf`, `k8s/`, the OIDC-variant `gcp-wif.tf`, and the `local`
+  env files). It describes the abandoned EKS design and was **never applied** to this account — deleting
+  it destroys nothing real. The learning value stays in git history; **tag the pre-deletion commit**
+  (`git tag eks-architecture <sha>`) so it's one `git checkout` away. (Genuine EKS practice belongs in a
+  throwaway/dedicated project where it can actually be `apply`-ed cheaply, not as dead HCL here.)
+- **Two cloud environments only: `dev` (filled now) + `prod` (scaffolded, deferred).** Drop the `local`
+  Terraform environment — LocalStack Community can't emulate ECS/ALB/ACM/Route 53/RDS, so `terraform
+  apply` there would test almost nothing; local dev already runs on docker-compose +
+  `scripts/localstack-init.sh`, which stays **untouched**. Removing local-TF also lets us **delete the
+  entire `is_local` / `cloud_count` / LocalStack-endpoints machinery** from `main.tf`/`locals.tf` — a
+  real simplification, not just a deletion.
+
+**Goal:** a single `terraform/` root that describes **exactly the deployed dev Fargate stack** (and a
+deferred `prod` stage), with `terraform plan` reporting **no changes** after every resource in the
+[import map](#import-map) is imported. Terraform then owns the infrastructure; the
+[CD pipeline](#objective-8--task-definition--cd-pipeline) keeps owning task-def revisions.
+
+**Why import (not recreate), and why `import {}` blocks:** recreating would tear down a working,
+DNS-fronted, certificate-validated service — pointless churn and downtime for resources that already
+exist correctly. Terraform `>= 1.10` (already pinned in `main.tf`) supports **declarative `import {}`
+blocks** + **`terraform plan -generate-config-out=generated.tf`**: we write an `import` block per
+import-map row (the AWS IDs are all recorded), let Terraform **generate a first draft of the HCL**, then
+hand-refine it to idiomatic config and drive the post-import `plan` to **zero diff**. That turns ~35
+imports from "hand-write HCL blind" into "review and tidy generated HCL." A non-empty diff after import
+is the signal the HCL doesn't yet match reality — fix the HCL, never `apply` it away.
+
+**Target file layout (after the rewrite):**
+```
+terraform/
+  main.tf       # providers (aws + google) only — no LocalStack/is_local machinery
+  variables.tf  # trimmed to what the Fargate stack needs
+  locals.tf     # name_prefix + tags; no cloud_count / is_local
+  backend.tf    # S3 remote state, per-env keys (dev, prod)
+  network.tf    # raw aws_vpc / aws_subnet / aws_internet_gateway / aws_route_table(+assoc) — NO NAT
+  security.tf   # aws_security_group {alb, task, rds} + cross-referencing rules
+  rds.tf        # aws_db_subnet_group + aws_db_instance (breadsheet-dev-database-1)
+  iam.tf        # exec / task / deployer roles, their policies, the GitHub OIDC provider
+  s3.tf         # images bucket + public-access-block + ownership + policy + cors
+  ssm.tf        # 3 /breadsheet/dev/* params + exec-role SSM inline policy
+  ecs.tf        # aws_ecs_cluster + aws_ecs_task_definition + aws_ecs_service
+  alb.tf        # aws_lb + target group + 443/80 listeners + aws_acm_certificate(+validation)
+  dns.tf        # aws_route53_zone (dev) + A-alias record → ALB
+  gcp-wif.tf    # REWRITTEN: AWS-provider WIF (pool + aws provider + SA + bindings) — not OIDC/IRSA
+  environments/{dev,prod}.tfvars + {dev,prod}.s3.tfbackend
+  # DELETED: eks.tf, irsa.tf, k8s/, lambda.tf(local path), environments/local.*
+```
+
+**Import order — slice by the build/dependency graph** (the same order this runbook was built; `plan`
+to a no-op after each slice, then commit):
+
+1. **Bootstrap** — confirm the S3 remote-state backend + `dev` key exist (`backend.tf` /
+   `environments/dev.s3.tfbackend`); `terraform init`. Delete the EKS/local files; **tag the old commit**.
+   Strip the `is_local`/`cloud_count` machinery from `main.tf`/`locals.tf`.
+2. **Network** — `aws_vpc.main`, the 4 subnets, `aws_internet_gateway.main`, the 2 route tables (+ their
+   default route + subnet associations).
+3. **Security groups** — `aws_security_group.{alb,task,rds}` + the SG-referencing ingress rules.
+4. **RDS** — `aws_db_subnet_group.main`, `aws_db_instance.main`.
+5. **IAM** — `aws_iam_openid_connect_provider.github`, the exec/task/deployer roles + their inline/managed
+   policy attachments.
+6. **S3** — bucket + `aws_s3_bucket_public_access_block` + `aws_s3_bucket_ownership_controls` +
+   `aws_s3_bucket_policy` + `aws_s3_bucket_cors_configuration`.
+7. **SSM** — the 3 parameters + the exec-role SSM policy (see the `DATABASE_URL`-in-state edge below).
+8. **ECS** — `aws_ecs_cluster.main`, `aws_ecs_task_definition.server`, `aws_ecs_service.server`
+   (see the task-def-drift + CFN-stack edges below).
+9. **ALB / ACM** — `aws_lb.main`, `aws_lb_target_group.server`, the `:443`/`:80` listeners,
+   `aws_acm_certificate.server` (+ its validation record).
+10. **DNS** — `aws_route53_zone.dev`, the `server.dev.bread-sheet.com` A-alias record.
+11. **GCP WIF** — pool + AWS provider + SA + the two bindings (HCL rewritten from the EKS variant).
+
+**Three edges to decide as we hit them (all already flagged in this runbook):**
+
+- **Task-def drift — `ignore_changes`.** [CD](#objective-8--task-definition--cd-pipeline) registers a new
+  task-def revision on every push, *outside* Terraform. Put `lifecycle { ignore_changes = [task_definition] }`
+  on `aws_ecs_service.server` so TF owns the cluster/service/roles/ALB while CD owns revisions. Import the
+  task def at its current revision for completeness, but expect TF to not track subsequent revisions.
+  **Likely its own short ADR.**
+- **ECS cluster's CloudFormation stack — single-owner cleanup.** The cluster was created by the console via
+  a CFN stack (`Infra-ECS-Cluster-breadsheet-server-dev-7c4a32c2`). Importing the cluster into Terraform
+  gives it two owners. Resolve by **deleting the CFN stack with `--retain-resources`** (keeps the live
+  cluster, drops CFN's claim) once the cluster is safely in TF state.
+- **`DATABASE_URL` SecureString — secret-in-state.** Importing the SecureString reads the DB password into
+  Terraform state (S3 backend — ensure it's encrypted + access-locked). **Recommended:** import the
+  parameter but set `lifecycle { ignore_changes = [value] }` so TF never churns or re-exposes it on
+  rotation; treat the value as hand/SSM-owned. This whole question disappears at
+  [adaptation A1](#post-build-adaptations) (keyless RDS IAM auth removes the password entirely — see
+  [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md)).
+
+**Definition of done:**
+- [ ] EKS/local artefacts deleted (`eks.tf`, `irsa.tf`, `k8s/`, `environments/local.*`); pre-deletion
+      commit tagged `eks-architecture`. `is_local`/`cloud_count`/LocalStack-endpoints machinery removed.
+- [ ] `terraform/` root rewritten to raw, Fargate-only resources per the layout above; `terraform init`
+      against the **dev** S3 backend succeeds.
+- [ ] Every [import map](#import-map) row imported (an `import {}` block per resource) and its `Imported`
+      box flipped to ✅.
+- [ ] `aws_ecs_service.server` carries `ignore_changes = [task_definition]`; the ECS cluster's CFN stack
+      deleted with `--retain-resources` (single owner).
+- [ ] `DATABASE_URL` parameter handled per the secret-in-state decision (recommend `ignore_changes = [value]`).
+- [ ] **`terraform plan` reports `No changes` on the dev workspace** — the whole stack is described and
+      adopted with zero drift.
+- [ ] `prod` env files scaffolded (`environments/prod.{tfvars,s3.tfbackend}`) but not applied — promotion
+      deferred until a prod stage exists.
+- [ ] `docs/architecture/infrastructure.md` updated to describe the Fargate Terraform root (replacing the
+      EKS description); a `lifecycle`/CD-ownership ADR added if we write one.
+
+**First-timer tip (not a clickpath):** the golden rule is **post-import `plan` must be a no-op** — if it
+shows changes, the *HCL* is wrong (a default attribute you didn't set, a tag case mismatch, an ordering
+difference), so edit the config to match reality; **never `apply` to "fix" a freshly imported resource**
+or you'll mutate live infra. Import **one slice at a time** and `plan` between them — a 35-resource
+big-bang import is impossible to debug. Generated config (`-generate-config-out`) is a *draft*, not the
+answer: it's verbose and often pins computed/default fields you should delete. Watch for the usual
+import mismatches: missing `aws_route_table_association`/default `aws_route` (subnets/IGW look fine but
+routing drifts), the implicit default-egress SG rule, and S3's split sub-resources (BPA, ownership,
+policy, CORS are each their own resource, not bucket attributes). Keep secrets (`DATABASE_URL`) out of
+plan output.
+
+**Verification:** the objective is *self-verifying* — a clean `terraform plan` (`No changes`) on the dev
+workspace is the proof the Terraform config matches the deployed stack. Claude will additionally
+spot-check (read-only) that no resource was recreated during import (`terraform state list` covers every
+import-map row), confirm the ECS service's `ignore_changes`, and confirm the CFN stack is gone
+(`aws cloudformation describe-stacks` → not found) while the cluster still serves `200`.
+
+---
+
 ## Post-build adaptations
 
 Improvements deliberately **deferred** until the stack runs end-to-end, so they don't sit on the
@@ -1236,3 +1373,15 @@ Filled in as resources are created; drives the Terraform import phase (objective
   (no local TLS); CLAUDE.md documented. 8 new unit tests; full suite green (432). **Deploy note:** the
   live **task-def `environment` must add `DB_SSL=verify-full`** (a new revision) — fail-fast means the
   new image won't boot without it. Next: deploy the fix, then Objective 12 (GCP WIF).
+- _Session 16:_ Reviewed the whole runbook and the existing (EKS-shaped) `terraform/` root, then wrote
+  the **[Objective 14](#objective-14--import-the-hand-built-stack-into-terraform)** plan: import the
+  hand-built dev stack into Terraform **in place** (no recreate) via TF 1.10 `import {}` blocks +
+  `-generate-config-out`, slice by dependency order, driving `terraform plan` to a **zero-diff no-op**.
+  Locked four decisions: **raw resources (no modules)** for clean one-to-one imports; **delete the EKS
+  stack** (`eks.tf`/`irsa.tf`/`k8s/`/OIDC `gcp-wif.tf`) — never applied, kept only in git history behind a
+  `eks-architecture` tag; **two cloud envs (dev + prod), drop the `local` TF env** (LocalStack can't
+  emulate ECS/ALB/ACM/Route 53/RDS — local dev stays on docker-compose + `localstack-init.sh`), which also
+  lets the `is_local`/`cloud_count` machinery go. Flagged three edges to settle during import: task-def
+  drift (`ignore_changes`), the ECS cluster's CFN stack (delete with `--retain-resources`), and the
+  `DATABASE_URL` SecureString-in-state (recommend `ignore_changes = [value]`). Next: execute Objective 14
+  — bootstrap + network slice first.
