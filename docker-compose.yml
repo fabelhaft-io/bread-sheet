@@ -28,6 +28,9 @@ services:
       - NODE_ENV=development
       - PORT=3000
       - DATABASE_URL=postgresql://admin:password@db:5432/breadsheet
+      # Local Postgres speaks no TLS. In prod (RDS) this is `verify-full`, which
+      # verifies the server cert against the RDS CA bundle shipped in the image.
+      - DB_SSL=disabled
       - DB_HOST=db
       - DB_USER=admin
       - DB_PASSWORD=password

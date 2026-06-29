@@ -72,6 +72,15 @@ toggle on the instance now** — it is a no-reboot modify and coexists with pass
 door to C stays open for free. B is not chosen: it keeps a stored password *and* adds cost, giving
 the worst of both relative to A (simplicity) and C (no secret, no cost).
 
+> **Update (Session 15):** the `@prisma/adapter-pg` driver adapter (`src/db.ts`) is already wired in
+> interim state A — so the TLS half of C is decoupled and **done now**, ahead of the credential
+> migration. The pg pool verifies the RDS server cert against the RDS CA bundle shipped in the image
+> with `rejectUnauthorized: true` (`configs/databaseConfig.ts`, gated by the required `DB_SSL` env:
+> `disabled` locally, `verify-full` on RDS). This was forced by a real bug, not foresight: pg ≥ 8.22
+> treats the URL's `sslmode=require` as `verify-full` against the *default* trust store (which lacks
+> the RDS CA), aborting the handshake at query time. When C lands, only the `password` callback is
+> added — the CA-bundle TLS is already in place.
+
 ### Positive Consequences
 
 * Fastest path to a working, deployable stack — no auth code on the critical path.

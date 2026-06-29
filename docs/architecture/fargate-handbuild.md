@@ -487,6 +487,12 @@ before serving, and shipping logs to CloudWatch. Everything it references alread
   args; the prisma CLI is present (the Dockerfile keeps devDeps).
 - `environment` (plain, non-secret):
   - `PORT=3000`, `NODE_ENV=production`, `LOG_LEVEL=info`
+  - **`DB_SSL=verify-full`** — **required** (added Session 15): the runtime `pg` driver adapter
+    (`src/db.ts`) does its own TLS, separate from the Prisma migration engine. Without this the app
+    throws at startup (fail-fast). `verify-full` verifies the RDS server cert against the CA bundle
+    baked into the image (`certs/rds-global-bundle.pem`). Relying on the URL's `sslmode=require`
+    instead fails at *query* time (pg ≥ 8.22 treats it as verify-full against the default trust store,
+    which lacks the RDS CA → `could not accept SSL connection: EOF`). See [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md).
   - **`AWS_REGION=eu-west-1`** — **required**: `imageService.ts` builds `new S3Client({...})` with
     no region, and ECS does **not** auto-inject one → without it every S3 call throws "Region is
     missing." Do **not** set `AWS_ENDPOINT_URL` (SDK v3 honours it and would misroute S3 off AWS).
@@ -1213,3 +1219,19 @@ Filled in as resources are created; drives the Terraform import phase (objective
   guard). Merged to main; Claude watched the run — `build`+`deploy-dev` green, service rolled to
   **rev `:6`** (`COMPLETED`, pinned to the merge SHA), still serving `200`. **Objective 8 ✅** (dev;
   prod promotion deferred). Next: Objective 12 (GCP WIF), then 14 (Terraform import).
+- _Session 15:_ Hit a runtime DB bug surfacing *before* the GCP work: the app booted, migrations
+  applied, `GET /` served `200` — but DB-backed queries failed, RDS logging
+  `could not accept SSL connection: EOF detected` from the task's private IPs. Root cause: the runtime
+  connection goes through the **`@prisma/adapter-pg` driver adapter** (`src/db.ts` → `pg.Pool`), a
+  different TLS stack from the Prisma migration engine. `pg` ≥ 8.22 treats the URL's `sslmode=require`
+  as `verify-full`, which validates the RDS cert against Node's default trust store — and the **RDS CA
+  isn't in it**, so `pg` aborts the handshake. Migrations escaped it (Prisma's engine treats `require`
+  as encrypt-only), which is why the failure was invisible at boot and the ALB health check (no DB)
+  stayed green. **Fix (verify-full + CA bundle, per [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md)):**
+  new `configs/databaseConfig.ts` validates a required `DB_SSL` (`disabled | verify-full`), and for
+  `verify-full` strips `sslmode` from the URL (kills the pg deprecation warning + double-config) and
+  sets `ssl:{ ca, rejectUnauthorized:true }` against the RDS global CA bundle now downloaded into the
+  image (`certs/rds-global-bundle.pem`, Dockerfile). Local/compose + `.env.example` set `DB_SSL=disabled`
+  (no local TLS); CLAUDE.md documented. 8 new unit tests; full suite green (432). **Deploy note:** the
+  live **task-def `environment` must add `DB_SSL=verify-full`** (a new revision) — fail-fast means the
+  new image won't boot without it. Next: deploy the fix, then Objective 12 (GCP WIF).
