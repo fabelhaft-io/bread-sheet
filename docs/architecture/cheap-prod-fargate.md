@@ -90,8 +90,9 @@ The EKS-OIDC WIF does not apply off-cluster. Two options:
 1. **Keyless via AWS-role federation (recommended for learning, no stored key).**
    - WIF pool **provider** of type `aws { account_id = <acct> }` (replaces the OIDC provider).
    - Attribute condition restricts to the **ECS task role** ARN.
-   - GCP service account keeps `roles/cloudvision.user` + `roles/aiplatform.user`; the
-     `workloadIdentityUser` member becomes the task role's assumed-role principalSet.
+   - GCP service account keeps `roles/aiplatform.user` (Cloud Vision needs no role —
+     `roles/cloudvision.user` does not exist); the `workloadIdentityUser` member becomes the task
+     role's assumed-role principalSet.
    - Pod cred config → `gcloud iam workload-identity-pools create-cred-config <provider> --aws
      --service-account=<sa>`; the google-auth lib reads the task's AWS creds from the ECS metadata
      endpoint automatically. `GOOGLE_GENAI_USE_VERTEXAI=true`, `VISION_MODE=live`.

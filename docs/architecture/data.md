@@ -48,7 +48,7 @@ Anonymous (guest) users have a Supabase UUID and session but no email or usernam
 | Data | Where | Notes |
 |------|-------|-------|
 | Supabase JWT + refresh token | Supabase (managed) | Stored per Supabase's security practices |
-| Server logs | Server process / EKS | May contain IP addresses and user UUIDs; `[TODO: Define retention period and log scrubbing policy]` |
+| Server logs | Server process / ECS Fargate → CloudWatch Logs | May contain IP addresses and user UUIDs; `[TODO: Define retention period and log scrubbing policy]` |
 | `pendingReturnTo` | `AsyncStorage` (device) | Temporary; cleared after use |
 
 ---
