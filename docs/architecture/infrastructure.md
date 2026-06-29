@@ -1,6 +1,10 @@
 # Infrastructure & Deployment
 
-Covers local development setup, cloud infrastructure (Terraform / AWS), and the GitOps deployment pipeline (EKS + ArgoCD).
+Covers local development setup, the cloud infrastructure (AWS — ECS Fargate), and the push-based CD
+pipeline. The dev cloud environment is currently a **hand-built Fargate stack** being imported into
+Terraform — the step-by-step build, verification, and import map live in
+[`fargate-handbuild.md`](fargate-handbuild.md); the design + cost rationale in
+[`cheap-prod-fargate.md`](cheap-prod-fargate.md).
 
 ---
 
@@ -53,36 +57,57 @@ The build script installs the Linux x64 variant of sharp into `dist/bundle/node_
 
 ---
 
-## Cloud Infrastructure (Terraform)
+## Cloud Infrastructure (AWS — ECS Fargate)
 
-> **Cost note:** the EKS stack below runs ~$170/mo idle — heavily oversized for a small private
-> app. For a cheap (~$15–30/mo) always-on production on AWS, see
-> [`cheap-prod-fargate.md`](cheap-prod-fargate.md), which replaces EKS with ECS Fargate while
-> keeping this stack as a spin-up-and-destroy learning sandbox.
+> **Status.** The dev cloud environment runs on a **hand-built ECS Fargate stack** — full build,
+> verification, and the **Terraform import map** are in [`fargate-handbuild.md`](fargate-handbuild.md).
+> Importing it into Terraform is the last open step of that runbook (Objective 14). The **legacy EKS
+> Terraform** (`eks.tf`, `irsa.tf`, the OIDC provider in `gcp-wif.tf`, `terraform/k8s/`) still exists
+> in the repo but is **superseded** — kept only as a spin-up/destroy learning sandbox (~$170/mo idle
+> vs ~$15–30/mo for Fargate). `terraform/` will become the source of truth once the import lands.
 
-`terraform/` is the single source of truth for all AWS resources. Environment-specific
-variables are in `terraform/environments/`. There are three environments — `local`
-(LocalStack), `dev`, and `production` — selected by the `-var-file` you pass.
+### Architecture (dev)
 
-**Cloud resources are gated.** The VPC, EKS, RDS, and IRSA resources (plus GCP Workload Identity
-Federation) are created only when `localstack_endpoint == ""` (real AWS). The `local` environment
-keeps `localstack_endpoint` set, so it provisions **only** the S3 bucket + image-resizer Lambda —
-the rest evaluate to `count = 0`. The gate is `local.cloud_count` in `locals.tf` (GCP WIF adds a
-second toggle, `var.enable_google_wif`, via `local.gcp_count`).
+Public hostname **`https://server.dev.bread-sheet.com`** → ALB → Fargate task → RDS. The security-group
+chain enforces `internet → ALB → task(:3000) → RDS(:5432)`, each internal hop referencing the previous
+group's SG id (no CIDRs).
 
-**Container image.** The server image is **not** in ECR — it's published to the free
-**GitHub Container Registry** (`ghcr.io/fabelhaft-io/bread-sheet-server`, public package) by
-`.github/workflows/build-image.yml` on push to `main`. EKS pulls the public package with no
-imagePullSecret.
+| Component | Resource | Notes |
+|---|---|---|
+| Network | VPC `10.0.0.0/16`, 2 public + 2 private subnets, **no NAT** | Task runs in the **public** subnets with a public IP (pulls the GHCR image and reaches Supabase / GCP / SSM via the IGW); RDS is private-only. ~$33/mo saved vs NAT. |
+| Ingress | Application Load Balancer + ACM cert + Route 53 alias | HTTPS `:443` (cert for `server.dev.bread-sheet.com`) → IP target group (`:3000`, health `GET /`); HTTP `:80` → 301. |
+| Compute | ECS **Fargate** service `breadsheet-dev-server-service` on cluster `breadsheet-server-dev` | Desired 1, `256`/`512`, **X86_64** (image is `linux/amd64`), `assignPublicIp=ENABLED`, rolling deploy + circuit-breaker rollback, 120 s health-check grace (migrations run before serving). |
+| Database | RDS PostgreSQL `db.t4g.micro`, single-AZ, private, encrypted | Reachable only from the task SG on `5432`. SSM-stored password now; keyless RDS IAM auth deferred (ADR 0002). |
+| Images | S3 bucket `breadsheet-dev-s3-…` | `raw/*` private (task `s3:PutObject` only), `processed/*` scoped public-read; resize Lambda deferred (reuse `lambda.tf`). |
+| Image registry | GHCR `ghcr.io/fabelhaft-io/bread-sheet-server` (public) | **Not ECR** — the execution role needs no pull secret. |
+| Secrets | SSM Parameter Store `/breadsheet/dev/*` | `DATABASE_URL` (SecureString), `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_DEFAULT_KEY`; injected into the container via the task-def `secrets` block by the **execution** role. |
+| Identity | IAM execution + task + deployer roles, GitHub OIDC provider | All keyless. Task role = the app's identity (S3 + the principal GCP WIF federates). Deployer assumed by CI via OIDC. |
+| Keyless GCP | WIF pool `breadsheet-dev` + **AWS provider** + SA `breadsheet-dev-vision` | See § Keyless Google Cloud. |
 
-**Keyless Google Cloud (Vision/Vertex).** `gcp-wif.tf` provisions a Workload Identity Pool +
-OIDC provider trusting the EKS cluster OIDC issuer, a GCP service account with
-`roles/cloudvision.user` + `roles/aiplatform.user`, and a `workloadIdentityUser` binding for the
-`default:bread-sheet-server` ServiceAccount. The pod projects its SA token and exchanges it for
-short-lived GCP credentials — no key file. Requires `gcp_project` (and uses the `hashicorp/google`
-provider). See § Live Google Cloud below.
+**Container image.** Published to the free **GitHub Container Registry**
+(`ghcr.io/fabelhaft-io/bread-sheet-server`, public) by `.github/workflows/build-image.yml` on push to
+`main` — never ECR. The task definition pins the immutable `:<git-sha>` tag.
+
+### Keyless Google Cloud (Vision/Vertex) — Fargate WIF
+
+On Fargate the federation source is the **AWS task role** (the EKS OIDC provider in `gcp-wif.tf` is the
+legacy path). The setup: a Workload Identity Pool with an **AWS provider** (`account_id`, plus an
+attribute-condition scoping trust to the task role's assumed-role ARN), a GCP service account
+`breadsheet-dev-vision` with `roles/aiplatform.user` (Cloud Vision needs **no** role — API-enablement
++ an authenticated SA suffices; `roles/cloudvision.user` does not exist), and a `workloadIdentityUser`
+binding to the task-role principalSet. At runtime the app builds a google-auth `AwsClient` with a
+**programmatic credential supplier** (`server/src/services/gcpWorkloadIdentity.ts`) that reads AWS
+credentials from the **ECS container endpoint** — *not* EC2 IMDS, which doesn't serve task-role
+credentials on Fargate — and exchanges them for a short-lived GCP token that impersonates the SA. No
+key file is mounted. Env: `GCP_WORKLOAD_IDENTITY_AUDIENCE` + `GCP_SERVICE_ACCOUNT_EMAIL` (see
+[`fargate-handbuild.md`](fargate-handbuild.md) Objective 12).
 
 ### Remote state (S3 backend)
+
+> The `apply` commands below currently provision the **legacy EKS** stack. Once the hand-built
+> Fargate resources are imported (Objective 14), the same backend + `apply` mechanics drive the
+> Fargate stack and the EKS files are removed. Until then, the running dev environment is managed by
+> hand per [`fargate-handbuild.md`](fargate-handbuild.md), not by `terraform apply`.
 
 State lives in an S3 backend with one key per environment (`<env>/terraform.tfstate`). The
 backend is configured partially in `backend.tf`; concrete bucket/key/region come from a
@@ -122,17 +147,13 @@ terraform -chdir=terraform apply -var-file=environments/local.tfvars
 
 To validate config without AWS credentials (no apply): `init -backend=false` then `validate`.
 
-### Resources provisioned
+### Resources (Fargate target — to be imported)
 
-| Resource | Service | Purpose |
-|----------|---------|---------|
-| VPC, subnets, security groups | AWS Networking | Isolated network for EKS and RDS |
-| EKS Cluster + managed node groups | Amazon EKS | Kubernetes cluster for the API server |
-| PostgreSQL instance | Amazon RDS | Managed production database |
-| Object storage | Amazon S3 | Product images (`raw/` and `processed/` prefixes) |
-| Image resize function | AWS Lambda | S3-triggered; resizes uploaded images asynchronously |
-| Dead-letter queue | Amazon SQS | Captures Lambda failures for ops alerting |
-| WIF pool + provider + service account | Google Cloud (via `hashicorp/google`) | Keyless Vision/Vertex auth for the server pod |
+The components in the § Architecture table above are the resources Terraform will own after the
+Objective-14 import: VPC/subnets/SGs (no NAT), ALB + target group + ACM cert + Route 53 alias, the
+ECS cluster + Fargate service + task definition, RDS, the S3 bucket, the three IAM roles + GitHub
+OIDC provider, the SSM parameters, and the GCP WIF pool/AWS-provider/SA. The resize Lambda + SQS DLQ
+are deferred (reuse `lambda.tf`).
 
 The **container registry is external**: the server image lives in GitHub Container Registry
 (`ghcr.io/fabelhaft-io/bread-sheet-server`), not AWS — see § Container image above.
@@ -153,82 +174,50 @@ The prefix (`raw/product/` vs `raw/label/`) tells the Lambda which dimension cap
 
 ---
 
-## Deployment Pipeline (GitOps with EKS + ArgoCD)
+## Deployment Pipeline (push-based CD to ECS)
 
-### Overview
+ECS is **push-deployed** — CI calls the ECS API to roll the service. There is no ArgoCD pull loop
+(that was the EKS model). Keyless throughout: GitHub Actions assumes an AWS IAM **deployer role** via
+OIDC, no stored AWS keys.
 
-A "pull-based" GitOps model: ArgoCD watches the manifest repository and applies any diff to the cluster automatically. No direct `kubectl apply` in production.
+### CI/CD (GitHub Actions)
 
-### CI Pipeline (GitHub Actions — triggered on push to `main`)
+1. **Test** — `npm test` in `server/` and `bread-sheet-app/` (`.github/workflows/test.yml`).
+2. **Build & push** — the `build` job in `build-image.yml` builds `server/Dockerfile` and pushes
+   `ghcr.io/<owner>/bread-sheet-server` at `:<git-sha>` (immutable) + `:latest`, using the built-in
+   `GITHUB_TOKEN`.
+3. **Deploy to dev (automatic)** — the `deploy-dev` job (`needs: build`) assumes the deployer role via
+   OIDC, **fetches the active task definition**, swaps in the `:<git-sha>` image
+   (`amazon-ecs-render-task-definition`), registers a new revision, and `update-service`s the dev
+   service, waiting for `services-stable` (`amazon-ecs-deploy-task-definition`). Merge to `main` ⇒ dev
+   redeploys, no human step.
 
-1. **Test** — run full test suites (`npm test` in `server/` and `bread-sheet-app/`) — `.github/workflows/test.yml`.
-2. **Build & push image** — `.github/workflows/build-image.yml` builds `server/Dockerfile` and pushes `ghcr.io/<owner>/bread-sheet-server` tagged with both `:$GIT_SHA` and `:latest`, authenticating with the built-in `GITHUB_TOKEN` (no registry secret to manage).
-3. **Update manifest** — update the `image` tag in `deployment.yaml` to the new SHA (commit/push for ArgoCD to pick up).
+The task definition is **fetched from AWS, not stored in the repo**, so CD only swaps the image and
+never clobbers the env/secrets owned by the (hand-built, soon Terraform-owned) task def.
 
-### ArgoCD (Continuous Deployment)
+**Rollback** = re-deploy the previous task-def revision (ECS keeps them); the deployment **circuit
+breaker** auto-reverts a failed rollout.
 
-1. Detects the manifest change pushed by CI.
-2. Applies it to the EKS cluster.
-3. Kubernetes performs a rolling update: new pods with the new image start before old pods terminate.
+**Prod promotion (deferred — no prod stage yet):** a gated release (git tag / GitHub Release / manual
+dispatch + an `environment: production` required reviewer) promoting the **same** already-built
+`:<git-sha>` to a prod service. Built when a prod cluster/service exists.
 
-### Kubernetes Manifests (`terraform/k8s/`)
+### Database migrations — ride along
 
-YAML files declaring the desired cluster state. ArgoCD treats these as the authoritative source
-(`argocd-application.yaml` points at this path).
-
-| File | Purpose |
-|------|---------|
-| `deployment.yaml` | Server Deployment. An `initContainer` runs `npm run db:deploy` (Prisma migrate) before the server starts; probes hit `GET /`. Image is `ghcr.io/fabelhaft-io/bread-sheet-server:<tag>`. Mounts the projected SA token + WIF cred config for keyless Google Cloud. |
-| `service.yaml` | `LoadBalancer` Service exposing the API on port 80 → container 3000. `loadBalancerSourceRanges` restricts the ELB to your IP (firewall). |
-| `configmap.yaml` | Non-secret env (matches `server/src/configs/config.ts`): `S3_MODE=aws`, `S3_BUCKET_NAME`, `ASSET_BASE_URL`, `VISION_MODE=live`, `PLAUSIBILITY_MODE=gemini`, `GOOGLE_*` (WIF), `ALLOWED_ORIGINS`. |
-| `secret.yaml` | **Template only** — `DATABASE_URL`, `SUPABASE_*` (no `GEMINI_API_KEY`; Google auth is keyless). Create the real Secret out-of-band (below); never commit values. |
-| `serviceaccount.yaml` | `bread-sheet-server` SA, annotated with the IRSA role ARN (S3 access without static keys). |
-| `gcp-wif-credconfig.yaml` | Non-secret WIF credential config ConfigMap — generated once from terraform outputs (below). |
-
-**Deploy to dev (after `terraform apply`):**
-
-```sh
-aws eks update-kubeconfig --name "$(terraform -chdir=terraform output -raw cluster_name)"
-
-# 1. App secret — DB (RDS-managed password from Secrets Manager) + Supabase.
-kubectl create secret generic bread-sheet-server-secrets -n default \
-  --from-literal=DATABASE_URL='postgresql://breadsheet:<pw>@<rds-endpoint>:5432/breadsheet' \
-  --from-literal=SUPABASE_URL='https://<project>.supabase.co' \
-  --from-literal=SUPABASE_PUBLISHABLE_DEFAULT_KEY='<key>'
-
-# 2. WIF credential config (keyless Google Cloud) — see gcp-wif-credconfig.yaml header.
-gcloud iam workload-identity-pools create-cred-config \
-  "$(terraform -chdir=terraform output -raw gcp_wif_provider)" \
-  --service-account="$(terraform -chdir=terraform output -raw gcp_service_account_email)" \
-  --credential-source-file=/var/run/secrets/gcp/token --credential-source-type=text \
-  --output-file=credential-configuration.json
-kubectl create configmap gcp-wif-cred-config -n default --from-file=credential-configuration.json
-# Copy the JSON's `audience` into deployment.yaml's serviceAccountToken.audience,
-# fill GOOGLE_CLOUD_PROJECT in configmap.yaml, the IRSA ARN in serviceaccount.yaml,
-# and your IP in service.yaml loadBalancerSourceRanges.
-
-# 3. Apply the rest.
-kubectl apply -f terraform/k8s/
-```
-
-The RDS master password is managed by AWS in Secrets Manager (`terraform output rds_master_secret_arn`) — read it from there rather than setting one manually.
-
----
-
-## Database Migrations
-
-Migrations must complete before any application pods start serving traffic.
-
-**Option A — Kubernetes Job (preferred):**
-The CI pipeline triggers a K8s Job that runs `npx prisma migrate deploy` and waits for completion before updating the `image` tag in the Deployment manifest. ArgoCD applies the Job first; the Deployment update follows.
-
-**Option B — initContainer:**
-An `initContainer` in the Deployment manifest runs the migration. Simpler, but risks concurrent migration attempts if multiple pods start simultaneously — only safe if Prisma's migration lock is reliable for your scale.
+The container command is `sh -c "npm run db:deploy && node dist/server.js"`, so **every new task runs
+`prisma migrate deploy` before serving**. Prisma's migration lock keeps the brief two-task
+rolling-deploy overlap safe — no separate migration Job or initContainer is needed on Fargate.
 
 ---
 
 ## Infrastructure as Code Principles
 
-- All resources are defined in `terraform/` — no manual console changes.
+- **End state:** all cloud resources defined in `terraform/`, no manual console drift. The dev
+  Fargate stack is currently hand-built and being imported into Terraform (Objective 14 in
+  [`fargate-handbuild.md`](fargate-handbuild.md) maintains the import map); the legacy EKS files are
+  removed once that lands.
 - Lambda source and configuration live in `terraform/` alongside other infra.
-- Secrets (DB password, Supabase keys, OFF credentials, Anthropic API key) are injected via environment variables managed by AWS Secrets Manager or Kubernetes Secrets — never committed to the repository.
+- Secrets (DB connection string, Supabase keys) live in **SSM Parameter Store** (SecureString for the
+  DB) and are injected into the container via the task-def `secrets` block — never committed. Google
+  Cloud access is **keyless** via Workload Identity Federation; no GCP key or `GEMINI_API_KEY` is
+  stored in production.

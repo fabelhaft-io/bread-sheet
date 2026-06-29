@@ -37,7 +37,7 @@
 * **ORM:** Prisma
 * **Authentication:** Supabase Auth
 * **External Data:** Open Food Facts API
-* **Infrastructure:** Kubernetes (Amazon EKS), AWS RDS, Terraform, ArgoCD, Google Vision and Gemini
+* **Infrastructure:** AWS ECS Fargate (dev) behind an ALB, AWS RDS, S3, SSM, Terraform, GitHub-Actions push-CD, Google Vision and Gemini (keyless via Workload Identity Federation)
 * **Local Dev:** Docker Compose / Podman, LocalStack (for AWS service emulation)
 
 ## 🚀 Getting Started
@@ -107,7 +107,7 @@ cd server/lambda/imageResizer && npm install && npm run build && cd ../../..
 podman pull public.ecr.aws/lambda/nodejs:24
 
 # Start PostgreSQL + LocalStack in the background
-docker compose up -d
+podman compose up -d
 
 # Initialize the database (apply migrations)
 cd server && npm run db:deploy && cd ..
@@ -116,7 +116,7 @@ cd server && npm run db:deploy && cd ..
 The LocalStack init hook (`scripts/localstack-init.sh`) provisions the S3 bucket, the image-resizer Lambda, and the S3→Lambda trigger automatically on startup. Verify it ran:
 
 ```sh
-docker compose logs localstack | grep '\[init\]'
+podman compose logs localstack | grep '\[init\]'
 ```
 
 You should see lines for the bucket, Lambda, and trigger. If something is missing, see [Troubleshooting](#troubleshooting).
@@ -195,11 +195,13 @@ By default `VISION_MODE=mock` returns a fixed sample response for any label imag
     ```sh
     gcloud services enable vision.googleapis.com --project=YOUR_PROJECT_ID
     ```
-4. **Grant your account the Vision User role:**
+4. **Permissions:** Cloud Vision has **no dedicated invoker role** — a request is authorized by the
+   API being enabled + an authenticated caller + billing. If your account is **Owner/Editor** it can
+   already call Vision; otherwise grant `roles/serviceusage.serviceUsageConsumer`:
     ```sh
     gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
       --member="user:your-email@example.com" \
-      --role="roles/cloudvision.user"
+      --role="roles/serviceusage.serviceUsageConsumer"
     ```
 5. **Switch the mode** in `server/.env`: `VISION_MODE=live`
 
@@ -261,33 +263,17 @@ Keep the Lambda runtime in `scripts/localstack-init.sh` in sync with `terraform/
 
 ### Production credentials (Workload Identity Federation)
 
-In production, Vertex AI is the only Gemini path (`GOOGLE_GENAI_USE_VERTEXAI=true`) and Vision uses `live`. Both resolve ADC through **Workload Identity Federation** — `GOOGLE_APPLICATION_CREDENTIALS` points at a WIF credential config file mounted via a Kubernetes ConfigMap, and the service account needs `roles/cloudvision.user` + `roles/aiplatform.user`. No service-account JSON key or `GEMINI_API_KEY` is stored anywhere. See `docs/server-production.md`.
+In production, Vertex AI is the only Gemini path (`GOOGLE_GENAI_USE_VERTEXAI=true`) and Vision uses `live`. Both authenticate keylessly through **Workload Identity Federation**, and the service account needs `roles/aiplatform.user` (Cloud Vision needs no role — `roles/cloudvision.user` does not exist). No service-account JSON key or `GEMINI_API_KEY` is stored anywhere.
+
+On the dev **ECS Fargate** environment, WIF uses an **AWS-provider** pool — the AWS task role impersonates the GCP service account — wired by a programmatic credential supplier (`GCP_WORKLOAD_IDENTITY_AUDIENCE` / `GCP_SERVICE_ACCOUNT_EMAIL`; no mounted credential file). See [`docs/architecture/fargate-handbuild.md`](docs/architecture/fargate-handbuild.md) Objective 12. (The legacy EKS deployment used a ConfigMap-mounted credential file via an OIDC provider.)
 
 ### Deploy to AWS (dev environment)
 
-The `terraform/` root provisions a full cloud environment (VPC + EKS + RDS + S3 + image-resizer Lambda + GCP Workload Identity Federation). The `dev` environment uses cheap sizing (`t3.small` nodes, `db.t4g.micro`, single NAT). **This creates real, billable AWS resources** and requires AWS credentials (and a GCP project for live Vision/Vertex). The server image is hosted **free** on GitHub Container Registry — no ECR.
+The dev cloud environment runs on **ECS Fargate** behind an ALB (HTTPS at `server.dev.bread-sheet.com`), with RDS, S3, SSM Parameter Store for secrets, and keyless GCP via Workload Identity Federation — **no Kubernetes, no NAT**. It is currently **hand-built and being imported into Terraform**; the full step-by-step build, verification, and import map are the living runbook in [`docs/architecture/fargate-handbuild.md`](docs/architecture/fargate-handbuild.md). The design + cost rationale (Fargate vs the legacy EKS sandbox) are in [`docs/architecture/cheap-prod-fargate.md`](docs/architecture/cheap-prod-fargate.md).
 
-```sh
-# 1. One-time: create the remote state bucket (see infrastructure.md)
-aws s3 mb s3://breadsheet-tfstate --region us-east-1
+**Deploys are automatic.** Merge to `main` → GitHub Actions builds the image (GHCR, `:<git-sha>`) and the `deploy-dev` job registers a new ECS task-definition revision and rolls the service — keyless via a GitHub-OIDC deployer role, waiting for service stability, with circuit-breaker rollback. Nothing to run locally. See [`.github/workflows/build-image.yml`](.github/workflows/build-image.yml).
 
-# 2. Set gcp_project (+ optionally lock allowed_cidrs to your IP) in
-#    terraform/environments/dev.tfvars, then init + apply
-terraform -chdir=terraform init -backend-config=environments/dev.s3.tfbackend
-terraform -chdir=terraform apply -var-file=environments/dev.tfvars
-
-# 3. The server image is built & pushed to ghcr.io by GitHub Actions
-#    (.github/workflows/build-image.yml) on push to main — nothing to do locally.
-
-# 4. Configure kubectl, create the app Secret + WIF cred config, apply manifests
-aws eks update-kubeconfig --name "$(terraform -chdir=terraform output -raw cluster_name)"
-# create bread-sheet-server-secrets (DATABASE_URL/SUPABASE_*) + gcp-wif-cred-config,
-# fill the manifest placeholders (IRSA ARN, GCP project, WIF audience, your IP) —
-# full runbook in infrastructure.md
-kubectl apply -f terraform/k8s/
-```
-
-To validate the terraform without credentials (no apply): `terraform -chdir=terraform init -backend=false && terraform -chdir=terraform validate`. Full runbook (remote-state bootstrap, IRSA, keyless Google Cloud via WIF, secret creation, IP firewall): [`docs/architecture/infrastructure.md`](docs/architecture/infrastructure.md).
+> The legacy **EKS** Terraform (`eks.tf`, `irsa.tf`, `terraform/k8s/`, ArgoCD) remains in the repo as a spin-up/destroy sandbox but is superseded by the Fargate stack. To validate the Terraform without credentials: `terraform -chdir=terraform init -backend=false && terraform -chdir=terraform validate`. Architecture overview + remote-state bootstrap: [`docs/architecture/infrastructure.md`](docs/architecture/infrastructure.md).
 
 ## Running on Windows
 
