@@ -52,7 +52,7 @@ section as it's fleshed out.
 | 11 | Route 53 record → ALB (A-alias `server.dev.bread-sheet.com` → ALB)                             | ✅ |
 | 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | ✅ |
 | 13 | [Secrets in SSM Parameter Store (`DATABASE_URL`, `SUPABASE_*`)](#objective-13--secrets-in-ssm-parameter-store) | ✅ |
-| 14 | [Import the hand-built stack into Terraform](#objective-14--import-the-hand-built-stack-into-terraform) | 🔄  |
+| 14 | [Import the hand-built stack into Terraform](#objective-14--import-the-hand-built-stack-into-terraform) | ✅ |
 | 15 | Post Build Adaptions                                                                           | ⬜ |
 
 ---
@@ -1150,14 +1150,14 @@ to a no-op after each slice, then commit):
       `variables.tf` trimmed to Fargate-only vars.
 - [x] `terraform/` root rewritten to raw, Fargate-only resources per the layout above; `terraform init`
       against the **dev** S3 backend succeeds (state bucket `breadsheet-tfstate` created out-of-band).
-- [ ] Every [import map](#import-map) row imported (an `import {}` block per resource) and its `Imported`
-      box flipped to ✅. **Network slice done** (VPC, 4 subnets, IGW, 2 route tables, 1 route, 4
-      associations — plan shows import + `ManagedBy` tag additions only). Remaining slices: security
-      groups → RDS → IAM → S3 → SSM → ECS → ALB/ACM → DNS → GCP WIF.
-- [ ] `aws_ecs_service.server` carries `ignore_changes = [task_definition]`; the ECS cluster's CFN stack
-      deleted with `--retain-resources` (single owner).
-- [ ] `DATABASE_URL` parameter handled per the secret-in-state decision (recommend `ignore_changes = [value]`).
-- [ ] **`terraform plan` reports `No changes` on the dev workspace** — the whole stack is described and
+- [x] Every [import map](#import-map) row imported (an `import {}` block per resource) and its `Imported`
+      box flipped to ✅. All slices done: network → security groups → RDS → IAM → S3 → SSM → ECS →
+      ALB/ACM → DNS → GCP WIF. Import blocks removed after each successful apply.
+- [x] `aws_ecs_service.server` carries `ignore_changes = [task_definition]`; `aws_ecs_task_definition.server`
+      carries `ignore_changes = [container_definitions]` (CD owns revisions). Both ECS console CFN stacks
+      deleted with `--retain-resources` (Terraform is sole owner).
+- [x] `DATABASE_URL` parameter imported with `ignore_changes = [value]` (all 3 SSM params have this).
+- [x] **`terraform plan` reports `No changes` on the dev workspace** — the whole stack is described and
       adopted with zero drift.
 - [ ] `prod` env files scaffolded (`environments/prod.{tfvars,s3.tfbackend}`) but not applied — promotion
       deferred until a prod stage exists.
@@ -1206,49 +1206,51 @@ Filled in as resources are created; drives the Terraform import phase (objective
 
 | Resource | AWS ID | Planned TF address | Imported |
 |---|---|---|---|
-| VPC | `vpc-03b6a4b37cf1c9183` | `aws_vpc.main` | 🔄 |
-| Public subnet (az1 / euw1-az1) | `subnet-00be20939dfa25198` | `aws_subnet.public["az1"]` | 🔄 |
-| Public subnet (az2 / euw1-az2) | `subnet-063f2548f1d3c9c20` | `aws_subnet.public["az2"]` | 🔄 |
-| Private subnet (az1 / euw1-az1) | `subnet-030cd17b05d582d90` | `aws_subnet.private["az1"]` | 🔄 |
-| Private subnet (az2 / euw1-az2) | `subnet-02d9c09aeec128710` | `aws_subnet.private["az2"]` | 🔄 |
-| Internet gateway | `igw-0225dda92419c6318` | `aws_internet_gateway.main` | 🔄 |
-| Public route table | `rtb-0356a8d52a6b9eb74` | `aws_route_table.public` | 🔄 |
-| Private route table | `rtb-03a24fba42513e950` | `aws_route_table.private` | 🔄 |
-| ALB security group | `sg-00776b71913d8fd38` | `aws_security_group.alb` | ⬜ |
-| Task security group | `sg-0a74a20cd899f7b06` | `aws_security_group.task` | ⬜ |
-| RDS security group | `sg-054c28ee2b5ddfdde` | `aws_security_group.rds` | ⬜ |
-| DB subnet group | `breadsheet-dev-db-subnets` | `aws_db_subnet_group.main` | ⬜ |
-| RDS instance | `breadsheet-dev-database-1` | `aws_db_instance.main` | ⬜ |
-| GitHub OIDC provider | `arn:…:oidc-provider/token.actions.githubusercontent.com` | `aws_iam_openid_connect_provider.github` | ⬜ |
-| ECS execution role | `breadsheet-dev-ecs-execution` | `aws_iam_role.ecs_execution` | ⬜ |
-| ECS task role | `breadsheet-dev-ecs-task` | `aws_iam_role.ecs_task` | ⬜ |
-| Task role S3 inline policy | `breadsheet-dev-ecs-task:PutRawImagesInS3` | `aws_iam_role_policy.ecs_task_s3` | ⬜ |
-| CI deployer role | `breadsheet-dev-deployer` | `aws_iam_role.deployer` | ⬜ |
-| ECS cluster | `breadsheet-server-dev` (CFN stack `Infra-ECS-Cluster-breadsheet-server-dev-7c4a32c2`) | `aws_ecs_cluster.main` | ⬜ |
-| SSM param `DATABASE_URL` | `/breadsheet/dev/DATABASE_URL` (SecureString) | `aws_ssm_parameter.database_url` | ⬜ |
-| SSM param `SUPABASE_URL` | `/breadsheet/dev/SUPABASE_URL` | `aws_ssm_parameter.supabase_url` | ⬜ |
-| SSM param `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `/breadsheet/dev/SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `aws_ssm_parameter.supabase_key` | ⬜ |
-| Execution role SSM inline policy | `breadsheet-dev-ecs-execution:GetDevEnvVariablesFromSystemsManagerParameterStore` | `aws_iam_role_policy.ecs_execution_ssm` | ⬜ |
-| CloudWatch log group | `/ecs/breadsheet-dev-server` | `aws_cloudwatch_log_group.server` | ⬜ |
-| ECS task definition | `breadsheet-dev-server` (active rev `:5`) | `aws_ecs_task_definition.server` | ⬜ |
-| Route 53 hosted zone | `Z08021021I2ON3AX4JM0` (`dev.bread-sheet.com`) | `aws_route53_zone.dev` | ⬜ |
-| ACM certificate | `arn:…:certificate/916cc3ff-c297-463d-9b1a-bcab71e5cdb5` (`server.dev.bread-sheet.com`) | `aws_acm_certificate.server` | ⬜ |
-| ALB | `…:loadbalancer/app/breadsheet-dev-alb/370ee9fd8cef94ff` (DNS `breadsheet-dev-alb-1430077274.eu-west-1.elb.amazonaws.com`, canonical zone `Z32O12XQLNTSW2`) | `aws_lb.main` | ⬜ |
-| ALB target group | `…:targetgroup/breadsheet-dev-alb-target-group/7d12e1f454011d54` | `aws_lb_target_group.server` | ⬜ |
-| HTTPS:443 listener | (under the ALB above) | `aws_lb_listener.https` | ⬜ |
-| HTTP:80 listener (301→HTTPS) | (under the ALB above) | `aws_lb_listener.http_redirect` | ⬜ |
-| ECS service | `…:service/breadsheet-server-dev/breadsheet-dev-server-service` | `aws_ecs_service.server` | ⬜ |
-| Route 53 A-alias record | `server.dev.bread-sheet.com` → ALB (in zone `Z08021021I2ON3AX4JM0`) | `aws_route53_record.server` | ⬜ |
-| GCP WIF pool | `breadsheet-dev` (project `breadsheet-496522`/`1054240616692`) | `google_iam_workload_identity_pool.aws` | ⬜ |
-| GCP WIF AWS provider | `aws-ecs` (account `493942067033`, scoped to task role) | `google_iam_workload_identity_pool_provider.aws_ecs` | ⬜ |
-| GCP service account | `breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` (uniqueId `107807807341293118930`) | `google_service_account.vision` | ⬜ |
-| GCP project role binding (`aiplatform.user` → SA) | `breadsheet-496522 roles/aiplatform.user serviceAccount:breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` | `google_project_iam_member.vision_aiplatform` | ⬜ |
-| GCP SA impersonation binding | `workloadIdentityUser` → task-role principalSet | `google_service_account_iam_member.wif` | ⬜ |
-| S3 images bucket | `breadsheet-dev-s3-493942067033-eu-west-1-an` | `aws_s3_bucket.images` | ⬜ |
-| — bucket public-access block | (same bucket) | `aws_s3_bucket_public_access_block.images` | ⬜ |
-| — bucket ownership controls | (same bucket) | `aws_s3_bucket_ownership_controls.images` | ⬜ |
-| — bucket policy (`processed/*` public read) | (same bucket) | `aws_s3_bucket_policy.images` | ⬜ |
-| — bucket CORS | (same bucket) | `aws_s3_bucket_cors_configuration.images` | ⬜ |
+| VPC | `vpc-03b6a4b37cf1c9183` | `aws_vpc.main` | ✅ |
+| Public subnet (az1 / euw1-az1) | `subnet-00be20939dfa25198` | `aws_subnet.public["az1"]` | ✅ |
+| Public subnet (az2 / euw1-az2) | `subnet-063f2548f1d3c9c20` | `aws_subnet.public["az2"]` | ✅ |
+| Private subnet (az1 / euw1-az1) | `subnet-030cd17b05d582d90` | `aws_subnet.private["az1"]` | ✅ |
+| Private subnet (az2 / euw1-az2) | `subnet-02d9c09aeec128710` | `aws_subnet.private["az2"]` | ✅ |
+| Internet gateway | `igw-0225dda92419c6318` | `aws_internet_gateway.main` | ✅ |
+| Public route table | `rtb-0356a8d52a6b9eb74` | `aws_route_table.public` | ✅ |
+| Private route table | `rtb-03a24fba42513e950` | `aws_route_table.private` | ✅ |
+| ALB security group | `sg-00776b71913d8fd38` | `aws_security_group.alb` | ✅ |
+| Task security group | `sg-0a74a20cd899f7b06` | `aws_security_group.task` | ✅ |
+| RDS security group | `sg-054c28ee2b5ddfdde` | `aws_security_group.rds` | ✅ |
+| DB subnet group | `breadsheet-dev-db-subnets` | `aws_db_subnet_group.main` | ✅ |
+| RDS instance | `breadsheet-dev-database-1` | `aws_db_instance.main` | ✅ |
+| GitHub OIDC provider | `arn:…:oidc-provider/token.actions.githubusercontent.com` | `aws_iam_openid_connect_provider.github` | ✅ |
+| ECS execution role | `breadsheet-dev-ecs-execution` | `aws_iam_role.ecs_execution` | ✅ |
+| ECS task role | `breadsheet-dev-ecs-task` | `aws_iam_role.ecs_task` | ✅ |
+| Task role S3 inline policy | `breadsheet-dev-ecs-task:PutRawImagesInS3` | `aws_iam_role_policy.ecs_task_s3` | ✅ |
+| CI deployer role | `breadsheet-dev-deployer` | `aws_iam_role.deployer` | ✅ |
+| ECS cluster | `breadsheet-server-dev` (CFN stacks deleted with `--retain-resources`) | `aws_ecs_cluster.main` | ✅ |
+| SSM param `DATABASE_URL` | `/breadsheet/dev/DATABASE_URL` (SecureString) | `aws_ssm_parameter.database_url` | ✅ |
+| SSM param `SUPABASE_URL` | `/breadsheet/dev/SUPABASE_URL` | `aws_ssm_parameter.supabase_url` | ✅ |
+| SSM param `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `/breadsheet/dev/SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `aws_ssm_parameter.supabase_key` | ✅ |
+| Execution role SSM inline policy | `breadsheet-dev-ecs-execution:GetDevEnvVariablesFromSystemsManagerParameterStore` | `aws_iam_role_policy.ecs_execution_ssm` | ✅ |
+| CloudWatch log group | `/ecs/breadsheet-dev-server` | `aws_cloudwatch_log_group.server` | ✅ |
+| ECS task definition | `breadsheet-dev-server` (rev `:6` imported; CD owns revisions via `ignore_changes`) | `aws_ecs_task_definition.server` | ✅ |
+| Route 53 hosted zone | `Z08021021I2ON3AX4JM0` (`dev.bread-sheet.com`) | `aws_route53_zone.dev` | ✅ |
+| ACM certificate | `arn:…:certificate/916cc3ff-c297-463d-9b1a-bcab71e5cdb5` (`server.dev.bread-sheet.com`) | `aws_acm_certificate.server` | ✅ |
+| ALB | `…:loadbalancer/app/breadsheet-dev-alb/370ee9fd8cef94ff` (DNS `breadsheet-dev-alb-1430077274.eu-west-1.elb.amazonaws.com`, canonical zone `Z32O12XQLNTSW2`) | `aws_lb.main` | ✅ |
+| ALB target group | `…:targetgroup/breadsheet-dev-alb-target-group/7d12e1f454011d54` | `aws_lb_target_group.server` | ✅ |
+| HTTPS:443 listener | (under the ALB above) | `aws_lb_listener.https` | ✅ |
+| HTTP:80 listener (301→HTTPS) | (under the ALB above) | `aws_lb_listener.http_redirect` | ✅ |
+| ECS service | `…:service/breadsheet-server-dev/breadsheet-dev-server-service` | `aws_ecs_service.server` | ✅ |
+| Route 53 A-alias record | `server.dev.bread-sheet.com` → ALB (in zone `Z08021021I2ON3AX4JM0`) | `aws_route53_record.server` | ✅ |
+| ACM validation CNAME | `_527524…` → `_170e58…acm-validations.aws.` (in zone above) | `aws_route53_record.acm_validation` | ✅ |
+| ACM certificate validation | (Terraform-only; verifies cert status) | `aws_acm_certificate_validation.server` | ✅ |
+| GCP WIF pool | `breadsheet-dev` (project `breadsheet-496522`/`1054240616692`) | `google_iam_workload_identity_pool.aws[0]` | ✅ |
+| GCP WIF AWS provider | `aws-ecs` (account `493942067033`, scoped to task role) | `google_iam_workload_identity_pool_provider.aws_ecs[0]` | ✅ |
+| GCP service account | `breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` (uniqueId `107807807341293118930`) | `google_service_account.vision[0]` | ✅ |
+| GCP project role binding (`aiplatform.user` → SA) | `breadsheet-496522 roles/aiplatform.user serviceAccount:breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` | `google_project_iam_member.vision_aiplatform[0]` | ✅ |
+| GCP SA impersonation binding | `workloadIdentityUser` → task-role principalSet | `google_service_account_iam_member.wif[0]` | ✅ |
+| S3 images bucket | `breadsheet-dev-s3-493942067033-eu-west-1-an` | `aws_s3_bucket.images` | ✅ |
+| — bucket public-access block | (same bucket) | `aws_s3_bucket_public_access_block.images` | ✅ |
+| — bucket ownership controls | (same bucket) | `aws_s3_bucket_ownership_controls.images` | ✅ |
+| — bucket policy (`processed/*` public read) | (same bucket) | `aws_s3_bucket_policy.images` | ✅ |
+| — bucket CORS | (same bucket) | `aws_s3_bucket_cors_configuration.images` | ✅ |
 
 ---
 
@@ -1403,3 +1405,14 @@ Filled in as resources are created; drives the Terraform import phase (objective
   drift (`ignore_changes`), the ECS cluster's CFN stack (delete with `--retain-resources`), and the
   `DATABASE_URL` SecureString-in-state (recommend `ignore_changes = [value]`). Next: execute Objective 14
   — bootstrap + network slice first.
+- _Session 18:_ Completed **Objective 14** — imported all remaining slices (security groups, RDS, IAM, S3,
+  SSM, ECS+ALB, DNS, GCP WIF) with `terraform plan` driven to zero-diff after each. Key learnings along
+  the way: SG `name`/`description` and RDS `username` are ForceNew (must match exactly); ECS task
+  definitions are immutable (any `container_definitions` change = new revision, solved with
+  `ignore_changes`); Route 53 record import IDs use `{zone_id}_{name}_{type}` format; the HTTPS listener
+  needs an explicit `forward {}` block (not just `target_group_arn`); `aws_acm_certificate_validation`
+  doesn't support import (it's Terraform-only). Added `outputs.tf` with useful references. Deleted both
+  ECS console CloudFormation stacks (`--retain-resources`) — Terraform is now sole owner. GCP WIF required
+  matching the exact `attribute.aws_role` CEL expression and display names from the hand-build. All import
+  blocks removed. **`terraform plan` = no changes.** Remaining: scaffold prod env files, update
+  `infrastructure.md`.
