@@ -17,6 +17,8 @@ provider "aws" {
   region = var.aws_region
 }
 
+data "aws_caller_identity" "current" {}
+
 # Only used by the GCP WIF resources (gcp-wif.tf)
 provider "google" {
   project = var.gcp_project

@@ -72,6 +72,23 @@ toggle on the instance now** — it is a no-reboot modify and coexists with pass
 door to C stays open for free. B is not chosen: it keeps a stored password *and* adds cost, giving
 the worst of both relative to A (simplicity) and C (no secret, no cost).
 
+> **Update (Session 19 — A1 implemented):** Option C is now coded and ready to deploy. The pieces:
+>
+> - `configs/databaseConfig.ts` gained `DB_AUTH` (`password` | `iam`). When `iam`: parses the
+>   `DATABASE_URL` for host/port/user, creates an `@aws-sdk/rds-signer` `Signer`, and returns an
+>   async `password` callback. The pg.Pool invokes it on every new physical connection.
+> - `scripts/start.sh` replaces the inline `sh -c "npm run db:deploy && ..."` ECS command. When
+>   `DB_AUTH=iam` it mints a token via `scripts/rds-token.mjs` and exports it into `DATABASE_URL`
+>   (with the password embedded) so the Prisma migration engine — which reads the URL directly —
+>   authenticates with the short-lived token too. Fully keyless end-to-end.
+> - Terraform: `iam.tf` adds `rds-db:connect` to the task role scoped to the DB resource ID +
+>   the `breadsheet_iam` user. `ecs.tf` task-def moves `DATABASE_URL` to plain `environment`
+>   (no password), drops the SSM secret reference, adds `DB_AUTH=iam` + `DB_HOST`/`DB_PORT`/
+>   `DB_USER`/`DB_NAME`.
+> - **Manual prerequisite:** create the `breadsheet_iam` Postgres user with `rds_iam` grant and
+>   application privileges (schema ownership, table grants).
+> - The SSM `DATABASE_URL` SecureString stays (rollback); delete once IAM auth is stable.
+
 > **Update (Session 15):** the `@prisma/adapter-pg` driver adapter (`src/db.ts`) is already wired in
 > interim state A — so the TLS half of C is decoupled and **done now**, ahead of the credential
 > migration. The pg pool verifies the RDS server cert against the RDS CA bundle shipped in the image

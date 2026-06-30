@@ -76,6 +76,12 @@ variable "db_deletion_protection" {
   default     = false
 }
 
+variable "db_iam_user" {
+  type        = string
+  description = "PostgreSQL username granted rds_iam for IAM database authentication."
+  default     = "breadsheet_iam"
+}
+
 # ── GCP Workload Identity Federation (keyless Vision / Vertex AI) ──────────────
 # Lets AWS ECS authenticate to Google Cloud
 

@@ -31,6 +31,7 @@ services:
       # Local Postgres speaks no TLS. In prod (RDS) this is `verify-full`, which
       # verifies the server cert against the RDS CA bundle shipped in the image.
       - DB_SSL=disabled
+      - DB_AUTH=password
       - DB_HOST=db
       - DB_USER=admin
       - DB_PASSWORD=password

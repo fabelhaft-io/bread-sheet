@@ -47,14 +47,20 @@ resource "aws_ecs_task_definition" "server" {
       protocol      = "tcp"
     }]
 
-    command = ["sh", "-c", "npm run db:deploy && node dist/server.js"]
+    command = ["sh", "scripts/start.sh"]
 
     environment = [
       { name = "PORT", value = "3000" },
       { name = "NODE_ENV", value = "production" },
       { name = "LOG_LEVEL", value = "info" },
       { name = "DB_SSL", value = "verify-full" },
-      { name = "AWS_REGION", value = "eu-west-1" },
+      { name = "DB_AUTH", value = "iam" },
+      { name = "DB_HOST", value = aws_db_instance.main.address },
+      { name = "DB_PORT", value = tostring(aws_db_instance.main.port) },
+      { name = "DB_USER", value = var.db_iam_user },
+      { name = "DB_NAME", value = "breadsheet" },
+      { name = "DATABASE_URL", value = "postgresql://${var.db_iam_user}@${aws_db_instance.main.address}:${aws_db_instance.main.port}/breadsheet" },
+      { name = "AWS_REGION", value = var.aws_region },
       { name = "S3_MODE", value = "aws" },
       { name = "S3_BUCKET_NAME", value = var.s3_bucket_name },
       { name = "ASSET_BASE_URL", value = "https://${var.s3_bucket_name}.s3.eu-west-1.amazonaws.com" },
@@ -69,7 +75,6 @@ resource "aws_ecs_task_definition" "server" {
     ]
 
     secrets = [
-      { name = "DATABASE_URL", valueFrom = aws_ssm_parameter.database_url.arn },
       { name = "SUPABASE_URL", valueFrom = aws_ssm_parameter.supabase_url.arn },
       { name = "SUPABASE_PUBLISHABLE_DEFAULT_KEY", valueFrom = aws_ssm_parameter.supabase_key.arn },
     ]
