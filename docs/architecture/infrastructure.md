@@ -1,10 +1,8 @@
 # Infrastructure & Deployment
 
 Covers local development setup, the cloud infrastructure (AWS — ECS Fargate), and the push-based CD
-pipeline. The dev cloud environment is currently a **hand-built Fargate stack** being imported into
-Terraform — the step-by-step build, verification, and import map live in
-[`fargate-handbuild.md`](fargate-handbuild.md); the design + cost rationale in
-[`cheap-prod-fargate.md`](cheap-prod-fargate.md).
+pipeline. The design + cost rationale live in [`cheap-prod-fargate.md`](cheap-prod-fargate.md); the
+hands-on build log (with the import map) in [`fargate-handbuild.md`](fargate-handbuild.md).
 
 ---
 
@@ -33,7 +31,7 @@ The server reaches LocalStack at `AWS_ENDPOINT_URL=http://localstack:4566` and m
 Image URLs returned to clients are assembled from `ASSET_BASE_URL` (in `server/.env`), which must point at a **device-reachable** address — locally that is `http://<host-LAN-ip>:4566/breadsheet-images-local` (LocalStack's port 4566 is published on the host). See `docs/architecture/backend.md` § Image Processing.
 
 **Local image pipeline (LocalStack init hook):**
-`scripts/localstack-init.sh` runs on LocalStack startup (`/etc/localstack/init/ready.d/`) and provisions the full local pipeline — the S3 bucket, the `image-resizer` Lambda, and the `s3:ObjectCreated:*` (prefix `raw/`) trigger — mirroring `terraform/` without requiring a local Terraform install. The Lambda bundle is mounted into the container from `server/lambda/imageResizer/dist/bundle/`, so it must be built first:
+`scripts/localstack-init.sh` runs on LocalStack startup (`/etc/localstack/init/ready.d/`) and provisions the full local pipeline — the S3 bucket, the `image-resizer` Lambda, and the `s3:ObjectCreated:*` (prefix `raw/`) trigger — mirroring production without requiring a local Terraform install. The Lambda bundle is mounted into the container from `server/lambda/imageResizer/dist/bundle/`, so it must be built first:
 
 ```sh
 cd server/lambda/imageResizer
@@ -46,25 +44,14 @@ docker compose up -d   # init hook deploys the Lambda; re-run after rebuilds via
 
 If the bundle is missing the init script logs a warning and skips the Lambda — uploads still work, but `processed/` objects are never written.
 
-**Lambda build for `terraform apply`:**
-Terraform's `archive_file` data source reads the same compiled output from `dist/bundle/`, so the build step above is also required before applying:
-
-```sh
-terraform -chdir=terraform apply -var-file=environments/production.tfvars
-```
-
-The build script installs the Linux x64 variant of sharp into `dist/bundle/node_modules/` regardless of the host OS, producing a Lambda-compatible artifact. Keep the Lambda runtime in `scripts/localstack-init.sh` in sync with `terraform/lambda.tf` (currently `nodejs24.x`).
-
 ---
 
 ## Cloud Infrastructure (AWS — ECS Fargate)
 
-> **Status.** The dev cloud environment runs on a **hand-built ECS Fargate stack** — full build,
-> verification, and the **Terraform import map** are in [`fargate-handbuild.md`](fargate-handbuild.md).
-> Importing it into Terraform is the last open step of that runbook (Objective 14). The **legacy EKS
-> Terraform** (`eks.tf`, `irsa.tf`, the OIDC provider in `gcp-wif.tf`, `terraform/k8s/`) still exists
-> in the repo but is **superseded** — kept only as a spin-up/destroy learning sandbox (~$170/mo idle
-> vs ~$15–30/mo for Fargate). `terraform/` will become the source of truth once the import lands.
+The dev cloud environment is a **Fargate stack fully owned by Terraform** (`terraform/`). All
+resources were hand-built first (for learning), then imported into state with zero drift —
+`terraform plan` reports no changes. The build log and import map are in
+[`fargate-handbuild.md`](fargate-handbuild.md).
 
 ### Architecture (dev)
 
@@ -77,37 +64,74 @@ group's SG id (no CIDRs).
 | Network | VPC `10.0.0.0/16`, 2 public + 2 private subnets, **no NAT** | Task runs in the **public** subnets with a public IP (pulls the GHCR image and reaches Supabase / GCP / SSM via the IGW); RDS is private-only. ~$33/mo saved vs NAT. |
 | Ingress | Application Load Balancer + ACM cert + Route 53 alias | HTTPS `:443` (cert for `server.dev.bread-sheet.com`) → IP target group (`:3000`, health `GET /`); HTTP `:80` → 301. |
 | Compute | ECS **Fargate** service `breadsheet-dev-server-service` on cluster `breadsheet-server-dev` | Desired 1, `256`/`512`, **X86_64** (image is `linux/amd64`), `assignPublicIp=ENABLED`, rolling deploy + circuit-breaker rollback, 120 s health-check grace (migrations run before serving). |
-| Database | RDS PostgreSQL `db.t4g.micro`, single-AZ, private, encrypted | Reachable only from the task SG on `5432`. SSM-stored password now; keyless RDS IAM auth deferred (ADR 0002). |
-| Images | S3 bucket `breadsheet-dev-s3-…` | `raw/*` private (task `s3:PutObject` only), `processed/*` scoped public-read; resize Lambda deferred (reuse `lambda.tf`). |
+| Database | RDS PostgreSQL `db.t4g.micro`, single-AZ, private, encrypted | Reachable only from the task SG on `5432`. Keyless RDS IAM auth (`DB_AUTH=iam`) via `@aws-sdk/rds-signer` — see [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md). |
+| Images | S3 bucket `breadsheet-dev-s3-…` | `raw/*` private (task `s3:PutObject` only), `processed/*` scoped public-read; resize Lambda deferred. |
 | Image registry | GHCR `ghcr.io/fabelhaft-io/bread-sheet-server` (public) | **Not ECR** — the execution role needs no pull secret. |
-| Secrets | SSM Parameter Store `/breadsheet/dev/*` | `DATABASE_URL` (SecureString), `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_DEFAULT_KEY`; injected into the container via the task-def `secrets` block by the **execution** role. |
-| Identity | IAM execution + task + deployer roles, GitHub OIDC provider | All keyless. Task role = the app's identity (S3 + the principal GCP WIF federates). Deployer assumed by CI via OIDC. |
+| Secrets | SSM Parameter Store `/breadsheet/dev/*` | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_DEFAULT_KEY`; injected into the container via the task-def `secrets` block by the **execution** role. `DATABASE_URL` is no longer a secret (keyless IAM auth — no password). |
+| Identity | IAM execution + task + deployer roles, GitHub OIDC provider | All keyless. Task role = the app's identity (S3, `rds-db:connect`, + the principal GCP WIF federates). Deployer assumed by CI via OIDC. |
 | Keyless GCP | WIF pool `breadsheet-dev` + **AWS provider** + SA `breadsheet-dev-vision` | See § Keyless Google Cloud. |
 
 **Container image.** Published to the free **GitHub Container Registry**
 (`ghcr.io/fabelhaft-io/bread-sheet-server`, public) by `.github/workflows/build-image.yml` on push to
 `main` — never ECR. The task definition pins the immutable `:<git-sha>` tag.
 
+### Database Authentication — Keyless RDS IAM Auth
+
+The app authenticates to RDS without a stored password. The mechanism:
+
+- **Runtime queries:** `configs/databaseConfig.ts` (when `DB_AUTH=iam`) creates an `@aws-sdk/rds-signer`
+  `Signer` and returns an async `password` callback. The `pg.Pool` invokes it on each new physical
+  connection — minting a 15-min IAM auth token (local signing, no network round-trip).
+- **Migrations:** the Prisma migration engine reads `DATABASE_URL` directly and cannot use the pg.Pool
+  callback. The ECS startup script (`scripts/start.sh`) mints a token via `scripts/rds-token.mjs` and
+  injects it into `DATABASE_URL` before running `npm run db:deploy`.
+- **IAM:** the task role has `rds-db:connect` scoped to the DB instance resource ID + the
+  `breadsheet_iam` Postgres user (which has the `rds_iam` grant).
+- **TLS:** mandatory for IAM auth. The pg pool verifies the RDS server cert against the CA bundle
+  shipped in the Docker image (`certs/rds-global-bundle.pem`, `DB_SSL=verify-full`).
+
+See [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md) for the full
+rationale and migration history.
+
 ### Keyless Google Cloud (Vision/Vertex) — Fargate WIF
 
-On Fargate the federation source is the **AWS task role** (the EKS OIDC provider in `gcp-wif.tf` is the
-legacy path). The setup: a Workload Identity Pool with an **AWS provider** (`account_id`, plus an
-attribute-condition scoping trust to the task role's assumed-role ARN), a GCP service account
-`breadsheet-dev-vision` with `roles/aiplatform.user` (Cloud Vision needs **no** role — API-enablement
-+ an authenticated SA suffices; `roles/cloudvision.user` does not exist), and a `workloadIdentityUser`
-binding to the task-role principalSet. At runtime the app builds a google-auth `AwsClient` with a
-**programmatic credential supplier** (`server/src/services/gcpWorkloadIdentity.ts`) that reads AWS
-credentials from the **ECS container endpoint** — *not* EC2 IMDS, which doesn't serve task-role
-credentials on Fargate — and exchanges them for a short-lived GCP token that impersonates the SA. No
-key file is mounted. Env: `GCP_WORKLOAD_IDENTITY_AUDIENCE` + `GCP_SERVICE_ACCOUNT_EMAIL` (see
+On Fargate the federation source is the **AWS task role**. The setup: a Workload Identity Pool with an
+**AWS provider** (`account_id`, plus an attribute-condition scoping trust to the task role's
+assumed-role ARN), a GCP service account `breadsheet-dev-vision` with `roles/aiplatform.user` (Cloud
+Vision needs **no** role — API-enablement + an authenticated SA suffices; `roles/cloudvision.user` does
+not exist), and a `workloadIdentityUser` binding to the task-role principalSet. At runtime the app
+builds a google-auth `AwsClient` with a **programmatic credential supplier**
+(`server/src/services/gcpWorkloadIdentity.ts`) that reads AWS credentials from the **ECS container
+endpoint** — *not* EC2 IMDS, which doesn't serve task-role credentials on Fargate — and exchanges them
+for a short-lived GCP token that impersonates the SA. No key file is mounted. Env:
+`GCP_WORKLOAD_IDENTITY_AUDIENCE` + `GCP_SERVICE_ACCOUNT_EMAIL` (see
 [`fargate-handbuild.md`](fargate-handbuild.md) Objective 12).
 
-### Remote state (S3 backend)
+### Terraform Layout
 
-> The `apply` commands below currently provision the **legacy EKS** stack. Once the hand-built
-> Fargate resources are imported (Objective 14), the same backend + `apply` mechanics drive the
-> Fargate stack and the EKS files are removed. Until then, the running dev environment is managed by
-> hand per [`fargate-handbuild.md`](fargate-handbuild.md), not by `terraform apply`.
+```
+terraform/
+  main.tf         # providers (aws + google), data sources
+  variables.tf    # all input variables
+  locals.tf       # name_prefix, tags
+  backend.tf      # S3 remote state, per-env keys
+  network.tf      # VPC, subnets, IGW, route tables (no NAT)
+  security.tf     # ALB / task / RDS security groups + cross-referencing rules
+  rds.tf          # DB subnet group + RDS instance
+  iam.tf          # execution / task / deployer roles, policies, GitHub OIDC provider
+  s3.tf           # images bucket + public-access-block + ownership + policy + CORS
+  ssm.tf          # SSM parameters (Supabase URL + key)
+  ecs.tf          # ECS cluster + task definition + service
+  alb.tf          # ALB + target group + listeners + ACM cert + validation
+  dns.tf          # Route 53 zone (dev.bread-sheet.com) + A-alias → ALB
+  gcp-wif.tf      # GCP WIF pool + AWS provider + SA + bindings
+  outputs.tf      # Useful references (URLs, ARNs, names)
+  environments/
+    dev.tfvars           # Variable values for dev
+    dev.s3.tfbackend     # Backend config for dev state
+```
+
+### Remote State (S3 backend)
 
 State lives in an S3 backend with one key per environment (`<env>/terraform.tfstate`). The
 backend is configured partially in `backend.tf`; concrete bucket/key/region come from a
@@ -122,63 +146,48 @@ aws s3api put-bucket-versioning --bucket breadsheet-tfstate \
   --versioning-configuration Status=Enabled
 ```
 
-> The repo still contains a legacy committed `terraform/terraform.tfstate` (LocalStack state).
-> Once the remote backend is adopted, remove it from version control
-> (`git rm --cached terraform/terraform.tfstate*`) — `.gitignore` already excludes future
-> state files.
-
 ### Apply
 
 ```sh
 # Init selects the backend + downloads modules. Re-run when switching environments.
 terraform -chdir=terraform init -backend-config=environments/dev.s3.tfbackend
 
-# dev
+# Plan (always review before apply)
+terraform -chdir=terraform plan -var-file=environments/dev.tfvars
+
+# Apply
 terraform -chdir=terraform apply -var-file=environments/dev.tfvars
-
-# production
-terraform -chdir=terraform init -backend-config=environments/production.s3.tfbackend
-terraform -chdir=terraform apply -var-file=environments/production.tfvars
-
-# Local (LocalStack) — backend targets LocalStack's emulated S3
-terraform -chdir=terraform init -backend-config=environments/local.s3.tfbackend
-terraform -chdir=terraform apply -var-file=environments/local.tfvars
 ```
 
 To validate config without AWS credentials (no apply): `init -backend=false` then `validate`.
 
-### Resources (Fargate target — to be imported)
+### Terraform ↔ CD Ownership Split
 
-The components in the § Architecture table above are the resources Terraform will own after the
-Objective-14 import: VPC/subnets/SGs (no NAT), ALB + target group + ACM cert + Route 53 alias, the
-ECS cluster + Fargate service + task definition, RDS, the S3 bucket, the three IAM roles + GitHub
-OIDC provider, the SSM parameters, and the GCP WIF pool/AWS-provider/SA. The resize Lambda + SQS DLQ
-are deferred (reuse `lambda.tf`).
+CD (GitHub Actions) registers new task-definition revisions on every push — outside Terraform. To
+prevent drift fights:
 
-The **container registry is external**: the server image lives in GitHub Container Registry
-(`ghcr.io/fabelhaft-io/bread-sheet-server`), not AWS — see § Container image above.
+- `aws_ecs_service.server` has `lifecycle { ignore_changes = [task_definition] }` — Terraform owns the
+  service; CD owns which revision it runs.
+- `aws_ecs_task_definition.server` has `lifecycle { ignore_changes = [container_definitions] }` —
+  Terraform owns the structure; CD updates the image tag.
 
-### S3 bucket layout
+### S3 Bucket Layout
 
 ```
-s3://breadsheet-assets/
+s3://breadsheet-dev-s3-…/
 ├── raw/
-│   ├── product/{uuid}.jpg    # Uploaded by API; triggers resize Lambda
-│   └── label/{uuid}.jpg      # OCR fallback images; triggers resize Lambda
+│   ├── product/{uuid}.jpg    # Uploaded by API; triggers resize Lambda (deferred)
+│   └── label/{uuid}.jpg      # OCR fallback images
 └── processed/
-    ├── product/{uuid}.jpg    # Final product display images (max 1200 px)
-    └── label/{uuid}.jpg      # Final label images (max 1600 px)
+    └── {uuid}.jpg            # Final display images (resize Lambda output)
 ```
-
-The prefix (`raw/product/` vs `raw/label/`) tells the Lambda which dimension cap to apply.
 
 ---
 
 ## Deployment Pipeline (push-based CD to ECS)
 
-ECS is **push-deployed** — CI calls the ECS API to roll the service. There is no ArgoCD pull loop
-(that was the EKS model). Keyless throughout: GitHub Actions assumes an AWS IAM **deployer role** via
-OIDC, no stored AWS keys.
+ECS is **push-deployed** — CI calls the ECS API to roll the service. There is no ArgoCD pull loop.
+Keyless throughout: GitHub Actions assumes an AWS IAM **deployer role** via OIDC, no stored AWS keys.
 
 ### CI/CD (GitHub Actions)
 
@@ -193,7 +202,7 @@ OIDC, no stored AWS keys.
    redeploys, no human step.
 
 The task definition is **fetched from AWS, not stored in the repo**, so CD only swaps the image and
-never clobbers the env/secrets owned by the (hand-built, soon Terraform-owned) task def.
+never clobbers the env/secrets owned by Terraform.
 
 **Rollback** = re-deploy the previous task-def revision (ECS keeps them); the deployment **circuit
 breaker** auto-reverts a failed rollout.
@@ -202,22 +211,23 @@ breaker** auto-reverts a failed rollout.
 dispatch + an `environment: production` required reviewer) promoting the **same** already-built
 `:<git-sha>` to a prod service. Built when a prod cluster/service exists.
 
-### Database migrations — ride along
+### Database Migrations — Ride Along
 
-The container command is `sh -c "npm run db:deploy && node dist/server.js"`, so **every new task runs
-`prisma migrate deploy` before serving**. Prisma's migration lock keeps the brief two-task
-rolling-deploy overlap safe — no separate migration Job or initContainer is needed on Fargate.
+The container command is `sh scripts/start.sh`, which runs `npm run db:deploy` (Prisma migrations)
+before `node dist/server.js`. When `DB_AUTH=iam`, the script mints an IAM token into `DATABASE_URL`
+first — so the migration engine authenticates with a short-lived token too. Prisma's migration lock
+keeps the brief two-task rolling-deploy overlap safe — no separate migration Job is needed.
 
 ---
 
 ## Infrastructure as Code Principles
 
-- **End state:** all cloud resources defined in `terraform/`, no manual console drift. The dev
-  Fargate stack is currently hand-built and being imported into Terraform (Objective 14 in
-  [`fargate-handbuild.md`](fargate-handbuild.md) maintains the import map); the legacy EKS files are
-  removed once that lands.
-- Lambda source and configuration live in `terraform/` alongside other infra.
-- Secrets (DB connection string, Supabase keys) live in **SSM Parameter Store** (SecureString for the
-  DB) and are injected into the container via the task-def `secrets` block — never committed. Google
-  Cloud access is **keyless** via Workload Identity Federation; no GCP key or `GEMINI_API_KEY` is
-  stored in production.
+- **All cloud resources defined in `terraform/`** — `terraform plan` shows no drift on the dev
+  workspace. The build log and verification in [`fargate-handbuild.md`](fargate-handbuild.md)
+  documents the hand-build → import journey.
+- Secrets (`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_DEFAULT_KEY`) live in **SSM Parameter Store** and are
+  injected via the task-def `secrets` block — never committed. Database auth is **keyless** (IAM).
+  Google Cloud access is **keyless** via Workload Identity Federation.
+- Lambda source and configuration will live in `terraform/` alongside other infra (resize Lambda is a
+  deferred post-build adaptation).
+- The **container registry is external**: the server image lives in GitHub Container Registry, not AWS.
