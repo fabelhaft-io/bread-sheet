@@ -150,6 +150,22 @@ DATABASE_URL="postgresql://admin:password@localhost:5432/breadsheet"
 # trust store, which the RDS CA is NOT in — so relying on the URL alone aborts the
 # handshake at query time ("could not accept SSL connection: EOF"). Hence this var.
 DB_SSL=disabled
+
+# DB authentication method.
+#   - password : static password in DATABASE_URL (local, legacy prod).
+#   - iam      : RDS IAM auth — mints a 15-min token per connection via @aws-sdk/rds-signer.
+#                Requires DB_SSL=verify-full, AWS_REGION, and the DB user to have rds_iam grant.
+#                The ECS startup script (scripts/start.sh) also mints a token for the Prisma
+#                migration engine (which reads DATABASE_URL directly).
+DB_AUTH=password                              # password | iam  (defaults to password if unset)
+
+# When DB_AUTH=iam, these are used by scripts/start.sh to assemble a token-bearing
+# DATABASE_URL for the migration engine:
+# DB_HOST=breadsheet-dev-database-1.cna48wy46m01.eu-west-1.rds.amazonaws.com
+# DB_PORT=5432
+# DB_USER=breadsheet_iam
+# DB_NAME=breadsheet
+
 SUPABASE_URL=...
 SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
 

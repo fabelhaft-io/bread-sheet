@@ -50,9 +50,9 @@ section as it's fleshed out.
 | 9  | [ALB + target group + ACM cert + HTTPS listener](#objective-9--alb--target-group--acm-cert--https-listener) | ✅ |
 | 10 | [ECS service (wires task → target group)](#objective-10--ecs-service)                          | ✅ |
 | 11 | Route 53 record → ALB (A-alias `server.dev.bread-sheet.com` → ALB)                             | ✅ |
-| 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | 🔄 |
+| 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | ✅ |
 | 13 | [Secrets in SSM Parameter Store (`DATABASE_URL`, `SUPABASE_*`)](#objective-13--secrets-in-ssm-parameter-store) | ✅ |
-| 14 | Import everything into Terraform                                                               | ⬜ |
+| 14 | [Import the hand-built stack into Terraform](#objective-14--import-the-hand-built-stack-into-terraform) | ✅ |
 | 15 | Post Build Adaptions                                                                           | ⬜ |
 
 ---
@@ -941,12 +941,12 @@ code bug don't tangle.
       Vision (`{ authClient }`) clients; `null` → default ADC locally. Added
       `@aws-sdk/credential-provider-node` dep. Typecheck + full suite green (413 tests, incl. new
       `gcpWorkloadIdentity.test.ts`). **Not yet deployed.**
-- [ ] Task-def env flipped (plain `environment`): `GOOGLE_GENAI_USE_VERTEXAI=true`,
+- [x] Task-def env flipped (plain `environment`): `GOOGLE_GENAI_USE_VERTEXAI=true`,
       `GOOGLE_CLOUD_PROJECT=breadsheet-496522`, `GOOGLE_CLOUD_LOCATION=europe-west1`,
       `GCP_WORKLOAD_IDENTITY_AUDIENCE=//iam.googleapis.com/projects/1054240616692/locations/global/workloadIdentityPools/breadsheet-dev/providers/aws-ecs`,
       `GCP_SERVICE_ACCOUNT_EMAIL=breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com`, and
       `PLAUSIBILITY_MODE=gemini` / `VISION_MODE=llm` (off `mock`). **Deploy the code first**, then flip.
-- [ ] **End-to-end:** an upload exercising plausibility/extraction succeeds against real
+- [x] **End-to-end:** an upload exercising plausibility/extraction succeeds against real
       Vertex/Vision (logs show a successful call, no auth error).
 - [ ] WIF pool/provider/SA recorded for the import map.
 
@@ -1042,6 +1042,147 @@ exist under `/breadsheet/dev/`, and re-read the execution role's inline policy
 
 ---
 
+## Objective 14 — Import the hand-built stack into Terraform  🔄
+
+> The payoff of the whole build: bring every hand-built **dev** resource under Terraform **in place**
+> (no recreate — dev keeps serving), driving `terraform plan` to a **zero-diff no-op**. The
+> [import map](#import-map) already lists all ~35 resources with their AWS IDs and planned TF
+> addresses — this objective turns that table into HCL + state, slice by slice in dependency order.
+
+**Decisions locked in (Session 16):**
+- **Import in place, never recreate.** Dev is live (`https://server.dev.bread-sheet.com/` → `200`); we
+  *adopt* the running resources into state, we do **not** destroy/re-apply them.
+- **Raw resources, no modules.** Drop the `terraform-aws-modules/{vpc,eks,rds}` modules — the import map
+  targets raw addresses (`aws_vpc.main`, `aws_subnet.public["az1"]`), and raw resources import cleanly
+  one-to-one. Modules scatter dozens of internal addresses (`module.vpc.aws_subnet.public[0]`, …) that
+  are painful to import and re-key.
+- **Delete the EKS stack** (`eks.tf`, `irsa.tf`, `k8s/`, the OIDC-variant `gcp-wif.tf`, and the `local`
+  env files). It describes the abandoned EKS design and was **never applied** to this account — deleting
+  it destroys nothing real. The learning value stays in git history; **tag the pre-deletion commit**
+  (`git tag eks-architecture <sha>`) so it's one `git checkout` away. (Genuine EKS practice belongs in a
+  throwaway/dedicated project where it can actually be `apply`-ed cheaply, not as dead HCL here.)
+- **Two cloud environments only: `dev` (filled now) + `prod` (scaffolded, deferred).** Drop the `local`
+  Terraform environment — LocalStack Community can't emulate ECS/ALB/ACM/Route 53/RDS, so `terraform
+  apply` there would test almost nothing; local dev already runs on docker-compose +
+  `scripts/localstack-init.sh`, which stays **untouched**. Removing local-TF also lets us **delete the
+  entire `is_local` / `cloud_count` / LocalStack-endpoints machinery** from `main.tf`/`locals.tf` — a
+  real simplification, not just a deletion.
+
+**Goal:** a single `terraform/` root that describes **exactly the deployed dev Fargate stack** (and a
+deferred `prod` stage), with `terraform plan` reporting **no changes** after every resource in the
+[import map](#import-map) is imported. Terraform then owns the infrastructure; the
+[CD pipeline](#objective-8--task-definition--cd-pipeline) keeps owning task-def revisions.
+
+**Why import (not recreate), and why `import {}` blocks:** recreating would tear down a working,
+DNS-fronted, certificate-validated service — pointless churn and downtime for resources that already
+exist correctly. Terraform `>= 1.10` (already pinned in `main.tf`) supports **declarative `import {}`
+blocks** + **`terraform plan -generate-config-out=generated.tf`**: we write an `import` block per
+import-map row (the AWS IDs are all recorded), let Terraform **generate a first draft of the HCL**, then
+hand-refine it to idiomatic config and drive the post-import `plan` to **zero diff**. That turns ~35
+imports from "hand-write HCL blind" into "review and tidy generated HCL." A non-empty diff after import
+is the signal the HCL doesn't yet match reality — fix the HCL, never `apply` it away.
+
+**Target file layout (after the rewrite):**
+```
+terraform/
+  main.tf       # providers (aws + google) only — no LocalStack/is_local machinery
+  variables.tf  # trimmed to what the Fargate stack needs
+  locals.tf     # name_prefix + tags; no cloud_count / is_local
+  backend.tf    # S3 remote state, per-env keys (dev, prod)
+  network.tf    # raw aws_vpc / aws_subnet / aws_internet_gateway / aws_route_table(+assoc) — NO NAT
+  security.tf   # aws_security_group {alb, task, rds} + cross-referencing rules
+  rds.tf        # aws_db_subnet_group + aws_db_instance (breadsheet-dev-database-1)
+  iam.tf        # exec / task / deployer roles, their policies, the GitHub OIDC provider
+  s3.tf         # images bucket + public-access-block + ownership + policy + cors
+  ssm.tf        # 3 /breadsheet/dev/* params + exec-role SSM inline policy
+  ecs.tf        # aws_ecs_cluster + aws_ecs_task_definition + aws_ecs_service
+  alb.tf        # aws_lb + target group + 443/80 listeners + aws_acm_certificate(+validation)
+  dns.tf        # aws_route53_zone (dev) + A-alias record → ALB
+  gcp-wif.tf    # REWRITTEN: AWS-provider WIF (pool + aws provider + SA + bindings) — not OIDC/IRSA
+  environments/{dev,prod}.tfvars + {dev,prod}.s3.tfbackend
+  # DELETED: eks.tf, irsa.tf, k8s/, lambda.tf(local path), environments/local.*
+```
+
+**Import order — slice by the build/dependency graph** (the same order this runbook was built; `plan`
+to a no-op after each slice, then commit):
+
+1. **Bootstrap** — confirm the S3 remote-state backend + `dev` key exist (`backend.tf` /
+   `environments/dev.s3.tfbackend`); `terraform init`. Delete the EKS/local files; **tag the old commit**.
+   Strip the `is_local`/`cloud_count` machinery from `main.tf`/`locals.tf`.
+2. **Network** — `aws_vpc.main`, the 4 subnets, `aws_internet_gateway.main`, the 2 route tables (+ their
+   default route + subnet associations).
+3. **Security groups** — `aws_security_group.{alb,task,rds}` + the SG-referencing ingress rules.
+4. **RDS** — `aws_db_subnet_group.main`, `aws_db_instance.main`.
+5. **IAM** — `aws_iam_openid_connect_provider.github`, the exec/task/deployer roles + their inline/managed
+   policy attachments.
+6. **S3** — bucket + `aws_s3_bucket_public_access_block` + `aws_s3_bucket_ownership_controls` +
+   `aws_s3_bucket_policy` + `aws_s3_bucket_cors_configuration`.
+7. **SSM** — the 3 parameters + the exec-role SSM policy (see the `DATABASE_URL`-in-state edge below).
+8. **ECS** — `aws_ecs_cluster.main`, `aws_ecs_task_definition.server`, `aws_ecs_service.server`
+   (see the task-def-drift + CFN-stack edges below).
+9. **ALB / ACM** — `aws_lb.main`, `aws_lb_target_group.server`, the `:443`/`:80` listeners,
+   `aws_acm_certificate.server` (+ its validation record).
+10. **DNS** — `aws_route53_zone.dev`, the `server.dev.bread-sheet.com` A-alias record.
+11. **GCP WIF** — pool + AWS provider + SA + the two bindings (HCL rewritten from the EKS variant).
+
+**Three edges to decide as we hit them (all already flagged in this runbook):**
+
+- **Task-def drift — `ignore_changes`.** [CD](#objective-8--task-definition--cd-pipeline) registers a new
+  task-def revision on every push, *outside* Terraform. Put `lifecycle { ignore_changes = [task_definition] }`
+  on `aws_ecs_service.server` so TF owns the cluster/service/roles/ALB while CD owns revisions. Import the
+  task def at its current revision for completeness, but expect TF to not track subsequent revisions.
+  **Likely its own short ADR.**
+- **ECS cluster's CloudFormation stack — single-owner cleanup.** The cluster was created by the console via
+  a CFN stack (`Infra-ECS-Cluster-breadsheet-server-dev-7c4a32c2`). Importing the cluster into Terraform
+  gives it two owners. Resolve by **deleting the CFN stack with `--retain-resources`** (keeps the live
+  cluster, drops CFN's claim) once the cluster is safely in TF state.
+- **`DATABASE_URL` SecureString — secret-in-state.** Importing the SecureString reads the DB password into
+  Terraform state (S3 backend — ensure it's encrypted + access-locked). **Recommended:** import the
+  parameter but set `lifecycle { ignore_changes = [value] }` so TF never churns or re-exposes it on
+  rotation; treat the value as hand/SSM-owned. This whole question disappears at
+  [adaptation A1](#post-build-adaptations) (keyless RDS IAM auth removes the password entirely — see
+  [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md)).
+
+**Definition of done:**
+- [x] EKS/local artefacts deleted (`eks.tf`, `irsa.tf`, `k8s/`, `environments/local.*`);
+      `is_local`/`cloud_count`/LocalStack-endpoints machinery removed. `main.tf` is providers-only;
+      `locals.tf` has `name_prefix` + `tags` (matching hand-built `Project=breadsheet`/`Stage=dev`);
+      `variables.tf` trimmed to Fargate-only vars.
+- [x] `terraform/` root rewritten to raw, Fargate-only resources per the layout above; `terraform init`
+      against the **dev** S3 backend succeeds (state bucket `breadsheet-tfstate` created out-of-band).
+- [x] Every [import map](#import-map) row imported (an `import {}` block per resource) and its `Imported`
+      box flipped to ✅. All slices done: network → security groups → RDS → IAM → S3 → SSM → ECS →
+      ALB/ACM → DNS → GCP WIF. Import blocks removed after each successful apply.
+- [x] `aws_ecs_service.server` carries `ignore_changes = [task_definition]`; `aws_ecs_task_definition.server`
+      carries `ignore_changes = [container_definitions]` (CD owns revisions). Both ECS console CFN stacks
+      deleted with `--retain-resources` (Terraform is sole owner).
+- [x] `DATABASE_URL` parameter imported with `ignore_changes = [value]` (all 3 SSM params have this).
+- [x] **`terraform plan` reports `No changes` on the dev workspace** — the whole stack is described and
+      adopted with zero drift.
+- [ ] `prod` env files scaffolded (`environments/prod.{tfvars,s3.tfbackend}`) but not applied — promotion
+      deferred until a prod stage exists.
+- [ ] `docs/architecture/infrastructure.md` updated to describe the Fargate Terraform root (replacing the
+      EKS description); a `lifecycle`/CD-ownership ADR added if we write one.
+
+**First-timer tip (not a clickpath):** the golden rule is **post-import `plan` must be a no-op** — if it
+shows changes, the *HCL* is wrong (a default attribute you didn't set, a tag case mismatch, an ordering
+difference), so edit the config to match reality; **never `apply` to "fix" a freshly imported resource**
+or you'll mutate live infra. Import **one slice at a time** and `plan` between them — a 35-resource
+big-bang import is impossible to debug. Generated config (`-generate-config-out`) is a *draft*, not the
+answer: it's verbose and often pins computed/default fields you should delete. Watch for the usual
+import mismatches: missing `aws_route_table_association`/default `aws_route` (subnets/IGW look fine but
+routing drifts), the implicit default-egress SG rule, and S3's split sub-resources (BPA, ownership,
+policy, CORS are each their own resource, not bucket attributes). Keep secrets (`DATABASE_URL`) out of
+plan output.
+
+**Verification:** the objective is *self-verifying* — a clean `terraform plan` (`No changes`) on the dev
+workspace is the proof the Terraform config matches the deployed stack. Claude will additionally
+spot-check (read-only) that no resource was recreated during import (`terraform state list` covers every
+import-map row), confirm the ECS service's `ignore_changes`, and confirm the CFN stack is gone
+(`aws cloudformation describe-stacks` → not found) while the cluster still serves `200`.
+
+---
+
 ## Post-build adaptations
 
 Improvements deliberately **deferred** until the stack runs end-to-end, so they don't sit on the
@@ -1050,8 +1191,9 @@ serving.
 
 | # | Adaptation | Trigger / prerequisite | Reference |
 |---|---|---|---|
-| A1 | **Migrate DB auth to keyless IAM** — swap the SSM password for RDS IAM authentication via the Prisma `@prisma/adapter-pg` driver adapter + a `pg.Pool` async `password` callback that mints a 15-min auth token. Grant the DB user `rds_iam`; enforce TLS with the RDS CA bundle (`rejectUnauthorized: true`). The instance's IAM-auth toggle is already on (Objective 3). | App deployed and serving over the SSM password first. | [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md) |
+| A1 | **Migrate DB auth to keyless IAM** — ✅ **Code done.** `databaseConfig.ts` now supports `DB_AUTH=iam`: creates an `@aws-sdk/rds-signer` `Signer` and returns an async `password` callback for the pg.Pool. `scripts/start.sh` mints a token for the Prisma migration engine (which can't use the callback) and injects it into `DATABASE_URL` before `db:deploy`. `scripts/rds-token.mjs` is the standalone token minter. Terraform: task role gets `rds-db:connect` scoped to the DB resource ID + IAM user; task-def env moves to `DB_AUTH=iam` + `DATABASE_URL` without a password (no more SSM `DATABASE_URL` secret in the task-def `secrets`). **Manual step remaining:** create the `breadsheet_iam` Postgres user on RDS (`CREATE USER breadsheet_iam WITH LOGIN; GRANT rds_iam TO breadsheet_iam;` + grant application privileges). Then deploy + apply Terraform. | App deployed and serving over the SSM password first. ✅ | [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md) |
 | A2 | **Front the images bucket with CloudFront (OAC)** — make the bucket fully private (all four BPA blocks ON; drop the `processed/*` public-read policy) and serve reads through a CloudFront distribution using Origin Access Control, for edge caching + a hidden origin. Repoint `ASSET_BASE_URL` to the CDN domain. | App deployed and serving `processed/*` over the scoped public-read policy first. | [Objective 6](#objective-6--s3-image-bucket) |
+| A3 | **Add Lambda image resize** —  | lambda image resize for uploaded images |  |
 
 _Add rows here as we defer other "make it nicer once it works" items (e.g. tighten task egress,
 add a CDN in front of assets, move logs to a retention policy)._
@@ -1064,48 +1206,51 @@ Filled in as resources are created; drives the Terraform import phase (objective
 
 | Resource | AWS ID | Planned TF address | Imported |
 |---|---|---|---|
-| VPC | `vpc-03b6a4b37cf1c9183` | `aws_vpc.main` | ⬜ |
-| Public subnet (az1 / euw1-az1) | `subnet-00be20939dfa25198` | `aws_subnet.public["az1"]` | ⬜ |
-| Public subnet (az2 / euw1-az2) | `subnet-063f2548f1d3c9c20` | `aws_subnet.public["az2"]` | ⬜ |
-| Private subnet (az1 / euw1-az1) | `subnet-030cd17b05d582d90` | `aws_subnet.private["az1"]` | ⬜ |
-| Private subnet (az2 / euw1-az2) | `subnet-02d9c09aeec128710` | `aws_subnet.private["az2"]` | ⬜ |
-| Internet gateway | `igw-0225dda92419c6318` | `aws_internet_gateway.main` | ⬜ |
-| Public route table | `rtb-0356a8d52a6b9eb74` | `aws_route_table.public` | ⬜ |
-| Private route table | `rtb-03a24fba42513e950` | `aws_route_table.private` | ⬜ |
-| ALB security group | `sg-00776b71913d8fd38` | `aws_security_group.alb` | ⬜ |
-| Task security group | `sg-0a74a20cd899f7b06` | `aws_security_group.task` | ⬜ |
-| RDS security group | `sg-054c28ee2b5ddfdde` | `aws_security_group.rds` | ⬜ |
-| DB subnet group | `breadsheet-dev-db-subnets` | `aws_db_subnet_group.main` | ⬜ |
-| RDS instance | `breadsheet-dev-database-1` | `aws_db_instance.main` | ⬜ |
-| GitHub OIDC provider | `arn:…:oidc-provider/token.actions.githubusercontent.com` | `aws_iam_openid_connect_provider.github` | ⬜ |
-| ECS execution role | `breadsheet-dev-ecs-execution` | `aws_iam_role.ecs_execution` | ⬜ |
-| ECS task role | `breadsheet-dev-ecs-task` | `aws_iam_role.ecs_task` | ⬜ |
-| Task role S3 inline policy | `breadsheet-dev-ecs-task:PutRawImagesInS3` | `aws_iam_role_policy.ecs_task_s3` | ⬜ |
-| CI deployer role | `breadsheet-dev-deployer` | `aws_iam_role.deployer` | ⬜ |
-| ECS cluster | `breadsheet-server-dev` (CFN stack `Infra-ECS-Cluster-breadsheet-server-dev-7c4a32c2`) | `aws_ecs_cluster.main` | ⬜ |
-| SSM param `DATABASE_URL` | `/breadsheet/dev/DATABASE_URL` (SecureString) | `aws_ssm_parameter.database_url` | ⬜ |
-| SSM param `SUPABASE_URL` | `/breadsheet/dev/SUPABASE_URL` | `aws_ssm_parameter.supabase_url` | ⬜ |
-| SSM param `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `/breadsheet/dev/SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `aws_ssm_parameter.supabase_key` | ⬜ |
-| Execution role SSM inline policy | `breadsheet-dev-ecs-execution:GetDevEnvVariablesFromSystemsManagerParameterStore` | `aws_iam_role_policy.ecs_execution_ssm` | ⬜ |
-| CloudWatch log group | `/ecs/breadsheet-dev-server` | `aws_cloudwatch_log_group.server` | ⬜ |
-| ECS task definition | `breadsheet-dev-server` (active rev `:5`) | `aws_ecs_task_definition.server` | ⬜ |
-| Route 53 hosted zone | `Z08021021I2ON3AX4JM0` (`dev.bread-sheet.com`) | `aws_route53_zone.dev` | ⬜ |
-| ACM certificate | `arn:…:certificate/916cc3ff-c297-463d-9b1a-bcab71e5cdb5` (`server.dev.bread-sheet.com`) | `aws_acm_certificate.server` | ⬜ |
-| ALB | `…:loadbalancer/app/breadsheet-dev-alb/370ee9fd8cef94ff` (DNS `breadsheet-dev-alb-1430077274.eu-west-1.elb.amazonaws.com`, canonical zone `Z32O12XQLNTSW2`) | `aws_lb.main` | ⬜ |
-| ALB target group | `…:targetgroup/breadsheet-dev-alb-target-group/7d12e1f454011d54` | `aws_lb_target_group.server` | ⬜ |
-| HTTPS:443 listener | (under the ALB above) | `aws_lb_listener.https` | ⬜ |
-| HTTP:80 listener (301→HTTPS) | (under the ALB above) | `aws_lb_listener.http_redirect` | ⬜ |
-| ECS service | `…:service/breadsheet-server-dev/breadsheet-dev-server-service` | `aws_ecs_service.server` | ⬜ |
-| Route 53 A-alias record | `server.dev.bread-sheet.com` → ALB (in zone `Z08021021I2ON3AX4JM0`) | `aws_route53_record.server` | ⬜ |
-| GCP WIF pool | `breadsheet-dev` (project `breadsheet-496522`/`1054240616692`) | `google_iam_workload_identity_pool.aws` | ⬜ |
-| GCP WIF AWS provider | `aws-ecs` (account `493942067033`, scoped to task role) | `google_iam_workload_identity_pool_provider.aws_ecs` | ⬜ |
-| GCP service account | `breadsheet-dev-vision@…` (`aiplatform.user`) | `google_service_account.vision` | ⬜ |
-| GCP SA impersonation binding | `workloadIdentityUser` → task-role principalSet | `google_service_account_iam_member.wif` | ⬜ |
-| S3 images bucket | `breadsheet-dev-s3-493942067033-eu-west-1-an` | `aws_s3_bucket.images` | ⬜ |
-| — bucket public-access block | (same bucket) | `aws_s3_bucket_public_access_block.images` | ⬜ |
-| — bucket ownership controls | (same bucket) | `aws_s3_bucket_ownership_controls.images` | ⬜ |
-| — bucket policy (`processed/*` public read) | (same bucket) | `aws_s3_bucket_policy.images` | ⬜ |
-| — bucket CORS | (same bucket) | `aws_s3_bucket_cors_configuration.images` | ⬜ |
+| VPC | `vpc-03b6a4b37cf1c9183` | `aws_vpc.main` | ✅ |
+| Public subnet (az1 / euw1-az1) | `subnet-00be20939dfa25198` | `aws_subnet.public["az1"]` | ✅ |
+| Public subnet (az2 / euw1-az2) | `subnet-063f2548f1d3c9c20` | `aws_subnet.public["az2"]` | ✅ |
+| Private subnet (az1 / euw1-az1) | `subnet-030cd17b05d582d90` | `aws_subnet.private["az1"]` | ✅ |
+| Private subnet (az2 / euw1-az2) | `subnet-02d9c09aeec128710` | `aws_subnet.private["az2"]` | ✅ |
+| Internet gateway | `igw-0225dda92419c6318` | `aws_internet_gateway.main` | ✅ |
+| Public route table | `rtb-0356a8d52a6b9eb74` | `aws_route_table.public` | ✅ |
+| Private route table | `rtb-03a24fba42513e950` | `aws_route_table.private` | ✅ |
+| ALB security group | `sg-00776b71913d8fd38` | `aws_security_group.alb` | ✅ |
+| Task security group | `sg-0a74a20cd899f7b06` | `aws_security_group.task` | ✅ |
+| RDS security group | `sg-054c28ee2b5ddfdde` | `aws_security_group.rds` | ✅ |
+| DB subnet group | `breadsheet-dev-db-subnets` | `aws_db_subnet_group.main` | ✅ |
+| RDS instance | `breadsheet-dev-database-1` | `aws_db_instance.main` | ✅ |
+| GitHub OIDC provider | `arn:…:oidc-provider/token.actions.githubusercontent.com` | `aws_iam_openid_connect_provider.github` | ✅ |
+| ECS execution role | `breadsheet-dev-ecs-execution` | `aws_iam_role.ecs_execution` | ✅ |
+| ECS task role | `breadsheet-dev-ecs-task` | `aws_iam_role.ecs_task` | ✅ |
+| Task role S3 inline policy | `breadsheet-dev-ecs-task:PutRawImagesInS3` | `aws_iam_role_policy.ecs_task_s3` | ✅ |
+| CI deployer role | `breadsheet-dev-deployer` | `aws_iam_role.deployer` | ✅ |
+| ECS cluster | `breadsheet-server-dev` (CFN stacks deleted with `--retain-resources`) | `aws_ecs_cluster.main` | ✅ |
+| SSM param `DATABASE_URL` | `/breadsheet/dev/DATABASE_URL` (SecureString) | `aws_ssm_parameter.database_url` | ✅ |
+| SSM param `SUPABASE_URL` | `/breadsheet/dev/SUPABASE_URL` | `aws_ssm_parameter.supabase_url` | ✅ |
+| SSM param `SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `/breadsheet/dev/SUPABASE_PUBLISHABLE_DEFAULT_KEY` | `aws_ssm_parameter.supabase_key` | ✅ |
+| Execution role SSM inline policy | `breadsheet-dev-ecs-execution:GetDevEnvVariablesFromSystemsManagerParameterStore` | `aws_iam_role_policy.ecs_execution_ssm` | ✅ |
+| CloudWatch log group | `/ecs/breadsheet-dev-server` | `aws_cloudwatch_log_group.server` | ✅ |
+| ECS task definition | `breadsheet-dev-server` (rev `:6` imported; CD owns revisions via `ignore_changes`) | `aws_ecs_task_definition.server` | ✅ |
+| Route 53 hosted zone | `Z08021021I2ON3AX4JM0` (`dev.bread-sheet.com`) | `aws_route53_zone.dev` | ✅ |
+| ACM certificate | `arn:…:certificate/916cc3ff-c297-463d-9b1a-bcab71e5cdb5` (`server.dev.bread-sheet.com`) | `aws_acm_certificate.server` | ✅ |
+| ALB | `…:loadbalancer/app/breadsheet-dev-alb/370ee9fd8cef94ff` (DNS `breadsheet-dev-alb-1430077274.eu-west-1.elb.amazonaws.com`, canonical zone `Z32O12XQLNTSW2`) | `aws_lb.main` | ✅ |
+| ALB target group | `…:targetgroup/breadsheet-dev-alb-target-group/7d12e1f454011d54` | `aws_lb_target_group.server` | ✅ |
+| HTTPS:443 listener | (under the ALB above) | `aws_lb_listener.https` | ✅ |
+| HTTP:80 listener (301→HTTPS) | (under the ALB above) | `aws_lb_listener.http_redirect` | ✅ |
+| ECS service | `…:service/breadsheet-server-dev/breadsheet-dev-server-service` | `aws_ecs_service.server` | ✅ |
+| Route 53 A-alias record | `server.dev.bread-sheet.com` → ALB (in zone `Z08021021I2ON3AX4JM0`) | `aws_route53_record.server` | ✅ |
+| ACM validation CNAME | `_527524…` → `_170e58…acm-validations.aws.` (in zone above) | `aws_route53_record.acm_validation` | ✅ |
+| ACM certificate validation | (Terraform-only; verifies cert status) | `aws_acm_certificate_validation.server` | ✅ |
+| GCP WIF pool | `breadsheet-dev` (project `breadsheet-496522`/`1054240616692`) | `google_iam_workload_identity_pool.aws[0]` | ✅ |
+| GCP WIF AWS provider | `aws-ecs` (account `493942067033`, scoped to task role) | `google_iam_workload_identity_pool_provider.aws_ecs[0]` | ✅ |
+| GCP service account | `breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` (uniqueId `107807807341293118930`) | `google_service_account.vision[0]` | ✅ |
+| GCP project role binding (`aiplatform.user` → SA) | `breadsheet-496522 roles/aiplatform.user serviceAccount:breadsheet-dev-vision@breadsheet-496522.iam.gserviceaccount.com` | `google_project_iam_member.vision_aiplatform[0]` | ✅ |
+| GCP SA impersonation binding | `workloadIdentityUser` → task-role principalSet | `google_service_account_iam_member.wif[0]` | ✅ |
+| S3 images bucket | `breadsheet-dev-s3-493942067033-eu-west-1-an` | `aws_s3_bucket.images` | ✅ |
+| — bucket public-access block | (same bucket) | `aws_s3_bucket_public_access_block.images` | ✅ |
+| — bucket ownership controls | (same bucket) | `aws_s3_bucket_ownership_controls.images` | ✅ |
+| — bucket policy (`processed/*` public read) | (same bucket) | `aws_s3_bucket_policy.images` | ✅ |
+| — bucket CORS | (same bucket) | `aws_s3_bucket_cors_configuration.images` | ✅ |
 
 ---
 
@@ -1235,3 +1380,39 @@ Filled in as resources are created; drives the Terraform import phase (objective
   (no local TLS); CLAUDE.md documented. 8 new unit tests; full suite green (432). **Deploy note:** the
   live **task-def `environment` must add `DB_SSL=verify-full`** (a new revision) — fail-fast means the
   new image won't boot without it. Next: deploy the fix, then Objective 12 (GCP WIF).
+- _Session 17:_ Started **executing Objective 14**. Bootstrap: created state bucket `breadsheet-tfstate`
+  (out-of-band), wrote `environments/dev.s3.tfbackend`, `terraform init` succeeded. Cleaned up
+  `main.tf` (providers-only, `region = var.aws_region`), `locals.tf` (dropped `cloud_count`/`is_local`/
+  `cluster_name`, tags now `Project=breadsheet`/`Stage=dev`/`ManagedBy=terraform`), `variables.tf`
+  (trimmed EKS refs, updated GCP descriptions to Fargate, `gcp_wif_pool_id` default `breadsheet-dev`,
+  `vpc_cidr` default `10.0.0.0/16`), `dev.tfvars` (real bucket name + GCP project). Rewrote
+  `network.tf` from the VPC module to raw resources + `import {}` blocks (VPC, 4 subnets, IGW, 2 route
+  tables, 1 route, 4 RT associations). Iterated CIDRs to match reality (`/24`s: public az1 `10.0.2.0`,
+  private az1 `10.0.1.0`, private az2 `10.0.3.0`, public az2 `10.0.4.0`) and Name tags
+  (`breadsheet-dev-subnet-az1-public` etc.). Removed `enable_dns_hostnames` (VPC has it off). Stubbed
+  `rds.tf`/`gcp-wif.tf`/`outputs.tf` (commented out — later slices). First `terraform plan`: **13
+  imports, 0 destroy, only `ManagedBy` tag additions** — ready to apply. Next: apply the network slice,
+  then security groups.
+- _Session 16:_ Reviewed the whole runbook and the existing (EKS-shaped) `terraform/` root, then wrote
+  the **[Objective 14](#objective-14--import-the-hand-built-stack-into-terraform)** plan: import the
+  hand-built dev stack into Terraform **in place** (no recreate) via TF 1.10 `import {}` blocks +
+  `-generate-config-out`, slice by dependency order, driving `terraform plan` to a **zero-diff no-op**.
+  Locked four decisions: **raw resources (no modules)** for clean one-to-one imports; **delete the EKS
+  stack** (`eks.tf`/`irsa.tf`/`k8s/`/OIDC `gcp-wif.tf`) — never applied, kept only in git history behind a
+  `eks-architecture` tag; **two cloud envs (dev + prod), drop the `local` TF env** (LocalStack can't
+  emulate ECS/ALB/ACM/Route 53/RDS — local dev stays on docker-compose + `localstack-init.sh`), which also
+  lets the `is_local`/`cloud_count` machinery go. Flagged three edges to settle during import: task-def
+  drift (`ignore_changes`), the ECS cluster's CFN stack (delete with `--retain-resources`), and the
+  `DATABASE_URL` SecureString-in-state (recommend `ignore_changes = [value]`). Next: execute Objective 14
+  — bootstrap + network slice first.
+- _Session 18:_ Completed **Objective 14** — imported all remaining slices (security groups, RDS, IAM, S3,
+  SSM, ECS+ALB, DNS, GCP WIF) with `terraform plan` driven to zero-diff after each. Key learnings along
+  the way: SG `name`/`description` and RDS `username` are ForceNew (must match exactly); ECS task
+  definitions are immutable (any `container_definitions` change = new revision, solved with
+  `ignore_changes`); Route 53 record import IDs use `{zone_id}_{name}_{type}` format; the HTTPS listener
+  needs an explicit `forward {}` block (not just `target_group_arn`); `aws_acm_certificate_validation`
+  doesn't support import (it's Terraform-only). Added `outputs.tf` with useful references. Deleted both
+  ECS console CloudFormation stacks (`--retain-resources`) — Terraform is now sole owner. GCP WIF required
+  matching the exact `attribute.aws_role` CEL expression and display names from the hand-build. All import
+  blocks removed. **`terraform plan` = no changes.** Remaining: scaffold prod env files, update
+  `infrastructure.md`.

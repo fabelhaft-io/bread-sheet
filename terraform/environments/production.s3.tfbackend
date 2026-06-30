@@ -1,6 +1,0 @@
-# Partial backend config for the `production` environment.
-#   terraform init -backend-config=environments/production.s3.tfbackend
-# The bucket must exist before init — see infrastructure.md § Remote state bootstrap.
-bucket = "breadsheet-tfstate"
-key    = "production/terraform.tfstate"
-region = "us-east-1"

@@ -1,73 +1,61 @@
-# GCP Workload Identity Federation — keyless auth from the EKS server pod to
-# Google Cloud (Cloud Vision for VISION_MODE=live, Vertex AI for
-# PLAUSIBILITY_MODE=gemini with GOOGLE_GENAI_USE_VERTEXAI=true).
-#
-# Flow: the pod projects its Kubernetes ServiceAccount token (audience = this WIF
-# provider). GCP's STS trusts the EKS cluster OIDC issuer, exchanges that token
-# for a short-lived credential, and impersonates the service account below — which
-# holds the Vision/Vertex roles. No service-account key is ever created or stored.
-#
-# Created only for real-AWS environments with var.enable_google_wif (local.gcp_count).
+# ──────────── GCP Workload Identity Federation ────────────────────────────────
+# Keyless auth from the Fargate task to Google Cloud (Vertex AI / Gemini for
+# VISION_MODE=llm + PLAUSIBILITY_MODE=gemini). The ECS task role is the federation
+# source — GCP trusts an AWS STS GetCallerIdentity signed with the task role's creds.
 
-resource "google_iam_workload_identity_pool" "eks" {
-  count = local.gcp_count
+resource "google_iam_workload_identity_pool" "aws" {
+  count = var.enable_google_wif ? 1 : 0
 
+  project                   = var.gcp_project
   workload_identity_pool_id = var.gcp_wif_pool_id
-  display_name              = "EKS ${var.environment}"
-  description               = "Federates the bread-sheet EKS ${var.environment} cluster into GCP."
+  display_name              = "BreadSheet Dev Stage"
+  description               = "Federates AWS (Fargate task role) into GCP for dev."
 }
 
-resource "google_iam_workload_identity_pool_provider" "eks_oidc" {
-  count = local.gcp_count
+resource "google_iam_workload_identity_pool_provider" "aws_ecs" {
+  count = var.enable_google_wif ? 1 : 0
 
-  workload_identity_pool_id          = google_iam_workload_identity_pool.eks[0].workload_identity_pool_id
-  workload_identity_pool_provider_id = "eks-oidc"
-  display_name                       = "EKS OIDC"
+  project                            = var.gcp_project
+  workload_identity_pool_id          = google_iam_workload_identity_pool.aws[0].workload_identity_pool_id
+  workload_identity_pool_provider_id = "aws-ecs"
 
-  # Map the k8s token subject (system:serviceaccount:<ns>:<sa>) to google.subject.
   attribute_mapping = {
-    "google.subject" = "assertion.sub"
+    "google.subject"     = "assertion.arn"
+    "attribute.aws_role" = "assertion.arn.contains('assumed-role') ? assertion.arn.extract('{account_arn}assumed-role/') + 'assumed-role/' + assertion.arn.extract('assumed-role/{role_name}/') : assertion.arn"
   }
 
-  oidc {
-    issuer_uri = module.eks[0].cluster_oidc_issuer_url
-    # No allowed_audiences => GCP accepts the canonical default audience
-    # (//iam.googleapis.com/<provider>), which is exactly what
-    # `gcloud iam workload-identity-pools create-cred-config` emits. The pod's
-    # projected SA token must request that same audience (k8s/deployment.yaml).
+  attribute_condition = "assertion.arn.startsWith('arn:aws:sts::493942067033:assumed-role/breadsheet-dev-ecs-task/')"
+
+  aws {
+    account_id = "493942067033"
   }
 }
 
-# Service account the pod impersonates; carries the Vision + Vertex permissions.
-resource "google_service_account" "server" {
-  count = local.gcp_count
+# ──────────── Service Account ─────────────────────────────────────────────────
 
+resource "google_service_account" "vision" {
+  count = var.enable_google_wif ? 1 : 0
+
+  project      = var.gcp_project
   account_id   = "breadsheet-${var.environment}-vision"
-  display_name = "bread-sheet ${var.environment} server (Vision/Vertex)"
+  display_name = "BreadSheet Dev Server (Vision/Vertex)"
 }
 
-resource "google_project_iam_member" "vision" {
-  count = local.gcp_count
-
-  project = var.gcp_project
-  role    = "roles/cloudvision.user"
-  member  = "serviceAccount:${google_service_account.server[0].email}"
-}
-
-resource "google_project_iam_member" "vertex" {
-  count = local.gcp_count
+resource "google_project_iam_member" "vision_aiplatform" {
+  count = var.enable_google_wif ? 1 : 0
 
   project = var.gcp_project
   role    = "roles/aiplatform.user"
-  member  = "serviceAccount:${google_service_account.server[0].email}"
+  member  = "serviceAccount:${google_service_account.vision[0].email}"
 }
 
-# Let the federated EKS ServiceAccount (default:bread-sheet-server) impersonate
-# the GCP service account.
-resource "google_service_account_iam_member" "wif_impersonation" {
-  count = local.gcp_count
+# ──────────── Impersonation Binding ───────────────────────────────────────────
+# Only the Fargate task role can impersonate this SA (scoped by principalSet).
 
-  service_account_id = google_service_account.server[0].name
+resource "google_service_account_iam_member" "wif" {
+  count = var.enable_google_wif ? 1 : 0
+
+  service_account_id = google_service_account.vision[0].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.eks[0].name}/subject/${local.server_service_account}"
+  member             = "principalSet://iam.googleapis.com/projects/1054240616692/locations/global/workloadIdentityPools/${var.gcp_wif_pool_id}/attribute.aws_role/arn:aws:sts::493942067033:assumed-role/breadsheet-dev-ecs-task"
 }
