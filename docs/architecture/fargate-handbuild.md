@@ -1189,6 +1189,7 @@ serving.
 |---|---|---|---|
 | A1 | **Migrate DB auth to keyless IAM** — swap the SSM password for RDS IAM authentication via the Prisma `@prisma/adapter-pg` driver adapter + a `pg.Pool` async `password` callback that mints a 15-min auth token. Grant the DB user `rds_iam`; enforce TLS with the RDS CA bundle (`rejectUnauthorized: true`). The instance's IAM-auth toggle is already on (Objective 3). | App deployed and serving over the SSM password first. | [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md) |
 | A2 | **Front the images bucket with CloudFront (OAC)** — make the bucket fully private (all four BPA blocks ON; drop the `processed/*` public-read policy) and serve reads through a CloudFront distribution using Origin Access Control, for edge caching + a hidden origin. Repoint `ASSET_BASE_URL` to the CDN domain. | App deployed and serving `processed/*` over the scoped public-read policy first. | [Objective 6](#objective-6--s3-image-bucket) |
+| A3 | **Add Lambda image resize** —  | lambda image resize for uploaded images |  |
 
 _Add rows here as we defer other "make it nicer once it works" items (e.g. tighten task egress,
 add a CDN in front of assets, move logs to a retention policy)._

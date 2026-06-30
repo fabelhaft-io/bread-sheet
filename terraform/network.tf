@@ -1,8 +1,3 @@
-# VPC for EKS + RDS. Real-AWS only (count = 0 for the LocalStack environment).
-#
-# Two AZs, public subnets for the load balancers / NAT, private subnets for the
-# EKS nodes and RDS. A single NAT gateway keeps dev cost down (production should
-# flip one_nat_gateway_per_az on via tfvars if HA egress is required).
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 6.6"
@@ -16,7 +11,7 @@ module "vpc" {
   public_subnets  = [for i in range(2) : cidrsubnet(var.vpc_cidr, 4, i)]
   private_subnets = [for i in range(2) : cidrsubnet(var.vpc_cidr, 4, i + 8)]
 
-  enable_nat_gateway     = true
+  enable_nat_gateway     = false
   single_nat_gateway     = var.single_nat_gateway
   one_nat_gateway_per_az = !var.single_nat_gateway
   enable_dns_hostnames   = true

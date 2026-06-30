@@ -1,7 +1,3 @@
-# Outputs for the cloud environment. All null when running the local (LocalStack)
-# environment, since the cloud resources are not created there. `one()` collapses
-# the count-gated (0-or-1 element) resource lists to a single value or null.
-
 output "cluster_name" {
   description = "EKS cluster name (configure kubectl: aws eks update-kubeconfig --name <this>)."
   value       = one(module.eks[*].cluster_name)

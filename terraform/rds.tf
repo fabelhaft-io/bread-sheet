@@ -1,9 +1,6 @@
 # Managed PostgreSQL (RDS) for the API. Real-AWS only.
 #
-# Lives in the private subnets; reachable only from the EKS node security group.
-# The master password is managed by RDS in AWS Secrets Manager
-# (manage_master_user_password) so it never lands in Terraform state — the app's
-# DATABASE_URL is assembled from that secret when the k8s Secret is created.
+# Lives in the private subnets; reachable only from the ECS taks security group.
 
 resource "aws_security_group" "rds" {
   count = local.cloud_count
