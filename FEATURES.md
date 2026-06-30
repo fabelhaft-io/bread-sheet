@@ -493,6 +493,9 @@ in Pipeline and Security of the Pipeline (Static Code analysis SAST, Dynamic DAS
 ## Pro Users can set own pictures
 - Low Prio, enable users to replace picture with a better one (at least for themselfs)
 
+## Introduction of cloud front
+CloudFront OAC — make bucket fully private, serve processed/* via CloudFront
+
 ## Infrastructure cost optimization
 - Prod runs on ECS Fargate + RDS (see `docs/architecture/cheap-prod-fargate.md`). RDS `db.t4g.micro`
   is free for the first 12 months on the AWS free tier, then ~$13/mo.
