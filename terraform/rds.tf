@@ -1,65 +1,53 @@
-# Managed PostgreSQL (RDS) for the API. Real-AWS only.
-#
-# Lives in the private subnets; reachable only from the ECS taks security group.
+# ──────────── DB Subnet Group ─────────────────────────────────────────────────
 
-resource "aws_security_group" "rds" {
-  count = local.cloud_count
+resource "aws_db_subnet_group" "main" {
+  name        = "breadsheet-dev-db-subnets"
+  description = "The subnet group for private databases."
+  subnet_ids  = [aws_subnet.private["az1"].id, aws_subnet.private["az2"].id]
 
-  name        = "${local.name_prefix}-rds"
-  description = "Allow Postgres from the EKS nodes"
-  vpc_id      = module.vpc[0].vpc_id
-
-  ingress {
-    description     = "Postgres from EKS nodes"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [module.eks[0].node_security_group_id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = local.tags
+  tags = merge(local.tags, { Name = "breadsheet-dev-db-subnets" })
 }
 
-module "rds" {
-  source  = "terraform-aws-modules/rds/aws"
-  version = "~> 7.0"
+# ──────────── RDS Instance ────────────────────────────────────────────────────
 
-  count = local.cloud_count
+resource "aws_db_instance" "main" {
+  identifier = "breadsheet-dev-database-1"
 
-  identifier = "${local.name_prefix}-db"
-
-  engine               = "postgres"
-  engine_version       = var.db_engine_version
-  family               = "postgres${split(".", var.db_engine_version)[0]}"
-  major_engine_version = var.db_engine_version
-  instance_class       = var.db_instance_class
+  engine         = "postgres"
+  engine_version = "18.3"
+  instance_class = var.db_instance_class
 
   allocated_storage     = var.db_allocated_storage
-  max_allocated_storage = var.db_max_allocated_storage
+  max_allocated_storage = 100
+  storage_type          = "gp3"
+  storage_encrypted     = true
 
   db_name  = "breadsheet"
-  username = "breadsheet"
+  username = "db_admin_1001"
   port     = 5432
 
-  # RDS-managed master credential stored in Secrets Manager (no password in state).
-  manage_master_user_password = true
+  multi_az            = var.db_multi_az
+  publicly_accessible = false
 
-  multi_az               = var.db_multi_az
-  create_db_subnet_group = true
-  subnet_ids             = module.vpc[0].private_subnets
-  vpc_security_group_ids = [aws_security_group.rds[0].id]
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
 
-  # Dev convenience: skip the final snapshot so destroy is clean. Override in
-  # production.tfvars.
-  skip_final_snapshot = var.db_skip_final_snapshot
-  deletion_protection = var.db_deletion_protection
+  iam_database_authentication_enabled = true
 
-  tags = local.tags
+  skip_final_snapshot    = var.db_skip_final_snapshot
+  deletion_protection    = var.db_deletion_protection
+  copy_tags_to_snapshot  = true
+
+  performance_insights_enabled = true
+  backup_retention_period      = 1
+
+  enabled_cloudwatch_logs_exports = ["iam-db-auth-error", "postgresql", "upgrade"]
+
+  manage_master_user_password = false
+
+  tags = merge(local.tags, { Name = "breadsheet-dev-database-1" })
+
+  lifecycle {
+    ignore_changes = [password]
+  }
 }

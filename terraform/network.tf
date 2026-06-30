@@ -1,31 +1,76 @@
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 6.6"
+# ──────────── VPC ─────────────────────────────────────────────────────────────
 
-  count = local.cloud_count
+resource "aws_vpc" "main" {
+  cidr_block         = var.vpc_cidr
+  enable_dns_support = true
 
-  name = "${local.name_prefix}-vpc"
-  cidr = var.vpc_cidr
+  tags = merge(local.tags, { Name = "${local.name_prefix}-vpc" })
+}
 
-  azs             = slice(data.aws_availability_zones.available[0].names, 0, 2)
-  public_subnets  = [for i in range(2) : cidrsubnet(var.vpc_cidr, 4, i)]
-  private_subnets = [for i in range(2) : cidrsubnet(var.vpc_cidr, 4, i + 8)]
+# ──────────── Subnets ─────────────────────────────────────────────────────────
 
-  enable_nat_gateway     = false
-  single_nat_gateway     = var.single_nat_gateway
-  one_nat_gateway_per_az = !var.single_nat_gateway
-  enable_dns_hostnames   = true
+resource "aws_subnet" "public" {
+  for_each = var.availability_zones
 
-  # Subnet tags required by the AWS Load Balancer Controller / in-tree ELB
-  # provisioning so a LoadBalancer Service can place ELBs in the right subnets.
-  public_subnet_tags = {
-    "kubernetes.io/role/elb"                      = "1"
-    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
-  }
-  private_subnet_tags = {
-    "kubernetes.io/role/internal-elb"             = "1"
-    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
-  }
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = each.key == "az1" ? "10.0.2.0/24" : "10.0.4.0/24"
+  availability_zone       = each.value
+  map_public_ip_on_launch = true
 
-  tags = local.tags
+  tags = merge(local.tags, { Name = "${local.name_prefix}-subnet-${each.key}-public" })
+}
+
+resource "aws_subnet" "private" {
+  for_each = var.availability_zones
+
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = each.key == "az1" ? "10.0.1.0/24" : "10.0.3.0/24"
+  availability_zone       = each.value
+  map_public_ip_on_launch = false
+
+  tags = merge(local.tags, { Name = "${local.name_prefix}-subnet-${each.key}-private" })
+}
+
+# ──────────── Internet Gateway ────────────────────────────────────────────────
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(local.tags, { Name = "${local.name_prefix}-internet-gateway" })
+}
+
+# ──────────── Route Tables ────────────────────────────────────────────────────
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(local.tags, { Name = "${local.name_prefix}-route-table-public" })
+}
+
+resource "aws_route" "public_internet" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.main.id
+}
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(local.tags, { Name = "${local.name_prefix}-route-table-private" })
+}
+
+# ──────────── Route Table Associations ────────────────────────────────────────
+
+resource "aws_route_table_association" "public" {
+  for_each = var.availability_zones
+
+  subnet_id      = aws_subnet.public[each.key].id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "private" {
+  for_each = var.availability_zones
+
+  subnet_id      = aws_subnet.private[each.key].id
+  route_table_id = aws_route_table.private.id
 }

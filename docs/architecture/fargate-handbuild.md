@@ -52,7 +52,7 @@ section as it's fleshed out.
 | 11 | Route 53 record → ALB (A-alias `server.dev.bread-sheet.com` → ALB)                             | ✅ |
 | 12 | [GCP Workload Identity Federation (AWS provider trusting the task role)](#objective-12--gcp-workload-identity-federation) | ✅ |
 | 13 | [Secrets in SSM Parameter Store (`DATABASE_URL`, `SUPABASE_*`)](#objective-13--secrets-in-ssm-parameter-store) | ✅ |
-| 14 | [Import the hand-built stack into Terraform](#objective-14--import-the-hand-built-stack-into-terraform) | ⬜ |
+| 14 | [Import the hand-built stack into Terraform](#objective-14--import-the-hand-built-stack-into-terraform) | 🔄  |
 | 15 | Post Build Adaptions                                                                           | ⬜ |
 
 ---
@@ -1042,7 +1042,7 @@ exist under `/breadsheet/dev/`, and re-read the execution role's inline policy
 
 ---
 
-## Objective 14 — Import the hand-built stack into Terraform  ⬜
+## Objective 14 — Import the hand-built stack into Terraform  🔄
 
 > The payoff of the whole build: bring every hand-built **dev** resource under Terraform **in place**
 > (no recreate — dev keeps serving), driving `terraform plan` to a **zero-diff no-op**. The
@@ -1144,12 +1144,16 @@ to a no-op after each slice, then commit):
   [ADR 0002](../architecture-decision-records/0002-rds-database-credentials.md)).
 
 **Definition of done:**
-- [ ] EKS/local artefacts deleted (`eks.tf`, `irsa.tf`, `k8s/`, `environments/local.*`); pre-deletion
-      commit tagged `eks-architecture`. `is_local`/`cloud_count`/LocalStack-endpoints machinery removed.
-- [ ] `terraform/` root rewritten to raw, Fargate-only resources per the layout above; `terraform init`
-      against the **dev** S3 backend succeeds.
+- [x] EKS/local artefacts deleted (`eks.tf`, `irsa.tf`, `k8s/`, `environments/local.*`);
+      `is_local`/`cloud_count`/LocalStack-endpoints machinery removed. `main.tf` is providers-only;
+      `locals.tf` has `name_prefix` + `tags` (matching hand-built `Project=breadsheet`/`Stage=dev`);
+      `variables.tf` trimmed to Fargate-only vars.
+- [x] `terraform/` root rewritten to raw, Fargate-only resources per the layout above; `terraform init`
+      against the **dev** S3 backend succeeds (state bucket `breadsheet-tfstate` created out-of-band).
 - [ ] Every [import map](#import-map) row imported (an `import {}` block per resource) and its `Imported`
-      box flipped to ✅.
+      box flipped to ✅. **Network slice done** (VPC, 4 subnets, IGW, 2 route tables, 1 route, 4
+      associations — plan shows import + `ManagedBy` tag additions only). Remaining slices: security
+      groups → RDS → IAM → S3 → SSM → ECS → ALB/ACM → DNS → GCP WIF.
 - [ ] `aws_ecs_service.server` carries `ignore_changes = [task_definition]`; the ECS cluster's CFN stack
       deleted with `--retain-resources` (single owner).
 - [ ] `DATABASE_URL` parameter handled per the secret-in-state decision (recommend `ignore_changes = [value]`).
@@ -1202,14 +1206,14 @@ Filled in as resources are created; drives the Terraform import phase (objective
 
 | Resource | AWS ID | Planned TF address | Imported |
 |---|---|---|---|
-| VPC | `vpc-03b6a4b37cf1c9183` | `aws_vpc.main` | ⬜ |
-| Public subnet (az1 / euw1-az1) | `subnet-00be20939dfa25198` | `aws_subnet.public["az1"]` | ⬜ |
-| Public subnet (az2 / euw1-az2) | `subnet-063f2548f1d3c9c20` | `aws_subnet.public["az2"]` | ⬜ |
-| Private subnet (az1 / euw1-az1) | `subnet-030cd17b05d582d90` | `aws_subnet.private["az1"]` | ⬜ |
-| Private subnet (az2 / euw1-az2) | `subnet-02d9c09aeec128710` | `aws_subnet.private["az2"]` | ⬜ |
-| Internet gateway | `igw-0225dda92419c6318` | `aws_internet_gateway.main` | ⬜ |
-| Public route table | `rtb-0356a8d52a6b9eb74` | `aws_route_table.public` | ⬜ |
-| Private route table | `rtb-03a24fba42513e950` | `aws_route_table.private` | ⬜ |
+| VPC | `vpc-03b6a4b37cf1c9183` | `aws_vpc.main` | 🔄 |
+| Public subnet (az1 / euw1-az1) | `subnet-00be20939dfa25198` | `aws_subnet.public["az1"]` | 🔄 |
+| Public subnet (az2 / euw1-az2) | `subnet-063f2548f1d3c9c20` | `aws_subnet.public["az2"]` | 🔄 |
+| Private subnet (az1 / euw1-az1) | `subnet-030cd17b05d582d90` | `aws_subnet.private["az1"]` | 🔄 |
+| Private subnet (az2 / euw1-az2) | `subnet-02d9c09aeec128710` | `aws_subnet.private["az2"]` | 🔄 |
+| Internet gateway | `igw-0225dda92419c6318` | `aws_internet_gateway.main` | 🔄 |
+| Public route table | `rtb-0356a8d52a6b9eb74` | `aws_route_table.public` | 🔄 |
+| Private route table | `rtb-03a24fba42513e950` | `aws_route_table.private` | 🔄 |
 | ALB security group | `sg-00776b71913d8fd38` | `aws_security_group.alb` | ⬜ |
 | Task security group | `sg-0a74a20cd899f7b06` | `aws_security_group.task` | ⬜ |
 | RDS security group | `sg-054c28ee2b5ddfdde` | `aws_security_group.rds` | ⬜ |
@@ -1374,6 +1378,19 @@ Filled in as resources are created; drives the Terraform import phase (objective
   (no local TLS); CLAUDE.md documented. 8 new unit tests; full suite green (432). **Deploy note:** the
   live **task-def `environment` must add `DB_SSL=verify-full`** (a new revision) — fail-fast means the
   new image won't boot without it. Next: deploy the fix, then Objective 12 (GCP WIF).
+- _Session 17:_ Started **executing Objective 14**. Bootstrap: created state bucket `breadsheet-tfstate`
+  (out-of-band), wrote `environments/dev.s3.tfbackend`, `terraform init` succeeded. Cleaned up
+  `main.tf` (providers-only, `region = var.aws_region`), `locals.tf` (dropped `cloud_count`/`is_local`/
+  `cluster_name`, tags now `Project=breadsheet`/`Stage=dev`/`ManagedBy=terraform`), `variables.tf`
+  (trimmed EKS refs, updated GCP descriptions to Fargate, `gcp_wif_pool_id` default `breadsheet-dev`,
+  `vpc_cidr` default `10.0.0.0/16`), `dev.tfvars` (real bucket name + GCP project). Rewrote
+  `network.tf` from the VPC module to raw resources + `import {}` blocks (VPC, 4 subnets, IGW, 2 route
+  tables, 1 route, 4 RT associations). Iterated CIDRs to match reality (`/24`s: public az1 `10.0.2.0`,
+  private az1 `10.0.1.0`, private az2 `10.0.3.0`, public az2 `10.0.4.0`) and Name tags
+  (`breadsheet-dev-subnet-az1-public` etc.). Removed `enable_dns_hostnames` (VPC has it off). Stubbed
+  `rds.tf`/`gcp-wif.tf`/`outputs.tf` (commented out — later slices). First `terraform plan`: **13
+  imports, 0 destroy, only `ManagedBy` tag additions** — ready to apply. Next: apply the network slice,
+  then security groups.
 - _Session 16:_ Reviewed the whole runbook and the existing (EKS-shaped) `terraform/` root, then wrote
   the **[Objective 14](#objective-14--import-the-hand-built-stack-into-terraform)** plan: import the
   hand-built dev stack into Terraform **in place** (no recreate) via TF 1.10 `import {}` blocks +

@@ -23,6 +23,15 @@ variable "vpc_cidr" {
   default     = "10.0.0.0/16"
 }
 
+variable "availability_zones" {
+  type        = map(string)
+  description = "Map of logical AZ key to AWS AZ name (AZ IDs: az1=euw1-az1=eu-west-1c, az2=euw1-az2=eu-west-1a)."
+  default = {
+    az1 = "eu-west-1c"
+    az2 = "eu-west-1a"
+  }
+}
+
 # ──────────── DB Variables ────────────────────────
 
 variable "db_engine_version" {
