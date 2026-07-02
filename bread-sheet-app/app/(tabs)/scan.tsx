@@ -46,7 +46,7 @@ export default function ScanScreen() {
   return (
     <View style={styles.container}>
       <CameraView
-        style={StyleSheet.absoluteFillObject}
+        style={StyleSheet.absoluteFill}
         facing="back"
         enableTorch={torchOn}
         onBarcodeScanned={scanningActive ? handleBarcodeScanned : undefined}
@@ -115,7 +115,7 @@ const styles = StyleSheet.create({
 
   // Overlay
   overlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     flexDirection: 'column',
   },
   overlayTop: {
