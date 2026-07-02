@@ -58,6 +58,8 @@ export default function ReviewProductScreen() {
     // anyway would 401/403 and surface a misleading error.
     if (!session || isAnonymous) return;
     let cancelled = false;
+    // Clear any stale error before re-fetching (e.g. on barcode/session change).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadError(null);
     api
       .get<ProductDetail>(`/api/products/${barcode}`)

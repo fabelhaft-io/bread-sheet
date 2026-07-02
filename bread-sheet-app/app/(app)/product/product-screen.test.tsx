@@ -27,7 +27,8 @@ jest.mock('expo-router', () => {
     useLocalSearchParams: () => mockUseLocalSearchParams(),
     useRouter: () => mockRouter,
     // Simulate focusing on mount (no re-focus in unit tests)
-    useFocusEffect: (cb: () => unknown) => React.useEffect(cb, []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run-once mock, deps intentionally empty
+    useFocusEffect: (cb: () => unknown) => React.useEffect(() => cb(), []),
   };
 });
 

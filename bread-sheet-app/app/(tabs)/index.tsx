@@ -259,6 +259,9 @@ export default function HomeScreen() {
   }, [session, isAnonymous]);
 
   useEffect(() => {
+    // Fetch-on-mount: fetchRatings sets loading/error state synchronously,
+    // which is the standard data-fetching pattern the rule over-flags here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRatings();
   }, [fetchRatings]);
 

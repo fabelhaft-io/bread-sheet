@@ -122,6 +122,9 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
     })
     .onUpdate((e) => {
       const px = Math.max(0, Math.min(TRACK_WIDTH, startThumbX.value + e.translationX));
+      // Writing a Reanimated shared value inside a worklet is the intended API;
+      // react-hooks/immutability doesn't model shared values and false-positives here.
+      // eslint-disable-next-line react-hooks/immutability
       thumbX.value = px;
       const snapped = Math.round(Math.max(MIN, Math.min(MAX, (px / TRACK_WIDTH) * MAX)) / STEP) * STEP;
       scheduleOnRN(onChange, snapped);
@@ -131,6 +134,7 @@ function TasteSlider({ value, onChange }: { value: number; onChange: (v: number)
   const tapGesture = Gesture.Tap()
     .onEnd((e) => {
       const px = Math.max(0, Math.min(TRACK_WIDTH, e.x));
+      // eslint-disable-next-line react-hooks/immutability -- Reanimated shared-value write in a worklet
       thumbX.value = withSpring(px, { damping: 25, stiffness: 300 });
       const snapped = Math.round(Math.max(MIN, Math.min(MAX, (px / TRACK_WIDTH) * MAX)) / STEP) * STEP;
       scheduleOnRN(onChange, snapped);
