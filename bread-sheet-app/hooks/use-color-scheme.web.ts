@@ -8,6 +8,8 @@ export function useColorScheme(): 'light' | 'dark' {
   const [hasHydrated, setHasHydrated] = useState(false);
 
   useEffect(() => {
+    // Standard web-hydration flag (Expo template pattern): flip once on the client.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setHasHydrated(true);
   }, []);
 
