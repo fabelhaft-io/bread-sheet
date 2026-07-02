@@ -20,6 +20,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSession } from '@/hooks/use-session';
 import { ApiError } from '@/lib/api';
+import { log } from '@/lib/log';
 import { supabase } from '@/lib/supabase';
 
 import { submitProduct, uploadProductImage } from '@/features/products/api';
@@ -266,6 +267,10 @@ function AddProductFlow({
             setSuggestion(null);
           }
         } else {
+          // Local/network failure before a structured API response (e.g. image
+          // manipulation, FormData, or a thrown fetch). Log the raw cause so it
+          // surfaces in the Metro/device console — the UI copy stays generic.
+          log.error(`[add-product] capture failed slot=${slot} source=${source}`, err);
           setCaptureError('Could not use that photo. Please try again.');
         }
       } finally {

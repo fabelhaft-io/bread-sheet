@@ -3,6 +3,36 @@ import { api, ApiError } from '@/lib/api';
 import type { ExtractedLabel, ProductSubmission } from './types';
 
 /**
+ * Append a local image file URI to a `FormData` for a multipart upload.
+ *
+ * Expo SDK 54+ replaced the global `fetch` with the WinterCG implementation,
+ * whose FormData serializer only accepts a string, a `Blob`, or a `File`
+ * (anything with a `bytes()` method). The classic React Native
+ * `{ uri, name, type }` part shape is rejected with
+ * "Unsupported FormDataPart implementation". We therefore wrap the URI in an
+ * `expo-file-system` `File` (which implements `Blob`).
+ *
+ * Loaded via guarded `require()` so jest-expo — where the native module is
+ * absent and `fetch` is mocked, so the part contents are never serialized —
+ * falls back to the legacy shape and keeps passing.
+ */
+function appendImagePart(form: FormData, imageUri: string, filename: string): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { File } = require('expo-file-system') as {
+      File: new (uri: string) => Blob;
+    };
+    form.append('image', new File(imageUri));
+  } catch {
+    form.append('image', {
+      uri: imageUri,
+      name: filename,
+      type: 'image/jpeg',
+    } as unknown as Blob);
+  }
+}
+
+/**
  * Result of a product-image upload. The backend runs an AI plausibility check
  * before persisting the image and, for product photos, reads front-of-pack
  * identity suggestions off the packaging (P5-005). A rejected image is never
@@ -42,11 +72,7 @@ export async function uploadProductImage(
 ): Promise<ProductImageUploadResult> {
   const form = new FormData();
   form.append('kind', kind);
-  form.append('image', {
-    uri: imageUri,
-    name: `${kind}.jpg`,
-    type: 'image/jpeg',
-  } as unknown as Blob);
+  appendImagePart(form, imageUri, `${kind}.jpg`);
 
   const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/products/upload-image`, {
     method: 'POST',
@@ -91,13 +117,7 @@ export async function extractLabelFromImage(
   authHeader: string | null,
 ): Promise<ExtractedLabel> {
   const form = new FormData();
-  // React Native's FormData accepts `{uri, name, type}` objects — this is
-  // non-standard but works on both iOS/Android and under Hermes.
-  form.append('image', {
-    uri: imageUri,
-    name: 'label.jpg',
-    type: 'image/jpeg',
-  } as unknown as Blob);
+  appendImagePart(form, imageUri, 'label.jpg');
 
   const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/api/products/extract-label`, {
     method: 'POST',
