@@ -1,0 +1,32 @@
+meta {
+  name: Dismiss edit review banner
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/api/products/edits/{{editId}}/dismissals
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {}
+}
+
+docs {
+  TICKET-P5-006 — Record a server-side dismissal of the review banner for the calling user.
+  Idempotent (upsert); does NOT count as a vote — the edit stays pending for other users.
+  Persisting server-side keeps the banner hidden across devices and reinstalls.
+
+  Response: { dismissed: true }
+
+  Errors:
+  - 401 — unauthenticated
+  - 403 — anonymous user
+  - 404 — edit not found ({ error: 'edit_not_found' })
+}

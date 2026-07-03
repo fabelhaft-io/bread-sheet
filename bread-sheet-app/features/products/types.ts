@@ -69,4 +69,59 @@ export interface ProductDetail {
   submittedByUserId?: string | null;
   /** Fully-populated submission view for the reviewer screen (P5-002). */
   submission?: Partial<ProductSubmission> | null;
+  /** Nutrition + identity columns, present on cached products (P5-006 edit form). */
+  genericName?: string | null;
+  energyKcal?: number | null;
+  fat?: number | null;
+  saturatedFat?: number | null;
+  carbohydrates?: number | null;
+  sugars?: number | null;
+  protein?: number | null;
+  salt?: number | null;
+  servingSize?: string | null;
+  ingredients?: string | null;
+}
+
+// ─── Product editing & peer review (TICKET-P5-006) ──────────────────────────
+
+export type EditVote = 'APPROVE' | 'REJECT';
+
+/**
+ * Wire payload for `POST /products/:barcode/edits` — only the changed fields.
+ * `productImageKey` is included only when the photo was replaced.
+ */
+export interface ProductEditChanges {
+  name?: string;
+  brand?: string | null;
+  genericName?: string | null;
+  energyKcal?: number | null;
+  fat?: number | null;
+  saturatedFat?: number | null;
+  carbohydrates?: number | null;
+  sugars?: number | null;
+  protein?: number | null;
+  salt?: number | null;
+  servingSize?: string | null;
+  ingredients?: string | null;
+  productImageKey?: string;
+}
+
+/**
+ * Response of `GET /products/:barcode/edits/pending`. `originalValues` is the
+ * snapshot at proposal time (the diff baseline), keyed by product column name
+ * (`image`, not `productImageKey`; image values arrive as resolved URLs).
+ */
+export interface PendingEdit {
+  editId: string;
+  barcode: string;
+  originalValues: Record<string, string | number | null>;
+  proposedChanges: Record<string, string | number | null>;
+  approvals: number;
+  rejections: number;
+  createdAt: string;
+  viewer: {
+    isAuthor: boolean;
+    vote: EditVote | null;
+    dismissed: boolean;
+  };
 }

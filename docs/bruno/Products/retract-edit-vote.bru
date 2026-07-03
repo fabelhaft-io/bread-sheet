@@ -1,0 +1,27 @@
+meta {
+  name: Retract own edit vote
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{baseUrl}}/api/products/edits/{{editId}}/votes
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  TICKET-P5-006 — Retract the caller's vote on an edit that is still PENDING.
+
+  Response: { approvals, rejections, status } (fresh tally after removal).
+
+  Errors:
+  - 401 — unauthenticated
+  - 403 — anonymous user
+  - 404 — edit not found ({ error: 'edit_not_found' }) or no vote to retract ({ error: 'vote_not_found' })
+  - 409 — edit already resolved ({ error: 'edit_not_pending' })
+}

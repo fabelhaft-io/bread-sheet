@@ -219,7 +219,8 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 |------|---------------|
 | `constants.ts` | `MIN_OCR_LENGTH`, image size caps, JPEG quality targets — must match the backend contract defined in P5-003 |
 | `types.ts` | `ProductSubmission`, `ExtractedLabel`, `ProductDetail` — shared wire types |
-| `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct` |
+| `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct`, plus the P5-006 edit calls: `correctProduct`, `proposeProductEdit`, `getPendingEdit`, `voteOnProductEdit`, `retractProductEditVote`, `dismissProductEdit` |
+| `edit-form.ts` | P5-006 edit-form logic: `productToFormValues` (pre-population), `buildEditChanges` (changed-fields diff for the proposal payload), `buildCorrectionPayload` (full PATCH payload), `formHasChanges` / `validateFormValues`, `FIELD_LABELS` (shared with the diff screen) |
 | `ocr.ts` | `recogniseLabelText` — thin wrapper over `@react-native-ml-kit/text-recognition`, returns `{rawText, unavailable}` |
 | `image-picker.ts` | `captureImage` — camera or library, returns the raw URI |
 | `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError`. Emits one dev-only `log.debug('[image]')` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
@@ -250,3 +251,21 @@ The product screen does two GETs in parallel on mount:
 When the rating lookup returns a row, the slider and comment field are pre-populated with the existing values, the section title flips from "How does it taste?" to "Your rating", and the submit button reads "Update Rating" instead of "Submit Rating". The success screen mirrors the same wording ("Rating Updated!" vs "Rating Submitted!").
 
 Submission always calls `POST /api/ratings`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven entirely off whether the pre-load fetch found an existing rating.
+
+For registered users on `VERIFIED` products the screen additionally calls `GET /api/products/:barcode/edits/pending` (failures degrade to "no pending edit") to drive the P5-006 edit entry point and review banner, described below.
+
+---
+
+## Product Editing & Peer Review (TICKET-P5-006)
+
+**Edit entry point (product detail screen).** Registered users see an edit affordance below the product info; it is entirely *absent* for anonymous users (no disabled state). The label and target behaviour depend on product state:
+
+| Product state | Affordance | Submit path |
+|---------------|-----------|-------------|
+| `PENDING_REVIEW` | "Correct this submission" | `PATCH /api/products/:barcode` — in-place correction; verifications reset, corrector becomes submitter |
+| `VERIFIED`, no pending edit | "Edit product" | `POST /api/products/:barcode/edits` — peer-reviewed proposal, changed fields only |
+| `VERIFIED`, pending edit exists | Hidden; notice "An edit is already under review." | — |
+
+**Edit form** (`app/(app)/edit-product/[barcode].tsx`): same field layout as Add Product but pre-populated from the current product values; the barcode is read-only. The submit button stays disabled until something actually changed (`formHasChanges`). The product photo can optionally be replaced — the new photo is uploaded at capture time (plausibility-gated, like Add Product) and its key is included as `productImageKey` only when replaced. All form logic lives in `features/products/edit-form.ts`.
+
+**Review banner + diff screen.** When a registered non-author opens a product with a pending edit they haven't voted on or dismissed, a "Someone suggested a change" banner links to `app/(app)/review-edit/[editId].tsx`. The diff screen renders, per changed field, the `originalValues` snapshot (struck through, muted) against the proposed value (bold, accent) — the baseline comes from the edit record, not the live product. Unchanged fields sit in a collapsed section. Actions: "Looks correct" (`APPROVE`), "Something's wrong" (`REJECT`), and "Dismiss" (`POST /edits/:editId/dismissals`, a server-side record so the banner stays hidden across devices; not a vote). The current tally is shown ("1 of 2 approvals needed") without revealing who voted. Authors and users who already voted see a passive note instead of the action buttons.

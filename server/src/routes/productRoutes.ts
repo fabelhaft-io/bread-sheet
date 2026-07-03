@@ -13,6 +13,14 @@ import {
   rejectProduct,
 } from '../controllers/productController.js';
 import { extractLabel } from '../controllers/labelExtractionController.js';
+import {
+  correctProduct,
+  createProductEdit,
+  getPendingProductEdit,
+  voteOnProductEdit,
+  retractVoteOnProductEdit,
+  dismissProductEdit,
+} from '../controllers/productEditController.js';
 
 const router = Router();
 
@@ -59,5 +67,21 @@ router.post('/', requireAuth, apiLimiter, requireRegistered, submitProduct);
 router.post('/:barcode/verify', requireAuth, apiLimiter, requireRegistered, approveProduct);
 // DELETE carries a REJECT vote — it does not retract an existing approval
 router.delete('/:barcode/verify', requireAuth, apiLimiter, requireRegistered, rejectProduct);
+
+// --- Product editing & peer review (TICKET-P5-006) ---
+// All write paths are registered-users-only. Static '/edits/...' segments never
+// collide with '/:barcode' — barcodes are numeric and the paths differ in shape.
+
+// In-place correction of a PENDING_REVIEW submission (restarts the review cycle)
+router.patch('/:barcode', requireAuth, apiLimiter, requireRegistered, correctProduct);
+
+// Proposal flow for VERIFIED products
+router.post('/:barcode/edits', requireAuth, apiLimiter, requireRegistered, createProductEdit);
+router.get('/:barcode/edits/pending', requireAuth, userLimiter, getPendingProductEdit);
+
+// Peer review of a proposal
+router.post('/edits/:editId/votes', requireAuth, apiLimiter, requireRegistered, voteOnProductEdit);
+router.delete('/edits/:editId/votes', requireAuth, apiLimiter, requireRegistered, retractVoteOnProductEdit);
+router.post('/edits/:editId/dismissals', requireAuth, apiLimiter, requireRegistered, dismissProductEdit);
 
 export default router;

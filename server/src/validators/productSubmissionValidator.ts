@@ -11,7 +11,8 @@ export class SubmissionValidationError extends Error {
 }
 
 // Helpers — keep these terse, they're called per-field.
-function requireString(value: unknown, field: string, max = 200): string {
+// (Exported for reuse by productEditValidator.)
+export function requireString(value: unknown, field: string, max = 200): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new SubmissionValidationError(field, `${field} is required`);
   }
@@ -21,7 +22,7 @@ function requireString(value: unknown, field: string, max = 200): string {
   return value.trim();
 }
 
-function optionalString(
+export function optionalString(
   value: unknown,
   field: string,
   max = 500,
@@ -36,7 +37,7 @@ function optionalString(
   return value.trim() || null;
 }
 
-function optionalNumber(value: unknown, field: string): number | null {
+export function optionalNumber(value: unknown, field: string): number | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new SubmissionValidationError(field, `${field} must be a number`);
@@ -46,6 +47,10 @@ function optionalNumber(value: unknown, field: string): number | null {
   }
   return value;
 }
+
+// Exactly the shape POST /upload-image issues (`processed/{uuid}.jpg`).
+export const PRODUCT_IMAGE_KEY_RE =
+  /^processed\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/;
 
 export function validateProductSubmission(
   body: unknown,
@@ -72,7 +77,7 @@ export function validateProductSubmission(
     'productImageKey',
     1024,
   );
-  if (!/^processed\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jpg$/.test(productImageKey)) {
+  if (!PRODUCT_IMAGE_KEY_RE.test(productImageKey)) {
     throw new SubmissionValidationError(
       'productImageKey',
       'productImageKey must be a server-issued upload key',
@@ -80,7 +85,54 @@ export function validateProductSubmission(
   }
 
   return {
+    ...validateSharedFields(b),
     barcode,
+    productImageKey,
+  };
+}
+
+/**
+ * PATCH /products/:barcode (PENDING_REVIEW correction, TICKET-P5-006): same
+ * full payload as a submission, except `productImageKey` is optional — the
+ * client only holds a resolved image URL, not the S3 key, so it omits the
+ * field unless the photo was actually replaced. `null` = keep current image.
+ */
+export type ProductCorrectionInput = Omit<ProductSubmissionInput, 'productImageKey'> & {
+  productImageKey: string | null;
+};
+
+export function validateProductCorrection(body: unknown): ProductCorrectionInput {
+  if (!body || typeof body !== 'object') {
+    throw new SubmissionValidationError('body', 'Request body required');
+  }
+  const b = body as Record<string, unknown>;
+
+  const barcode = requireString(b.barcode, 'barcode', 14);
+  if (!/^\d{8,14}$/.test(barcode)) {
+    throw new SubmissionValidationError('barcode', 'barcode must be 8–14 digits');
+  }
+
+  let productImageKey: string | null = null;
+  if (b.productImageKey !== null && b.productImageKey !== undefined) {
+    productImageKey = requireString(b.productImageKey, 'productImageKey', 1024);
+    if (!PRODUCT_IMAGE_KEY_RE.test(productImageKey)) {
+      throw new SubmissionValidationError(
+        'productImageKey',
+        'productImageKey must be a server-issued upload key',
+      );
+    }
+  }
+
+  return {
+    ...validateSharedFields(b),
+    barcode,
+    productImageKey,
+  };
+}
+
+// Field rules shared by submission (POST) and correction (PATCH) payloads.
+function validateSharedFields(b: Record<string, unknown>) {
+  return {
     name: requireString(b.name, 'name'),
     brand: optionalString(b.brand, 'brand'),
     genericName: optionalString(b.genericName, 'genericName'),
@@ -92,7 +144,6 @@ export function validateProductSubmission(
     protein: optionalNumber(b.protein, 'protein'),
     salt: optionalNumber(b.salt, 'salt'),
     servingSize: optionalString(b.servingSize, 'servingSize', 100),
-    productImageKey,
     ingredients: optionalString(b.ingredients, 'ingredients', 2000),
   };
 }

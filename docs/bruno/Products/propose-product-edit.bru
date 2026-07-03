@@ -1,0 +1,50 @@
+meta {
+  name: Propose product edit (VERIFIED)
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/api/products/{{barcode}}/edits
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "name": "Better Product Name",
+    "salt": 1.5
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setEnvVar("editId", res.getBody().editId);
+  }
+}
+
+docs {
+  TICKET-P5-006 — Propose a change to a VERIFIED product. Registered users only.
+
+  Send ONLY the changed fields (partial payload). Editable fields: name, brand, genericName,
+  energyKcal, fat, saturatedFat, carbohydrates, sugars, protein, salt, servingSize, ingredients,
+  productImageKey (when the photo was replaced). Unknown fields are rejected. Values equal to the
+  current product value are dropped server-side; an effectively empty diff is a 422 (no_changes).
+
+  The edit is stored as PENDING with an originalValues snapshot; two other registered users must
+  approve before it is applied. The DB enforces one PENDING edit per barcode via a partial unique
+  index (one_pending_edit_per_product).
+
+  On 201 the post-response script stores `editId` for the vote/dismiss requests.
+
+  Errors:
+  - 401 — unauthenticated
+  - 403 — anonymous user
+  - 404 — product not found ({ error: 'product_not_found' })
+  - 409 — pending edit already exists ({ error: 'edit_pending' }) or product not VERIFIED ({ error: 'product_not_verified' })
+  - 422 — validation failure / no changes
+}

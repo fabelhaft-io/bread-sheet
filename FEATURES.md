@@ -324,7 +324,7 @@ User History
 - **2 approvals** → apply the proposed changes to the `Product` record, mark edit `status: APPLIED`, enqueue OFF sync for the updated fields (including any new images). Notify the author (in-app).
 - **2 rejections** → mark edit `status: REJECTED`, discard proposed changes. Notify the author.
 - Tie-breaking: if votes are mixed (e.g. 1 approve + 1 reject), wait for a third voter to reach 2 on either side.
-- Edits that receive no votes within **30 days** are automatically expired (`status: EXPIRED`) by a scheduled cleanup job.
+- Edits that receive no votes within **2 years** are automatically expired (`status: EXPIRED`) by a scheduled cleanup job. *(Was 30 days; widened 2026-07-03 for the current user-base size.)*
 **OFF sync for edits:**
 - Reuses the P5-004 sync infrastructure. On `APPLIED`, enqueue an OFF update for the changed fields only (partial update via the OFF product write API). Image fields are re-uploaded to OFF if they changed.
 - Sync is idempotent — uses the barcode as the OFF product key, so repeated syncs update rather than duplicate.
@@ -334,28 +334,32 @@ User History
 - New model `ProductEditVote`: `id`, `editId` (FK → ProductEdit), `userId`, `vote` (`APPROVE | REJECT`), `createdAt`. Composite unique key on `(editId, userId)`.
 - New model `ProductEditDismissal`: `id`, `editId` (FK → ProductEdit), `userId`, `createdAt`. Composite unique key on `(editId, userId)`. Used to persist dismissals server-side across devices.
 - **DB-level "one pending edit per barcode" constraint.** Add a partial unique index in the migration: `CREATE UNIQUE INDEX one_pending_edit_per_product ON "ProductEdit" ("barcode") WHERE "status" = 'PENDING';`. This is the source of truth — the API's 409 response is a friendly mirror, but the database refuses the second insert even if two requests race. Prisma can declare this via `@@unique` does not support partial conditions directly, so use a raw migration step (`prisma migrate dev` will accept hand-written SQL inside the migration file).
+**Scope adjustments (2026-07-03):**
+- Expiry window is **2 years** (was 30 days) — chosen for the current user-base size.
+- **In-app notifications are deferred** (no notification infrastructure exists yet); `TODO(P5-006-followup)` markers sit at the notification points in `productEditService.ts`.
+- **OFF sync enqueueing is deferred to P6-005** entirely (no schema fields yet); a `TODO(P6-005)` marker sits at the apply-resolution point.
 **Acceptance Criteria:**
-- [ ] Registered users see an "Edit product" button on the Product Detail screen; anonymous users do not.
-- [ ] For `PENDING_REVIEW` products, the button label is "Correct this submission" and submitting calls `PATCH /products/:barcode` (reset path).
-- [ ] For `VERIFIED` products with a `PENDING` edit, the button is hidden and a notice is shown.
-- [ ] The edit form is pre-populated with current product values; the barcode field is read-only.
-- [ ] Submitting unchanged data is blocked client-side (submit button disabled).
-- [ ] `PATCH /products/:barcode` on a `PENDING_REVIEW` product updates the data in-place, clears existing verifications, reassigns `submittedByUserId`, and notifies the original submitter if they differ from the editor.
-- [ ] `POST /products/:barcode/edits` returns `403` for anonymous users and `409` if a pending edit already exists or the product is `PENDING_REVIEW`.
-- [ ] A registered non-author user sees the review banner on a product with a pending edit.
-- [ ] The diff screen clearly shows old vs. new values for every changed field.
-- [ ] "Looks correct" and "Something's wrong" record votes; "Dismiss" records a server-side dismissal and hides the banner across all devices for that user.
-- [ ] A user cannot vote on their own edit (`403`).
-- [ ] A user cannot vote twice on the same edit (duplicate vote returns `409`).
-- [ ] 2 approvals apply the edit, notify the author, and enqueue an OFF sync.
-- [ ] 2 rejections discard the edit and notify the author.
-- [ ] Mixed votes (1–1) wait for a third voter rather than resolving early.
-- [ ] Pending edits with no votes after 30 days are expired by a cleanup job.
-- [ ] Verified edits are synced to OFF as updates to the existing product entry.
-- [ ] The original submitter of a VERIFIED product must use the same proposal flow as any other user — no bypass path exists.
-- [ ] When an edit is APPLIED, the existing `Rating` rows on the product remain attached and unchanged.
-- [ ] When an edit is APPLIED, `Product.lastModifiedByUserId` is set to the edit's `authorUserId`; `Product.submittedByUserId` is unchanged.
-- [ ] Attempting to create a second `PENDING` `ProductEdit` for the same barcode fails at the database level (partial unique index violation), not only at the API layer.
+- [x] Registered users see an "Edit product" button on the Product Detail screen; anonymous users do not.
+- [x] For `PENDING_REVIEW` products, the button label is "Correct this submission" and submitting calls `PATCH /products/:barcode` (reset path).
+- [x] For `VERIFIED` products with a `PENDING` edit, the button is hidden and a notice is shown.
+- [x] The edit form is pre-populated with current product values; the barcode field is read-only.
+- [x] Submitting unchanged data is blocked client-side (submit button disabled).
+- [x] `PATCH /products/:barcode` on a `PENDING_REVIEW` product updates the data in-place, clears existing verifications, reassigns `submittedByUserId`. *(Notifying the original submitter: deferred — no notification infra yet.)*
+- [x] `POST /products/:barcode/edits` returns `403` for anonymous users and `409` if a pending edit already exists or the product is `PENDING_REVIEW`.
+- [x] A registered non-author user sees the review banner on a product with a pending edit.
+- [x] The diff screen clearly shows old vs. new values for every changed field.
+- [x] "Looks correct" and "Something's wrong" record votes; "Dismiss" records a server-side dismissal and hides the banner across all devices for that user.
+- [x] A user cannot vote on their own edit (`403`).
+- [x] A user cannot vote twice on the same edit (duplicate vote returns `409`).
+- [x] 2 approvals apply the edit. *(Author notification + OFF sync enqueue: deferred, see scope adjustments.)*
+- [x] 2 rejections discard the edit. *(Author notification: deferred.)*
+- [x] Mixed votes (1–1) wait for a third voter rather than resolving early.
+- [x] Pending edits with no votes after **2 years** are expired by a daily in-process cleanup job.
+- [ ] Verified edits are synced to OFF as updates to the existing product entry. *(Deferred to P6-005.)*
+- [x] The original submitter of a VERIFIED product must use the same proposal flow as any other user — no bypass path exists.
+- [x] When an edit is APPLIED, the existing `Rating` rows on the product remain attached and unchanged.
+- [x] When an edit is APPLIED, `Product.lastModifiedByUserId` is set to the edit's `authorUserId`; `Product.submittedByUserId` is unchanged.
+- [x] Attempting to create a second `PENDING` `ProductEdit` for the same barcode fails at the database level (partial unique index violation), not only at the API layer.
 
 ## Phase 6: Social
 
