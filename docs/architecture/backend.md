@@ -286,7 +286,9 @@ The controller (`labelExtractionController.ts`) branches on `getVisionMode()`: `
 - `name`, `brand`, `genericName` are always `null` (not extractable from nutrition tables).
 - `confidence`: `high` if ≥ 5 fields parsed, `medium` if 3–4, `low` if 0–2. Never throws on no-match — returns all-null with `confidence: 'low'`.
 
-Response always includes a `confidence: 'low' | 'medium' | 'high'` field. The client uses this to choose the default fill mode (low → "Fill manually"; medium/high → "Pre-fill & edit").
+Response always includes a `confidence: 'low' | 'medium' | 'high'` field. The client **always pre-fills the form** with whatever was extracted, regardless of confidence — a low score never blanks the form (a spice with a clean ingredient list but no nutrition table legitimately reads as `low`, and that data is worth keeping). Confidence only drives a "please double-check each field" warning banner on `low`. The user can still switch fill mode (Manual / Pre-fill & edit / Accept all) manually.
+
+> **Note on the LLM path (`labelExtractionLlmService.ts`):** its `confidence` is defined by the *legibility of the text actually read*, not by how many fields the label contains — so a product with no nutrition table is not automatically `low`. This differs from the regex text-path heuristic above (which counts parsed fields).
 
 ---
 

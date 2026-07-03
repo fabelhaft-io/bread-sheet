@@ -15,7 +15,7 @@ Return JSON matching the provided schema. Strict rules:
 - "servingSize" is the literal serving descriptor (e.g. "30g", "100ml", "1 slice"), or null.
 - "ingredients" is the ingredient list as printed (comma-separated, allergens included if listed), or null.
 - "name" is the product's display name. "brand" is the brand name. "genericName" is the generic product category (e.g. "Pear-blackberry juice"). Use null if not visible.
-- "confidence": "high" if every key nutrition field reads cleanly; "medium" if most do; "low" if the label is blurry, cropped, or the nutrition table is not visible.`;
+- "confidence" reflects how legible the text you actually read was, NOT how many fields the label happens to contain. Many products (spices, drinks, supplements) legitimately have no nutrition table — a missing nutrition table alone is never "low". Use "high" if the values you returned read cleanly and unambiguously; "medium" if some returned values were partly obscured or hard to read; "low" only if the image is blurry, cropped, or you were genuinely unsure of the values you did return.`;
 
 const responseSchema = {
   type: Type.OBJECT,

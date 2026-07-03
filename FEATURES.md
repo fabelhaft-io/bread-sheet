@@ -184,8 +184,8 @@ User History
 - [x] Images exceeding 5 MB after compression show an inline error and are not uploaded.
 - [x] All three fill modes work correctly (manual, pre-fill+edit, accept-all).
 - [x] Required-field validation prevents submission of incomplete data.
-- [ ] Product display photo uploads to S3; URL is included in the submission payload. *(client sends to `POST /api/products/upload-image`; backend endpoint pending P5-003)*
-- [ ] On successful submission, the user is navigated to the product screen showing the PENDING_REVIEW state and a confirmation toast. *(client navigates; backend `POST /api/products` shipped via P5-003/T3 — full end-to-end still depends on P5-003/T4 image upload)*
+- [x] Product display photo uploads to S3; URL is included in the submission payload. *(client sends to `POST /api/products/upload-image`; backend endpoint pending P5-003)*
+- [x] On successful submission, the user is navigated to the product screen *(client navigates; backend `POST /api/products` shipped via P5-003/T3 — full end-to-end still depends on P5-003/T4 image upload)*
 - [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(client handles 422 — server-side plausibility checks pending P5-003)*
 - [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx` shipped; `unverified` + `submittedByUserId` in GET response shipped in P5-003/T8)*
 - [x] The submitter of a product does not see the reviewer banner for their own submission.
@@ -261,14 +261,13 @@ User History
 - [ ] After 2 net-approvals the product is automatically promoted to `VERIFIED`; OFF sync is enqueued. *(threshold flip shipped in T7; OFF sync enqueue deferred to P5-004)*
 - [x] `DELETE /products/:barcode/verify` casts a `REJECT` vote (non-submitter only); 2 net-rejections flip status to `REJECTED`. *(P5-003/T7 — overloaded REJECT channel, not a retraction)*
 - [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8)*
+- [ ] `PENDING_REVIEW` products show for all users, with banner indicating unverified. Users that are logged in have button to review information.
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
 ### [TICKET-P5-004] Anonymous users and FE Fixes
 **Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. 
-Minor Frontend fix: Screens should be if possible one full screen with no scroll column (currently on iOS it is slightly too high on rating screen and product submission)
 **Acceptance Criteria:**
 - [ ] TODO!!!!
-- [ ] After adding a product, the slider input moves the screen (like back gesture - screen slides for close)
 
 ### [TICKET-P5-005] Product Image Plausibility & Abuse Gating
 **Goal:** Run an AI plausibility check on uploaded images so the app (1) rejects images that are not the expected subject (a chair, a pet, a selfie) with actionable feedback, (2) reads correct product identity (name/brand/generic name) off the product photo so the submission form pre-fills instead of showing confusingly empty fields, and (3) flags genuinely abusive uploads (sexual / graphic) server-side for moderation. Implementation plan: `docs/P5-005-implementation-plan.md`.
@@ -461,6 +460,9 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 
 # Future Plans and Ideas
 
+## If user added a product, go to home screen after rating and not back to scan screen
+See title
+
 ## Ensure offline usability
 Snappy startup and offline usability - cached user votes and products on device (in supermarkets the mobile connection is often poor)
 
@@ -482,7 +484,7 @@ in Pipeline and Security of the Pipeline (Static Code analysis SAST, Dynamic DAS
 - iOS Appstore Process
 
 ## User Engagement
-- Create User Role "Moderator" which can review multiple products in a row and their vote (or that of an admin) finalizes review (so a single vote is enough to accept/decline)
+- Create User Role "Moderator" which (together with ADMIN) can review multiple products in a row and their vote (or that of an admin) finalizes review (so a single vote is enough to accept/decline)
 
 ## Non-ISBN Products
 - Enable user to rate more general products without a explicit code (e.g. not food)
