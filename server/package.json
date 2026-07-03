@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1075.0",
-    "@aws-sdk/credential-provider-node": "^3.972.58",
+    "@aws-sdk/credential-provider-node": "^3.972.62",
     "@aws-sdk/rds-signer": "^3.1076.0",
     "@google-cloud/vision": "^5.3.7",
     "@google/genai": "^2.10.0",
