@@ -20,6 +20,7 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useSession } from '@/hooks/use-session';
 import { ApiError } from '@/lib/api';
+import { log } from '@/lib/log';
 import { supabase } from '@/lib/supabase';
 
 import { submitProduct, uploadProductImage } from '@/features/products/api';
@@ -266,6 +267,10 @@ function AddProductFlow({
             setSuggestion(null);
           }
         } else {
+          // Local/network failure before a structured API response (e.g. image
+          // manipulation, FormData, or a thrown fetch). Log the raw cause so it
+          // surfaces in the Metro/device console — the UI copy stays generic.
+          log.error(`[add-product] capture failed slot=${slot} source=${source}`, err);
           setCaptureError('Could not use that photo. Please try again.');
         }
       } finally {
@@ -283,13 +288,17 @@ function AddProductFlow({
     const outcome = await extractFromLabelImage(labelPhotoUri);
     if (outcome.kind === 'ok') {
       setExtracted(outcome.data);
-      setFillMode(outcome.data.confidence === 'low' ? 'manual' : 'prefill');
-      setForm(
-        applyPhotoSuggestion(
-          outcome.data.confidence === 'low' ? EMPTY_FORM : hydrateForm(outcome.data),
-          suggestion,
-        ),
-      );
+      // Always pre-fill with whatever we read — even a low-confidence extraction
+      // is a better starting point than a blank form (e.g. a spice with a clean
+      // ingredient list but no nutrition table legitimately scores "low").
+      // Confidence only drives whether we nudge the user to double-check.
+      setFillMode('prefill');
+      setForm(applyPhotoSuggestion(hydrateForm(outcome.data), suggestion));
+      if (outcome.data.confidence === 'low') {
+        setExtractionError(
+          "We pre-filled what we could read, but we weren't fully confident — please double-check each field.",
+        );
+      }
     } else {
       setExtracted(null);
       setFillMode('manual');
@@ -841,6 +850,8 @@ function ModePill({
   return (
     <TouchableOpacity
       testID={testID}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
       style={[
         styles.pill,
         { borderColor: colors.tint },

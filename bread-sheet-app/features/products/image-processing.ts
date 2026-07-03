@@ -1,3 +1,5 @@
+import { log } from '@/lib/log';
+
 import {
   LABEL_IMAGE_JPEG_QUALITY,
   MAX_IMAGE_BYTES,
@@ -67,7 +69,7 @@ export async function processCaptureForUpload(
   // File size is best-effort — not every platform exposes it synchronously.
   const size = await safeFileSize(processedUri);
 
-  console.log(
+  log.debug(
     `[image] processed capture — kind=${kind} resized=${manipulator ? 'yes' : 'no (module unavailable, original passed through)'} longestEdge=${longestEdge} quality=${quality} sizeBytes=${size ?? 'unknown'}`,
   );
 

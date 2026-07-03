@@ -215,6 +215,48 @@ describe('AddProductScreen — flow progression', () => {
     expect(getByTestId('fill-mode-row')).toBeTruthy();
   });
 
+  it('still pre-fills (and warns) when extraction succeeds with low confidence', async () => {
+    // A spice with a clean ingredient list but no nutrition table reads as
+    // "low" — we must keep the ingredients rather than blanking the form.
+    extractModule.extractFromLabelImage.mockResolvedValue({
+      kind: 'ok',
+      path: 'image',
+      data: {
+        name: 'Kräutersteak Gewürz',
+        brand: null,
+        genericName: 'Gewürz',
+        energyKcal: null,
+        fat: null,
+        saturatedFat: null,
+        carbohydrates: null,
+        sugars: null,
+        protein: null,
+        salt: null,
+        servingSize: null,
+        ingredients: 'Himalaya Steinsalz (20%), Pfeffer, Paprika',
+        confidence: 'low',
+      },
+    });
+
+    const { getByTestId, findByTestId } = render(<AddProductScreen />);
+    fireEvent.press(getByTestId('label-photo-slot-camera'));
+    await waitFor(() =>
+      expect(getByTestId('photos-continue').props.accessibilityState?.disabled).not.toBe(
+        true,
+      ),
+    );
+    fireEvent.press(getByTestId('photos-continue'));
+
+    // Ingredients are pre-filled despite low confidence...
+    const ingredientsField = await findByTestId('field-ingredients');
+    expect(ingredientsField.props.value).toBe('Himalaya Steinsalz (20%), Pfeffer, Paprika');
+    expect(getByTestId('field-name').props.value).toBe('Kräutersteak Gewürz');
+    // ...the default mode is pre-fill, not manual...
+    expect(getByTestId('fill-mode-prefill').props.accessibilityState?.selected).toBe(true);
+    // ...and the user is nudged to double-check.
+    expect(getByTestId('extraction-warning')).toBeTruthy();
+  });
+
   it('surfaces a capture-time plausibility rejection in the photo slot', async () => {
     productsApi.uploadProductImage.mockRejectedValueOnce(
       new ApiError(422, "This doesn't look like a food product.", {

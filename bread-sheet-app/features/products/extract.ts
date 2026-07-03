@@ -1,3 +1,4 @@
+import { log } from '@/lib/log';
 import { supabase } from '@/lib/supabase';
 
 import { extractLabelFromImage, extractLabelFromText } from './api';
@@ -28,7 +29,9 @@ export async function extractFromLabelImage(imageUri: string): Promise<Extractio
   const ocr = await recogniseLabelText(imageUri);
 
   const trimmedLen = ocr.rawText.trim().length;
-  console.log(
+  // Dev-only: dumps raw recognised label text, which is user-supplied content —
+  // must never reach production device logs (hence log.debug, gated on __DEV__).
+  log.debug(
     `[extract] on-device OCR — unavailable=${ocr.unavailable} length=${trimmedLen} threshold=${MIN_OCR_LENGTH} path=${
       !ocr.unavailable && trimmedLen >= MIN_OCR_LENGTH ? 'text' : 'image-fallback'
     }\n--- rawText ---\n${ocr.rawText.slice(0, 1000)}\n--- end rawText ---`,
