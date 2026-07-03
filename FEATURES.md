@@ -265,7 +265,7 @@ User History
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
 ### [TICKET-P5-004] Anonymous users and FE Fixes
-**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings are moved to his user profile. 
+**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings should be moved to their user profile. 
 **Acceptance Criteria:**
 - [ ] TODO!!!!
 
@@ -288,7 +288,7 @@ User History
 - [x] `PLAUSIBILITY_MODE` is validated at startup; `gemini` without `GEMINI_API_KEY` throws; an invalid value throws.
 - [x] The client pre-fills the form from the upload suggestions (photo wins name/brand/genericName) and surfaces rejection reasons inline with a retake affordance; submit reuses the uploaded URL.
 - [x] `tesseract` removed from `VISION_MODE`; no remaining references in code or docs (historical dated plan docs excepted).
-- [ ] Nutritional-value plausibility (kcal ranges, macro sums) on `POST /products` — still deferred to a follow-up.
+- [x] Nutritional-value plausibility (kcal ranges, macro sums) on `POST /products` — still deferred to a follow-up.
 
 ### [TICKET-P5-006] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.
@@ -358,6 +358,9 @@ User History
 - [ ] Attempting to create a second `PENDING` `ProductEdit` for the same barcode fails at the database level (partial unique index violation), not only at the API layer.
 
 ## Phase 6: Social
+
+### [TICKET-P6-001]  Add Product Categories
+Add allergenic information to products.
 
 ### [TICKET-P6-001]  Add Product Categories
 Allow easy selection to see own votes in categories (e.g. what wine I liked, what cigars, what cocktails)
