@@ -1,0 +1,41 @@
+meta {
+  name: Vote on product edit
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{baseUrl}}/api/products/edits/{{editId}}/votes
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "vote": "APPROVE"
+  }
+}
+
+docs {
+  TICKET-P5-006 — Cast a vote on a pending edit. Registered, non-author only.
+  Body: { "vote": "APPROVE" | "REJECT" }.
+
+  Resolution (checked after every vote):
+  - 2 approvals (> rejections) → proposed changes applied to the product,
+    Product.lastModifiedByUserId = edit author, edit status APPLIED.
+  - 2 rejections (> approvals) → edit status REJECTED, changes discarded.
+  - 1–1 tie → stays PENDING until a third voter breaks it.
+
+  Response: { approvals, rejections, status }
+
+  Errors:
+  - 400 — invalid vote value ({ error: 'invalid_vote' })
+  - 401 — unauthenticated
+  - 403 — anonymous user, or author voting on own edit ({ error: 'self_edit_vote' })
+  - 404 — edit not found ({ error: 'edit_not_found' })
+  - 409 — duplicate vote ({ error: 'duplicate_vote' }) or edit no longer pending ({ error: 'edit_not_pending' })
+}

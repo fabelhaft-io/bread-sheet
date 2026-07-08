@@ -119,12 +119,12 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Model | Key fields | Notes |
 |-------|-----------|-------|
 | `User` | `id`, `email?`, `username`, `avatarUrl` | `id` mirrors the Supabase user UUID |
-| `Product` | `barcode` (PK), `name`, `brand`, `imageUrl`, `status`, `submittedByUserId?` | `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED` |
+| `Product` | `barcode` (PK), `name`, `brand`, `imageUrl`, `status`, `submittedByUserId?`, `lastModifiedByUserId?` | `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED |
 | `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?`, `createdAt`, `updatedAt` | `@@unique([userId, productId])` — one rating per user per product; resubmission upserts the existing row (`createdAt` preserved, `updatedAt` advances) |
 | `Group` | `id`, `name`, `inviteCode` | Invite code is unique |
 | `GroupMember` | `userId`, `groupId`, `role` | `role`: `ADMIN \| MEMBER` |
 | `ProductVerification` | `productId`, `userId`, `vote`, `createdAt` | `@@unique([productId, userId])`; 2 net-approvals flip to `VERIFIED`; 2 net-rejections flip to `REJECTED` |
-| `ProductEdit` | `id`, `barcode`, `authorUserId`, `originalValues` (JSON), `proposedChanges` (JSON), `status` | `status`: `PENDING \| APPLIED \| REJECTED \| EXPIRED` |
+| `ProductEdit` | `id`, `barcode`, `authorUserId`, `originalValues` (JSON), `proposedChanges` (JSON), `status`, `createdAt`, `expiresAt` | `status`: `PENDING \| APPLIED \| REJECTED \| EXPIRED`. Partial unique index `one_pending_edit_per_product` (`barcode` WHERE `status='PENDING'`) enforces one pending edit per product at the DB layer |
 | `ProductEditVote` | `editId`, `userId`, `vote` | `vote`: `APPROVE \| REJECT`; composite unique `(editId, userId)` |
 | `ProductEditDismissal` | `editId`, `userId` | Persists reviewer dismissals server-side |
 
@@ -147,8 +147,9 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | `DELETE` | `/products/:barcode/verify` | Registered, non-submitter | Cast `REJECT` vote; 2 net-rejections → `REJECTED` |
 | `POST` | `/products/:barcode/edits` | Registered | Propose edit to `VERIFIED` product |
 | `GET` | `/products/:barcode/edits/pending` | Registered | Fetch pending edit + diff for reviewer |
-| `POST` | `/products/edits/:editId/votes` | Registered, non-author | Vote `APPROVE` or `REJECT` on an edit |
-| `DELETE` | `/products/edits/:editId/votes` | Registered | Retract own edit vote |
+| `POST` | `/products/edits/:editId/votes` | Registered, non-author | Vote `APPROVE` or `REJECT` on an edit; 2 approvals apply it (sets `lastModifiedByUserId`), 2 rejections discard it |
+| `DELETE` | `/products/edits/:editId/votes` | Registered | Retract own edit vote (while still `PENDING`) |
+| `POST` | `/products/edits/:editId/dismissals` | Registered | Dismiss the review banner for the caller (server-side, cross-device; not a vote) |
 
 ### Users
 
@@ -312,9 +313,9 @@ This rule exists because silent defaults produce invisible misconfiguration: a s
 
 ## Background Jobs
 
-Runs as node-cron jobs inside the server process:
+Run inside the server process (started from `server.ts`):
 
-| Job | Schedule | Purpose |
-|-----|----------|---------|
-| OFF sync | Every 5 min | Submits `VERIFIED` products/edits to Open Food Facts |
-| Edit expiry | Daily | Marks `ProductEdit` records with no votes after 30 days as `EXPIRED` |
+| Job | Schedule | Status | Purpose |
+|-----|----------|--------|---------|
+| Edit expiry | Daily (plain `setInterval`, first run at boot; `src/jobs/editExpiryJob.ts`) | Live | Marks voteless `PENDING` `ProductEdit` records past `expiresAt` (**2 years**) as `EXPIRED`, freeing the one-pending-edit-per-barcode slot |
+| OFF sync | Every 5 min (planned: node-cron) | Planned (P6-005) | Submits `VERIFIED` products/edits to Open Food Facts |

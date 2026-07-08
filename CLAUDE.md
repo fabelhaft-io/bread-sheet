@@ -57,7 +57,7 @@ cd server && npx prisma studio
 - `(app)/` — additional authenticated screens (product detail, add-product flow, reviewer screen)
 - `(account)/` — account management screens (change email/password, upgrade, verify email)
 
-Authenticated `(app)` routes: `product/[barcode]`, `add-product`, `review-product/[barcode]`. New routes must be registered in `app/(app)/_layout.tsx`.
+Authenticated `(app)` routes: `product/[barcode]`, `add-product`, `review-product/[barcode]`, `edit-product/[barcode]`, `review-edit/[editId]`. New routes must be registered in `app/(app)/_layout.tsx`.
 
 **Auth gate:** `app/_layout.tsx` wraps the app in `<SessionProvider>`. The session hook (`hooks/use-session.tsx`) listens to `supabase.auth.onAuthStateChange()` and drives redirects — no session → `/(auth)/login`, session → `/(tabs)`. Before issuing the default post-signin redirect, the layout also checks `pendingReturnTo` (see below) and honours any stored deep-link destination.
 
@@ -65,7 +65,7 @@ Authenticated `(app)` routes: `product/[barcode]`, `add-product`, `review-produc
 
 **Feature modules** live in `features/`:
 - `auth/` — Supabase auth wrappers + validation helpers
-- `products/` — Add Product flow business logic (API helpers, on-device OCR wrapper, image picker + processing, shared constants/types). Screens import from here; see `docs/architecture/frontend.md#product-submission-ticket-p5-002`.
+- `products/` — Add Product flow business logic (API helpers, on-device OCR wrapper, image picker + processing, shared constants/types) plus the P5-006 edit-form logic (`edit-form.ts`: pre-population, changed-fields diff, correction payload). Screens import from here; see `docs/architecture/frontend.md#product-submission-ticket-p5-002`.
 
 Keep business logic in these modules — route files stay UI-only.
 
@@ -85,7 +85,7 @@ Keep business logic in these modules — route files stay UI-only.
 1. `requestLogger` — emits one structured `request:start` (debug) and one `request:finish` (info/warn/error depending on status) line per request with `method`, `path`, `status`, `durationMs`, `userId`, `isAnonymous`, `ip`, and `x-request-id` (when supplied). Mounted before rate-limiting so even throttled requests are recorded.
 2. Rate limiting: `apiLimiter` (100 req/15min) on `/api/*`, `authLimiter` (10 req/hr) on auth endpoints
 3. `requireAuth` — verifies Supabase Bearer token, injects `user` into `req` (including `isAnonymous` flag derived from the JWT `is_anonymous` claim)
-4. `requireRegistered` — composable second-layer guard for contribution routes; rejects anonymous sessions with `403 { error: 'Registration required' }`. Applied after `requireAuth` on `POST /api/products`, `POST /api/products/extract-label`, and both `POST`/`DELETE /api/products/:barcode/verify`.
+4. `requireRegistered` — composable second-layer guard for contribution routes; rejects anonymous sessions with `403 { error: 'Registration required' }`. Applied after `requireAuth` on `POST /api/products`, `POST /api/products/extract-label`, both `POST`/`DELETE /api/products/:barcode/verify`, and all P5-006 edit write paths (`PATCH /api/products/:barcode`, `POST /api/products/:barcode/edits`, `POST`/`DELETE /api/products/edits/:editId/votes`, `POST /api/products/edits/:editId/dismissals`).
 5. Controllers handle request/response
 6. `errorHandler` — centralized error middleware with a two-channel design. **Server side:** logs full detail (stack, Prisma `code`, `meta`, original message, path, method, userId) via winston. **Client side:** sanitized JSON body of shape `{ message, code? }`. 5xx errors and unknown Prisma errors collapse to a generic message (`"Something went wrong on our end. Please try again."`); the original `err.message` is only forwarded when the status is 4xx and the error does not set `expose: false`. Known Prisma codes are mapped to safe copy: `P2002` → 409 `unique_violation`, `P2003` → 409 `foreign_key_violation`, `P2025` → 404 `not_found`. The `AppError` interface exposes `status`, `code?`, and `expose?` for controllers that want stricter sanitisation.
 
@@ -99,7 +99,9 @@ Keep business logic in these modules — route files stay UI-only.
 
 ### Data Model (Prisma schema at `server/prisma/schema.prisma`)
 
-Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?`; nutrition fields: `energyKcal`, `carbohydrates`, `sugars`, `fat`, `saturatedFat`, `protein`, `salt`, `servingSize`, `ingredients`), `Rating` (taste score 0–10 in 0.5 steps + optional comment; `@@unique([userId, productId])` — one rating per user per product; resubmissions upsert the existing row), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED), `UserAbuseFlag` (`userId`, `reason?`, `createdAt`; moderation record raised when an uploaded image is judged abusive — see the image plausibility gate. Count + free-text reason only, no category).
+Core models: `User`, `Product` (barcode, name, brand, status `VERIFIED|PENDING_REVIEW|REJECTED`, `submittedByUserId?` — original author, never changes after creation; `lastModifiedByUserId?` — set when a `ProductEdit` is APPLIED; nutrition fields: `energyKcal`, `carbohydrates`, `sugars`, `fat`, `saturatedFat`, `protein`, `salt`, `servingSize`, `ingredients`), `Rating` (taste score 0–10 in 0.5 steps + optional comment; `@@unique([userId, productId])` — one rating per user per product; resubmissions upsert the existing row), `Group`, `GroupMember` (roles: ADMIN/MEMBER), `ProductVerification` (`productId`, `userId`, `vote`; `@@unique([productId, userId])`; 2 net-approvals → VERIFIED, 2 net-rejections → REJECTED), `UserAbuseFlag` (`userId`, `reason?`, `createdAt`; moderation record raised when an uploaded image is judged abusive — see the image plausibility gate. Count + free-text reason only, no category), plus the P5-006 edit family: `ProductEdit` (`barcode`, `authorUserId`, `originalValues`/`proposedChanges` JSON, status `PENDING|APPLIED|REJECTED|EXPIRED`, `expiresAt` = createdAt + 2 years; a partial unique index `one_pending_edit_per_product` — hand-written SQL in the migration, Prisma's DSL can't express it — enforces one PENDING edit per barcode at the DB layer), `ProductEditVote` (`@@unique([editId, userId])`; duplicate votes are 409s, not upserts), `ProductEditDismissal` (`@@unique([editId, userId])`; persists review-banner dismissals server-side).
+
+**Product editing & peer review (P5-006):** `PATCH /api/products/:barcode` corrects a `PENDING_REVIEW` product in place (verifications reset, corrector becomes submitter — the only shortcut). Every change to a `VERIFIED` product goes through `POST /api/products/:barcode/edits` and peer voting; 2 approvals apply the changes (same `Product.id`, so ratings stay attached; `lastModifiedByUserId` set to the edit author), 2 rejections discard them, 1–1 waits for a third voter. Logic lives in `services/productEditService.ts`. A daily in-process job (`src/jobs/editExpiryJob.ts`, plain `setInterval` started in `server.ts`) expires voteless PENDING edits after 2 years. In-app notifications and OFF sync enqueueing are deferred (`TODO(P5-006-followup)` / `TODO(P6-005)` markers in the service).
 
 ### Auth Flow
 

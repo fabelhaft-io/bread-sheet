@@ -27,6 +27,8 @@ import { ApiError, api } from '@/lib/api';
 import { formatApiError } from '@/lib/format-error';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
+import { getPendingEdit } from '@/features/products/api';
+import type { PendingEdit, ProductStatus } from '@/features/products/types';
 
 interface Product {
   id: string;
@@ -35,6 +37,8 @@ interface Product {
   brand: string | null;
   image: string | null;
   description: string | null;
+  /** VERIFIED | PENDING_REVIEW | REJECTED — drives the edit entry point (P5-006). */
+  status?: ProductStatus;
   /** Present when the product is awaiting peer review (P5-002). */
   unverified?: boolean;
   /** Supabase user id of the submitter, when the product was user-contributed. */
@@ -355,6 +359,10 @@ export default function ProductScreen() {
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Pending edit on a VERIFIED product (P5-006). Drives both the "review this
+  // change" banner and the hide-edit-button-with-notice state.
+  const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
+
   const [existingRating, setExistingRating] = useState<UserRating | null>(null);
   const [taste, setTaste] = useState(5);
   const [comment, setComment] = useState('');
@@ -390,6 +398,21 @@ export default function ProductScreen() {
           if (cancelled) return;
           setProduct(data);
           addRecentProduct({ barcode: data.barcode, name: data.name, brand: data.brand, image: data.image });
+
+          // Pending-edit lookup (P5-006) — registered users on VERIFIED products
+          // only. Failures degrade to "no pending edit"; never block the screen.
+          if (!isAnonymous && data.status === 'VERIFIED') {
+            getPendingEdit(data.barcode)
+              .then(({ edit }) => {
+                if (!cancelled) setPendingEdit(edit);
+              })
+              .catch(() => {
+                if (!cancelled) setPendingEdit(null);
+              });
+          } else {
+            setPendingEdit(null);
+          }
+
           return ratingReq.then((rating) => {
             if (cancelled || !rating) return;
             setExistingRating(rating);
@@ -562,6 +585,35 @@ export default function ProductScreen() {
         </TouchableOpacity>
       ) : null}
 
+      {/*
+        Edit-review banner (P5-006). Shown to registered users when a VERIFIED
+        product has a pending edit they haven't authored, voted on, or dismissed.
+      */}
+      {pendingEdit &&
+      !isAnonymous &&
+      !pendingEdit.viewer.isAuthor &&
+      !pendingEdit.viewer.dismissed &&
+      !pendingEdit.viewer.vote ? (
+        <TouchableOpacity
+          testID="review-edit-banner"
+          style={[styles.reviewBanner, { backgroundColor: colors.tint + '22', borderColor: colors.tint }]}
+          onPress={() =>
+            router.push({
+              pathname: '/(app)/review-edit/[editId]',
+              params: { editId: pendingEdit.editId, barcode },
+            })
+          }
+        >
+          <Text style={styles.reviewBannerIcon}>✏️</Text>
+          <View style={styles.reviewBannerBody}>
+            <ThemedText style={styles.reviewBannerTitle}>Suggested change</ThemedText>
+            <ThemedText style={styles.reviewBannerText}>
+              Someone suggested a change to this product — want to review it?
+            </ThemedText>
+          </View>
+        </TouchableOpacity>
+      ) : null}
+
       <View style={styles.infoSection}>
         <ThemedText type="title" style={styles.productName}>{product?.name}</ThemedText>
         {product?.brand ? (
@@ -571,6 +623,45 @@ export default function ProductScreen() {
           <ThemedText style={styles.description}>{product.description}</ThemedText>
         ) : null}
         <ThemedText style={styles.barcodeChip}>{barcode}</ThemedText>
+
+        {/*
+          Edit entry point (P5-006). Registered users only — absent (not
+          disabled) for anonymous sessions. PENDING_REVIEW products get the
+          "Correct this submission" label (in-place correction path); VERIFIED
+          products get "Edit product" unless an edit is already under review,
+          in which case the button is hidden and a notice shown instead.
+        */}
+        {!isAnonymous && product ? (
+          product.unverified ? (
+            <TouchableOpacity
+              testID="edit-product-button"
+              style={[styles.editLink, { borderColor: colors.tint }]}
+              onPress={() =>
+                router.push({ pathname: '/(app)/edit-product/[barcode]', params: { barcode } })
+              }
+            >
+              <Text style={[styles.editLinkText, { color: colors.tint }]}>
+                ✏️ Correct this submission
+              </Text>
+            </TouchableOpacity>
+          ) : product.status === 'VERIFIED' ? (
+            pendingEdit ? (
+              <ThemedText style={styles.editNotice} testID="edit-under-review-notice">
+                An edit is already under review.
+              </ThemedText>
+            ) : (
+              <TouchableOpacity
+                testID="edit-product-button"
+                style={[styles.editLink, { borderColor: colors.tint }]}
+                onPress={() =>
+                  router.push({ pathname: '/(app)/edit-product/[barcode]', params: { barcode } })
+                }
+              >
+                <Text style={[styles.editLinkText, { color: colors.tint }]}>✏️ Edit product</Text>
+              </TouchableOpacity>
+            )
+          ) : null
+        ) : null}
       </View>
 
       <View style={[styles.divider, { backgroundColor: colors.icon + '33' }]} />
@@ -770,5 +861,23 @@ const styles = StyleSheet.create({
     opacity: 0.8,
     marginTop: 2,
     lineHeight: 18,
+  },
+  editLink: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginTop: 10,
+  },
+  editLinkText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  editNotice: {
+    fontSize: 13,
+    opacity: 0.55,
+    fontStyle: 'italic',
+    marginTop: 10,
   },
 });

@@ -1,0 +1,37 @@
+meta {
+  name: Get pending edit for product
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/api/products/{{barcode}}/edits/pending
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  TICKET-P5-006 — Current pending edit for a product, or { edit: null }.
+
+  Drives the client's review banner and the diff screen. Response shape:
+
+  {
+    "edit": {
+      "editId": "...",
+      "barcode": "...",
+      "originalValues": { ...snapshot at proposal time, image keys resolved to URLs },
+      "proposedChanges": { ...changed fields only },
+      "approvals": 1,
+      "rejections": 0,
+      "createdAt": "...",
+      "viewer": { "isAuthor": false, "vote": null, "dismissed": false }
+    }
+  }
+
+  `viewer` is computed for the calling user: authors and users who voted/dismissed
+  don't get the banner. Vote counts are exposed; voter identities are not.
+}

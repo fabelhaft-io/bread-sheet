@@ -1,6 +1,12 @@
 import { api, ApiError } from '@/lib/api';
 
-import type { ExtractedLabel, ProductSubmission } from './types';
+import type {
+  EditVote,
+  ExtractedLabel,
+  PendingEdit,
+  ProductEditChanges,
+  ProductSubmission,
+} from './types';
 
 /**
  * Append a local image file URI to a `FormData` for a multipart upload.
@@ -158,5 +164,64 @@ export function approveProduct(barcode: string) {
 export function rejectProduct(barcode: string) {
   return api.delete<{ verifications: number }>(
     `/api/products/${encodeURIComponent(barcode)}/verify`,
+  );
+}
+
+// ─── Product editing & peer review (TICKET-P5-006) ──────────────────────────
+
+/**
+ * In-place correction of a PENDING_REVIEW submission. Restarts the review
+ * cycle (existing votes are cleared; the caller becomes the submitter). The
+ * server returns 409 (`product_verified`) on VERIFIED products — those go
+ * through `proposeProductEdit` instead.
+ */
+export function correctProduct(
+  barcode: string,
+  payload: Omit<ProductSubmission, 'barcode' | 'productImageKey'> & { productImageKey?: string },
+) {
+  return api.patch<{ barcode: string; status: string }>(
+    `/api/products/${encodeURIComponent(barcode)}`,
+    payload,
+  );
+}
+
+/**
+ * Propose a change to a VERIFIED product. Only changed fields are sent. 409
+ * (`edit_pending`) when another edit is already under review.
+ */
+export function proposeProductEdit(barcode: string, changes: ProductEditChanges) {
+  return api.post<{ editId: string; barcode: string; status: string }>(
+    `/api/products/${encodeURIComponent(barcode)}/edits`,
+    changes,
+  );
+}
+
+/** Current pending edit for a product, or `{ edit: null }`. Drives the review banner. */
+export function getPendingEdit(barcode: string) {
+  return api.get<{ edit: PendingEdit | null }>(
+    `/api/products/${encodeURIComponent(barcode)}/edits/pending`,
+  );
+}
+
+/** "Looks correct" / "Something's wrong" on a proposed edit. */
+export function voteOnProductEdit(editId: string, vote: EditVote) {
+  return api.post<{ approvals: number; rejections: number; status: string }>(
+    `/api/products/edits/${encodeURIComponent(editId)}/votes`,
+    { vote },
+  );
+}
+
+/** Retract the caller's vote while the edit is still pending. */
+export function retractProductEditVote(editId: string) {
+  return api.delete<{ approvals: number; rejections: number; status: string }>(
+    `/api/products/edits/${encodeURIComponent(editId)}/votes`,
+  );
+}
+
+/** Server-side dismissal of the review banner (persists across devices). */
+export function dismissProductEdit(editId: string) {
+  return api.post<{ dismissed: boolean }>(
+    `/api/products/edits/${encodeURIComponent(editId)}/dismissals`,
+    {},
   );
 }

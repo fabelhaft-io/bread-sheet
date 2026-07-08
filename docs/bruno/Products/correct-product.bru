@@ -1,0 +1,50 @@
+meta {
+  name: Correct product (PENDING_REVIEW reset)
+  type: http
+  seq: 7
+}
+
+patch {
+  url: {{baseUrl}}/api/products/{{barcode}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "name": "Corrected Product Name",
+    "brand": "BrandCo",
+    "genericName": null,
+    "energyKcal": 250,
+    "fat": 3.5,
+    "saturatedFat": 1.2,
+    "carbohydrates": 45,
+    "sugars": 5,
+    "protein": 8,
+    "salt": 1.2,
+    "servingSize": "50g",
+    "ingredients": "Flour, water, salt, yeast"
+  }
+}
+
+docs {
+  TICKET-P5-006 — In-place correction of a PENDING_REVIEW submission. Registered users only.
+
+  Accepts a FULL product payload (barcode comes from the URL). On success the product data is replaced,
+  all existing verification votes are deleted (review restarts from zero), and the caller becomes the
+  submitter. `productImageKey` is OPTIONAL — include it only when the photo was replaced via
+  POST /upload-image; omitting it keeps the current image.
+
+  Response: the updated product (image key resolved to a URL).
+
+  Errors:
+  - 401 — unauthenticated
+  - 403 — anonymous user ({ error: 'Registration required' })
+  - 404 — product not found ({ error: 'product_not_found' })
+  - 409 — product is VERIFIED, use the edit-proposal flow ({ error: 'product_verified' })
+  - 422 — validation failure ({ error, reason, field })
+}

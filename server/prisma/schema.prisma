@@ -13,13 +13,17 @@ model User {
   username  String?
   avatar    String?
   createdAt DateTime @default(now())
-  
+
   ratings   Rating[]
   groups    GroupMember[]
 
   submittedProducts   Product[]              @relation("ProductSubmitter")
+  lastModifiedProducts Product[]             @relation("ProductLastModifier")
   productVerifications ProductVerification[]
   abuseFlags          UserAbuseFlag[]
+  productEdits        ProductEdit[]
+  productEditVotes    ProductEditVote[]
+  productEditDismissals ProductEditDismissal[]
 }
 
 // Server-side moderation record raised when an uploaded image is judged to be
@@ -46,6 +50,13 @@ enum VerificationVote {
   REJECT
 }
 
+enum ProductEditStatus {
+  PENDING
+  APPLIED
+  REJECTED
+  EXPIRED
+}
+
 model Product {
   id          String   @id @default(uuid())
   barcode     String   @unique
@@ -53,12 +64,18 @@ model Product {
   brand       String?
   image       String?
   description String?
-  
+
   ratings     Rating[]
 
   status              ProductStatus @default(VERIFIED) // existing rows = trusted (came from OFF)
-  submittedByUserId   String?
+  submittedByUserId   String?       // original author — never changes after creation
   submittedBy         User?         @relation("ProductSubmitter", fields: [submittedByUserId], references: [id])
+
+  // User whose ProductEdit was most recently APPLIED. Set by the edit-resolution
+  // logic; stays null until the first applied edit. `submittedByUserId` is
+  // intentionally untouched on edit so original-author attribution is preserved.
+  lastModifiedByUserId String?
+  lastModifiedBy       User?        @relation("ProductLastModifier", fields: [lastModifiedByUserId], references: [id])
 
   genericName         String?
   energyKcal          Float?
@@ -74,6 +91,7 @@ model Product {
   plausibilityFlag    Boolean  @default(false)
 
   verifications       ProductVerification[]
+  edits               ProductEdit[]
 }
 
 model Rating {
@@ -96,6 +114,58 @@ model Rating {
   @@unique([userId, productId])
 }
 
+// A proposed correction to a VERIFIED product (TICKET-P5-006). Changes are not
+// applied immediately — two other registered users must approve the diff first.
+// `originalValues` snapshots the product fields at submission time so the diff
+// screen always shows the correct baseline even if the product changes later.
+//
+// Invariant: at most ONE PENDING edit per barcode. Enforced at the DATABASE
+// layer by a partial unique index (`one_pending_edit_per_product`, see the
+// migration — Prisma cannot express partial indexes in the schema DSL). The
+// API's 409 is a friendly mirror of that constraint, not the source of truth.
+model ProductEdit {
+  id              String            @id @default(uuid())
+  barcode         String
+  product         Product           @relation(fields: [barcode], references: [barcode], onDelete: Cascade)
+  authorUserId    String
+  author          User              @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
+  originalValues  Json              // snapshot of the editable product fields at proposal time
+  proposedChanges Json              // field name -> new value (only changed fields)
+  status          ProductEditStatus @default(PENDING)
+  createdAt       DateTime          @default(now())
+  expiresAt       DateTime          // createdAt + 2 years; voteless PENDING edits past this are EXPIRED by the cleanup job
+
+  votes           ProductEditVote[]
+  dismissals      ProductEditDismissal[]
+
+  @@index([barcode, status])
+}
+
+model ProductEditVote {
+  id        String           @id @default(uuid())
+  editId    String
+  edit      ProductEdit      @relation(fields: [editId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vote      VerificationVote
+  createdAt DateTime         @default(now())
+
+  @@unique([editId, userId]) // one vote per user per edit; duplicates are 409s
+}
+
+// Persists "Dismiss" on the review banner server-side, so the banner stays
+// hidden across devices and reinstalls. Does not count as a vote.
+model ProductEditDismissal {
+  id        String      @id @default(uuid())
+  editId    String
+  edit      ProductEdit @relation(fields: [editId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@unique([editId, userId])
+}
+
 model ProductVerification {
   id         String           @id @default(uuid())
   productId  String
@@ -113,7 +183,7 @@ model Group {
   id        String   @id @default(uuid())
   name      String
   code      String   @unique // For sharing
-  
+
   members   GroupMember[]
 }
 
