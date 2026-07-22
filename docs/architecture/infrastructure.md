@@ -182,6 +182,66 @@ s3://breadsheet-dev-s3-…/
     └── {uuid}.jpg            # Final display images (resize Lambda output)
 ```
 
+### Pausing / Resuming the Dev Stack
+
+Dev has no NAT gateway (~$33/mo already avoided). The remaining always-on costs are the Fargate
+task (~$9/mo), RDS `db.t4g.micro` (~$12/mo), and the ALB (~$16–18/mo **flat**, regardless of
+traffic — an ALB has no "stopped" state, only exists-or-doesn't). Two tiers, by how much of that
+you want to shed.
+
+**Tier 1 — CLI only, no Terraform changes (sheds the Fargate task + RDS compute):**
+
+```sh
+# Pause
+aws ecs update-service --cluster breadsheet-server-dev --service breadsheet-dev-server-service --desired-count 0
+aws rds stop-db-instance --db-instance-identifier breadsheet-dev-database-1
+
+# Resume
+aws rds start-db-instance --db-instance-identifier breadsheet-dev-database-1
+aws ecs update-service --cluster breadsheet-server-dev --service breadsheet-dev-server-service --desired-count 1
+
+# Check state
+aws ecs describe-services --cluster breadsheet-server-dev --services breadsheet-dev-server-service \
+  --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount}' --output table
+aws rds describe-db-instances --db-instance-identifier breadsheet-dev-database-1 \
+  --query 'DBInstances[0].DBInstanceStatus' --output text
+```
+
+Paused looks like `running:0` (ECS) and RDS status `stopping` → `stopped`. Resumed looks like
+`running:1` and RDS status `available`.
+
+Caveats:
+- RDS auto-restarts itself after **7 days** stopped (AWS-enforced) — re-run `stop-db-instance` if
+  the pause runs longer.
+- `aws_ecs_service.server` (`ecs.tf`) hardcodes `desired_count = 1`, and its
+  `lifecycle.ignore_changes` only covers `task_definition`. Any `terraform apply` while paused —
+  even for something unrelated — will see the drift and silently scale the service back to 1. Avoid
+  `apply`ing while paused, or add `desired_count` to `ignore_changes` if pause/resume becomes
+  routine.
+
+**Tier 2 — also tear down the ALB (sheds the flat ~$16–18/mo charge too):**
+
+```sh
+# Pause (review first, then destroy)
+terraform -chdir=terraform plan -destroy -var-file=environments/dev.tfvars -target=aws_lb.main
+terraform -chdir=terraform destroy -var-file=environments/dev.tfvars -target=aws_lb.main
+
+# Resume
+terraform -chdir=terraform apply -var-file=environments/dev.tfvars
+# then re-run the Tier 1 resume commands (RDS + ECS) — no point paying for compute with no ALB in front of it
+
+# Check state
+aws elbv2 describe-load-balancers --names breadsheet-dev-alb   # "LoadBalancerNotFoundException" while paused
+terraform -chdir=terraform plan -var-file=environments/dev.tfvars   # "No changes" once fully resumed
+```
+
+`-target=aws_lb.main` on a destroy automatically cascades to everything that *depends on* the ALB —
+`aws_lb_listener.https`, `aws_lb_listener.http_redirect`, and `aws_route53_record.server` — since
+they'd otherwise reference a deleted resource. The target group, the ACM cert (+ validation), the
+Route 53 zone, and the ECS service sit outside that dependency chain and are untouched, so the cert
+stays `Issued` and nothing needs re-validating on resume — `apply` just recreates the ALB, listeners,
+and alias record pointing at the new ALB's DNS name.
+
 ---
 
 ## Deployment Pipeline (push-based CD to ECS)
