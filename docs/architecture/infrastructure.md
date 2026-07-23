@@ -1,8 +1,7 @@
 # Infrastructure & Deployment
 
 Covers local development setup, the cloud infrastructure (AWS — ECS Fargate), and the push-based CD
-pipeline. The design + cost rationale live in [`cheap-prod-fargate.md`](cheap-prod-fargate.md); the
-hands-on build log (with the import map) in [`fargate-handbuild.md`](fargate-handbuild.md).
+pipeline.
 
 ---
 
@@ -270,6 +269,33 @@ breaker** auto-reverts a failed rollout.
 **Prod promotion (deferred — no prod stage yet):** a gated release (git tag / GitHub Release / manual
 dispatch + an `environment: production` required reviewer) promoting the **same** already-built
 `:<git-sha>` to a prod service. Built when a prod cluster/service exists.
+
+The mobile app has its own, unrelated build pipeline — see **Mobile App Build (Android APK)** below.
+
+### Mobile App Build (Android APK)
+
+`.github/workflows/build-apk.yml` is a manually-triggered (`workflow_dispatch`) workflow, separate
+from the server's push-based CD above — it does not run on every push. It builds `bread-sheet-app/`
+via **EAS Build** (Expo's cloud build service, not a local Gradle build in the runner): the job installs
+`eas-cli` (`expo/expo-github-action`), runs `eas build --platform android --profile preview --wait
+--json`, then downloads the resulting APK from the build's `artifacts.buildUrl` and uploads it as a
+workflow artifact (30-day retention).
+
+Profiles are defined in `bread-sheet-app/eas.json` — `preview` and `development` both set
+`distribution: internal` + `android.buildType: apk` (installable `.apk`, not a Play Store `.aab`);
+`production` is reserved for a future signed store build.
+
+**One-time setup required before this workflow can run (not done by CI):**
+1. `npx eas login` + `npx eas init` from `bread-sheet-app/` — creates the project on expo.dev and
+   writes `extra.eas.projectId` into `app.json`. This step is interactive and must be run locally, then
+   the resulting `app.json` change committed.
+2. Add an `EXPO_TOKEN` repository secret — an access token from
+   `expo.dev/accounts/<account>/settings/access-tokens`.
+
+Because the app ships native modules (`expo-camera`, `@react-native-ml-kit/text-recognition`,
+`expo-image-manipulator`) it cannot run in vanilla Expo Go — EAS Build compiles a real native binary
+per `app.json`'s `plugins`, so this workflow (or an equivalent local `eas build`) is the only way to
+get an installable build with those modules working end-to-end.
 
 ### Database Migrations — Ride Along
 

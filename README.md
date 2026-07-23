@@ -181,6 +181,12 @@ Scan the QR code with Expo Go (or press `a`/`i` for an emulator).
 
 ## Optional / Advanced Setup
 
+### Building an Android APK
+
+`.github/workflows/build-apk.yml` builds an installable Android `.apk` via [EAS Build](https://docs.expo.dev/build/introduction/) — required because the app ships native modules (camera, ML Kit text recognition, image manipulation) that don't run in plain Expo Go. Trigger it manually from the Actions tab (`workflow_dispatch`).
+
+One-time setup (not done by CI): run `npx eas login && npx eas init` from `bread-sheet-app/` to create the Expo project and commit the `extra.eas.projectId` it writes to `app.json`, then add an `EXPO_TOKEN` repo secret from [expo.dev access tokens](https://expo.dev/accounts/%5Baccount%5D/settings/access-tokens). See `docs/architecture/infrastructure.md` § Mobile App Build for details.
+
 ### Google Cloud Vision (`VISION_MODE=live`)
 
 By default `VISION_MODE=mock` returns a fixed sample response for any label image — no GCP credentials needed. To test against the real Vision API:
@@ -269,7 +275,7 @@ On the dev **ECS Fargate** environment, WIF uses an **AWS-provider** pool — th
 
 ### Deploy to AWS (dev environment)
 
-The dev cloud environment runs on **ECS Fargate** behind an ALB (HTTPS at `server.dev.bread-sheet.com`), with RDS, S3, SSM Parameter Store for secrets, and keyless GCP via Workload Identity Federation — **no Kubernetes, no NAT**. It is currently **hand-built and being imported into Terraform**; the full step-by-step build, verification, and import map are the living runbook in [`docs/architecture/fargate-handbuild.md`](docs/architecture/fargate-handbuild.md). The design + cost rationale (Fargate vs the legacy EKS sandbox) are in [`docs/architecture/cheap-prod-fargate.md`](docs/architecture/cheap-prod-fargate.md).
+The dev cloud environment runs on **ECS Fargate** behind an ALB (HTTPS at `server.dev.bread-sheet.com`), with RDS, S3, SSM Parameter Store for secrets, and keyless GCP via Workload Identity Federation — **no Kubernetes, no NAT**.
 
 **Deploys are automatic.** Merge to `main` → GitHub Actions builds the image (GHCR, `:<git-sha>`) and the `deploy-dev` job registers a new ECS task-definition revision and rolls the service — keyless via a GitHub-OIDC deployer role, waiting for service stability, with circuit-breaker rollback. Nothing to run locally. See [`.github/workflows/build-image.yml`](.github/workflows/build-image.yml).
 
