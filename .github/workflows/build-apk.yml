@@ -1,0 +1,72 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: EAS build profile (from bread-sheet-app/eas.json)
+        required: false
+        default: preview
+        type: choice
+        options:
+          - preview
+          - development
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: EAS build (${{ inputs.profile }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bread-sheet-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: bread-sheet-app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Build APK on EAS
+        run: |
+          eas build \
+            --platform android \
+            --profile "${{ inputs.profile || 'preview' }}" \
+            --non-interactive \
+            --wait \
+            --json > build-output.json
+          cat build-output.json
+
+      - name: Download APK
+        run: |
+          BUILD_URL=$(node -e "
+            const builds = require('./build-output.json');
+            const build = Array.isArray(builds) ? builds[0] : builds;
+            if (build.status !== 'finished' || !build.artifacts?.buildUrl) {
+              console.error('Build did not finish successfully:', build.status, build.error);
+              process.exit(1);
+            }
+            console.log(build.artifacts.buildUrl);
+          ")
+          curl -L -o bread-sheet.apk "$BUILD_URL"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bread-sheet-apk
+          path: bread-sheet-app/bread-sheet.apk
+          retention-days: 30

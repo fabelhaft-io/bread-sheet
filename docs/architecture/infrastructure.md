@@ -1,8 +1,7 @@
 # Infrastructure & Deployment
 
 Covers local development setup, the cloud infrastructure (AWS — ECS Fargate), and the push-based CD
-pipeline. The design + cost rationale live in [`cheap-prod-fargate.md`](cheap-prod-fargate.md); the
-hands-on build log (with the import map) in [`fargate-handbuild.md`](fargate-handbuild.md).
+pipeline.
 
 ---
 
@@ -182,6 +181,66 @@ s3://breadsheet-dev-s3-…/
     └── {uuid}.jpg            # Final display images (resize Lambda output)
 ```
 
+### Pausing / Resuming the Dev Stack
+
+Dev has no NAT gateway (~$33/mo already avoided). The remaining always-on costs are the Fargate
+task (~$9/mo), RDS `db.t4g.micro` (~$12/mo), and the ALB (~$16–18/mo **flat**, regardless of
+traffic — an ALB has no "stopped" state, only exists-or-doesn't). Two tiers, by how much of that
+you want to shed.
+
+**Tier 1 — CLI only, no Terraform changes (sheds the Fargate task + RDS compute):**
+
+```sh
+# Pause
+aws ecs update-service --cluster breadsheet-server-dev --service breadsheet-dev-server-service --desired-count 0
+aws rds stop-db-instance --db-instance-identifier breadsheet-dev-database-1
+
+# Resume
+aws rds start-db-instance --db-instance-identifier breadsheet-dev-database-1
+aws ecs update-service --cluster breadsheet-server-dev --service breadsheet-dev-server-service --desired-count 1
+
+# Check state
+aws ecs describe-services --cluster breadsheet-server-dev --services breadsheet-dev-server-service \
+  --query 'services[0].{desired:desiredCount,running:runningCount,pending:pendingCount}' --output table
+aws rds describe-db-instances --db-instance-identifier breadsheet-dev-database-1 \
+  --query 'DBInstances[0].DBInstanceStatus' --output text
+```
+
+Paused looks like `running:0` (ECS) and RDS status `stopping` → `stopped`. Resumed looks like
+`running:1` and RDS status `available`.
+
+Caveats:
+- RDS auto-restarts itself after **7 days** stopped (AWS-enforced) — re-run `stop-db-instance` if
+  the pause runs longer.
+- `aws_ecs_service.server` (`ecs.tf`) hardcodes `desired_count = 1`, and its
+  `lifecycle.ignore_changes` only covers `task_definition`. Any `terraform apply` while paused —
+  even for something unrelated — will see the drift and silently scale the service back to 1. Avoid
+  `apply`ing while paused, or add `desired_count` to `ignore_changes` if pause/resume becomes
+  routine.
+
+**Tier 2 — also tear down the ALB (sheds the flat ~$16–18/mo charge too):**
+
+```sh
+# Pause (review first, then destroy)
+terraform -chdir=terraform plan -destroy -var-file=environments/dev.tfvars -target=aws_lb.main
+terraform -chdir=terraform destroy -var-file=environments/dev.tfvars -target=aws_lb.main
+
+# Resume
+terraform -chdir=terraform apply -var-file=environments/dev.tfvars
+# then re-run the Tier 1 resume commands (RDS + ECS) — no point paying for compute with no ALB in front of it
+
+# Check state
+aws elbv2 describe-load-balancers --names breadsheet-dev-alb   # "LoadBalancerNotFoundException" while paused
+terraform -chdir=terraform plan -var-file=environments/dev.tfvars   # "No changes" once fully resumed
+```
+
+`-target=aws_lb.main` on a destroy automatically cascades to everything that *depends on* the ALB —
+`aws_lb_listener.https`, `aws_lb_listener.http_redirect`, and `aws_route53_record.server` — since
+they'd otherwise reference a deleted resource. The target group, the ACM cert (+ validation), the
+Route 53 zone, and the ECS service sit outside that dependency chain and are untouched, so the cert
+stays `Issued` and nothing needs re-validating on resume — `apply` just recreates the ALB, listeners,
+and alias record pointing at the new ALB's DNS name.
+
 ---
 
 ## Deployment Pipeline (push-based CD to ECS)
@@ -210,6 +269,33 @@ breaker** auto-reverts a failed rollout.
 **Prod promotion (deferred — no prod stage yet):** a gated release (git tag / GitHub Release / manual
 dispatch + an `environment: production` required reviewer) promoting the **same** already-built
 `:<git-sha>` to a prod service. Built when a prod cluster/service exists.
+
+The mobile app has its own, unrelated build pipeline — see **Mobile App Build (Android APK)** below.
+
+### Mobile App Build (Android APK)
+
+`.github/workflows/build-apk.yml` is a manually-triggered (`workflow_dispatch`) workflow, separate
+from the server's push-based CD above — it does not run on every push. It builds `bread-sheet-app/`
+via **EAS Build** (Expo's cloud build service, not a local Gradle build in the runner): the job installs
+`eas-cli` (`expo/expo-github-action`), runs `eas build --platform android --profile preview --wait
+--json`, then downloads the resulting APK from the build's `artifacts.buildUrl` and uploads it as a
+workflow artifact (30-day retention).
+
+Profiles are defined in `bread-sheet-app/eas.json` — `preview` and `development` both set
+`distribution: internal` + `android.buildType: apk` (installable `.apk`, not a Play Store `.aab`);
+`production` is reserved for a future signed store build.
+
+**One-time setup required before this workflow can run (not done by CI):**
+1. `npx eas login` + `npx eas init` from `bread-sheet-app/` — creates the project on expo.dev and
+   writes `extra.eas.projectId` into `app.json`. This step is interactive and must be run locally, then
+   the resulting `app.json` change committed.
+2. Add an `EXPO_TOKEN` repository secret — an access token from
+   `expo.dev/accounts/<account>/settings/access-tokens`.
+
+Because the app ships native modules (`expo-camera`, `@react-native-ml-kit/text-recognition`,
+`expo-image-manipulator`) it cannot run in vanilla Expo Go — EAS Build compiles a real native binary
+per `app.json`'s `plugins`, so this workflow (or an equivalent local `eas build`) is the only way to
+get an installable build with those modules working end-to-end.
 
 ### Database Migrations — Ride Along
 
