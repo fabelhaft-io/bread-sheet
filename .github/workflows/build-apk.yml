@@ -19,6 +19,7 @@ jobs:
   build:
     name: EAS build (${{ inputs.profile }})
     runs-on: ubuntu-latest
+    environment: DEV Deploy
     defaults:
       run:
         working-directory: bread-sheet-app
