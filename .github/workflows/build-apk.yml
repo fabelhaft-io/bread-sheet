@@ -48,7 +48,7 @@ jobs:
           BUILD_URL=$(node -e "
             const builds = require('./build-output.json');
             const build = Array.isArray(builds) ? builds[0] : builds;
-            if (build.status !== 'finished' || !build.artifacts?.buildUrl) {
+            if (build.status !== 'FINISHED' || !build.artifacts?.buildUrl) {
               console.error('Build did not finish successfully:', build.status, build.error);
               process.exit(1);
             }
