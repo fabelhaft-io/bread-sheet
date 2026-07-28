@@ -2,22 +2,13 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
-    inputs:
-      profile:
-        description: EAS build profile (from bread-sheet-app/eas.json)
-        required: false
-        default: preview
-        type: choice
-        options:
-          - preview
-          - development
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: EAS build (${{ inputs.profile }})
+    name: EAS build (preview)
     runs-on: ubuntu-latest
     environment: DEV Deploy
     defaults:
@@ -37,7 +28,7 @@ jobs:
         run: npm ci
 
       - name: Setup EAS
-        uses: expo/expo-github-action@v8
+        uses: expo/expo-github-action@v9
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
@@ -46,7 +37,7 @@ jobs:
         run: |
           eas build \
             --platform android \
-            --profile "${{ inputs.profile || 'preview' }}" \
+            --profile preview \
             --non-interactive \
             --wait \
             --json > build-output.json
