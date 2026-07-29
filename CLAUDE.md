@@ -148,6 +148,18 @@ Never use inline fallback values for environment variables that configure runtim
 - Mode-style vars (e.g. `VISION_MODE`) must be in an explicit allowlist; anything outside it is an error, not a fallback.
 - Local dev values belong in `.env` files (which are git-ignored), never hardcoded in source.
 
+### Regexes Over User Input — No Ambiguous Quantifiers, Always Bounded
+
+Any regex applied to client-supplied text must be unable to backtrack super-linearly, and the text it runs on must have a length cap.
+
+**Why:** Node is single-threaded, so a quadratic regex is a full-API outage, not a slow request. This is not hypothetical here — four patterns in `labelExtractionService.ts` wrote an optional dash as `[ \t]*[-]?[ \t]*`, where both `[ \t]*` runs match a space. One legal 97.7 KB `POST /api/products/extract-label` blocked the event loop for **~27 seconds** for every user of the service (CodeQL `js/polynomial-redos`). The rewrite to `[ \t]*(?:-[ \t]*)?` accepts identical input and runs in ~8 ms.
+
+**How to apply:**
+- Two adjacent quantifiers must not accept the same character. Put an optional separator *inside* one group (`(?:-[ \t]*)?`) instead of between two runs of the same class.
+- A `[^…]*` run must be disjoint from whatever follows it (`[^\d\n]*` before `\d+`).
+- Cap the input length at the controller before parsing, and measure the **raw** string — `.trim().length` reports 0 for a body that is almost entirely whitespace, which is the attack shape.
+- Add a timing regression test where the pre-fix and post-fix costs differ by orders of magnitude, so the budget can't flake (see the `ReDoS resistance` block in `labelExtractionService.test.ts`).
+
 ## Key Environment Variables
 
 **Server (`server/.env`):**

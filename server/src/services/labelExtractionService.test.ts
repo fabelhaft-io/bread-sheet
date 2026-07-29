@@ -215,4 +215,67 @@ Nothing else of interest here
       expect(extractFromText(text).energyKcal).toBe(295);
     });
   });
+
+  // Regression guard for the polynomial-ReDoS fix (CodeQL js/polynomial-redos).
+  // The German sub-nutrient patterns used to write the optional leading dash as
+  // an optional `-` between two `[ \t]*` runs. Both runs match a space, so a
+  // long line of spaces could be split between them in O(n) ways: parsing the
+  // payload below took ~27 SECONDS of blocked event loop before the fix, from a
+  // single request that passed every other guard.
+  //
+  // Timing in a test is normally a smell. Here the pre-fix and post-fix costs
+  // differ by four orders of magnitude (~27 s vs ~5 ms), so a 2 s budget cannot
+  // realistically flake while still failing loudly on any regression.
+  describe('ReDoS resistance', () => {
+    const REDOS_BUDGET_MS = 2_000;
+
+    // 100k chars ~= a 100 KB JSON body, which is express.json()'s default cap —
+    // i.e. the worst case the HTTP layer will actually hand to the parser.
+    const spaces = (n: number) => ' '.repeat(n);
+
+    it('parses a 100 KB whitespace payload in linear time', () => {
+      // Must survive the controller's own `trim().length >= 50` guard to be a
+      // faithful reproduction — a pure-whitespace body is rejected earlier.
+      const payload = 'Zutaten: Wasser, Zucker, Salz, Weizenmehl, Hefe, Öl.\n' + spaces(100_000);
+
+      const started = performance.now();
+      extractFromText(payload);
+      expect(performance.now() - started).toBeLessThan(REDOS_BUDGET_MS);
+    });
+
+    it('stays linear when the whitespace run follows a sub-nutrient keyword', () => {
+      // Targets the vulnerable prefix head-on: line start, dash, spaces, keyword.
+      for (const keyword of ['davon Zucker', 'davon gesättigte Fettsäuren']) {
+        const payload = `-${spaces(50_000)}${keyword}${spaces(50_000)}`;
+        const started = performance.now();
+        extractFromText(payload);
+        expect(performance.now() - started).toBeLessThan(REDOS_BUDGET_MS);
+      }
+    });
+
+    it('still parses every dash/whitespace sub-nutrient spelling the fix touched', () => {
+      // The rewrite must not narrow what the patterns accept.
+      const variants = [
+        'davon Zucker 8,0 g',
+        '- davon Zucker 8,0 g',
+        '  -  davon Zucker 8,0 g',
+        '\t-\tZucker 8,0 g',
+        '-davon Zucker 8,0 g',
+        '   Zucker 8,0 g',
+      ];
+      for (const line of variants) {
+        expect(extractFromText(line).sugars, line).toBe(8.0);
+      }
+
+      const satFatVariants = [
+        'davon gesättigte Fettsäuren 0,88 g',
+        '- davon gesättigte Fettsäuren 0,88 g',
+        '  -  gesättigte Fettsäuren 0,88 g',
+        '\t-\tdavon gesättigte Fettsäuren 0,88 g',
+      ];
+      for (const line of satFatVariants) {
+        expect(extractFromText(line).saturatedFat, line).toBe(0.88);
+      }
+    });
+  });
 });

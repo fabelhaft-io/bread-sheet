@@ -27,6 +27,10 @@ body:json {
 docs {
   Parses raw OCR text into structured nutritional fields. Requires a registered (non-anonymous) user.
 
-  Text path: send { rawText: string } (min 50 chars) as JSON.
+  Text path: send { rawText: string } as JSON. Length must be >= 50 chars (after trimming) and <= 20000 chars (raw).
   Image path: send multipart with image field — pipeline chosen by server VISION_MODE (mock/live/llm).
+
+  Errors: 400 { error: "raw_text_too_short" | "raw_text_too_long" }, 401 (no session), 403 (anonymous session).
+
+  The 20000-char cap bounds how much text the regex parser can be handed — the patterns are linear, and the cap keeps them that way if one ever regresses.
 }

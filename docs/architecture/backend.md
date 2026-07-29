@@ -270,8 +270,17 @@ Because the gate runs before the S3 write, a rejected image is never persisted (
 
 | Input | Path | Status |
 |-------|------|--------|
-| `{ rawText: string }` (≥ `MIN_OCR_LENGTH = 50` chars) | Text path — hand-rolled regex parser (`labelExtractionService.ts`); English + German patterns | **Shipped (T5)** |
+| `{ rawText: string }` (`MIN_OCR_LENGTH = 50` ≤ length ≤ `MAX_OCR_LENGTH = 20_000`) | Text path — hand-rolled regex parser (`labelExtractionService.ts`); English + German patterns | **Shipped (T5)** |
 | Multipart image | Image path — implementation chosen by `VISION_MODE` (see below) | **Shipped** |
+
+Out-of-range `rawText` is `400 { error: 'raw_text_too_short' | 'raw_text_too_long' }`. The upper bound is measured on the raw string, not `rawText.trim()` — trimming reports 0 for a body that is almost entirely whitespace, which is exactly the input the cap exists to reject.
+
+**ReDoS: the parser's patterns must stay linear.** The regex table is run over client-supplied text, so any pattern where two quantifiers can match the *same* character lets an attacker pay O(n) bytes for O(n²) work. That happened: four German sub-nutrient patterns wrote the optional leading dash as `[ \t]*[-]?[ \t]*`, and both `[ \t]*` runs match a space. A single 97.7 KB request — legal, under `express.json()`'s 100 KB default cap, and past the `MIN_OCR_LENGTH` guard — blocked the event loop for **~27 seconds**, stalling the whole (single-threaded) API for every user. Flagged by CodeQL as `js/polynomial-redos`; fixed by rewriting the prefix as `[ \t]*(?:-[ \t]*)?`, which accepts identical input and runs in ~8 ms. Two rules keep it that way, documented at the top of `labelExtractionService.ts`:
+
+- a `[^…]*` run must be disjoint from whatever follows it (`[^\d\n]*` before `\d+`);
+- an optional separator goes *inside* one group (`(?:-[ \t]*)?`) rather than between two runs of the same class.
+
+`labelExtractionService.test.ts` has a `ReDoS resistance` block that parses a 100 KB whitespace payload under a 2 s budget — four orders of magnitude below the pre-fix cost, so it cannot flake but fails loudly on a regression.
 
 **Image-path modes (`VISION_MODE`):**
 

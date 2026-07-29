@@ -192,6 +192,45 @@ describe('POST /api/products/extract-label', () => {
     expect(res.body.error).toBe('raw_text_too_short');
   });
 
+  // Bounds how much text the regex parser can ever be handed. A real nutrition
+  // panel is a few KB; anything past 20k is an attack payload or a client bug.
+  it('returns 400 when rawText exceeds the 20k-character cap', async () => {
+    const res = await request(app)
+      .post('/api/products/extract-label')
+      .set('Authorization', 'Bearer token')
+      .send({ rawText: 'Zutaten: Wasser, Zucker, Salz.\n' + 'a'.repeat(20_000) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('raw_text_too_long');
+    expect(mockExtractFromText).not.toHaveBeenCalled();
+  });
+
+  // The cap must measure the raw string: `.trim().length` reports 0 for a
+  // payload that is almost entirely whitespace, which is precisely the shape
+  // that used to stall the parser.
+  it('rejects a mostly-whitespace payload that trims to almost nothing', async () => {
+    const res = await request(app)
+      .post('/api/products/extract-label')
+      .set('Authorization', 'Bearer token')
+      .send({ rawText: 'Zutaten: Wasser, Zucker, Salz, Weizenmehl, Hefe, Öl.\n' + ' '.repeat(100_000) });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('raw_text_too_long');
+    expect(mockExtractFromText).not.toHaveBeenCalled();
+  });
+
+  it('accepts rawText just under the cap', async () => {
+    mockExtractFromText.mockReturnValue(FAKE_LABEL);
+
+    const res = await request(app)
+      .post('/api/products/extract-label')
+      .set('Authorization', 'Bearer token')
+      .send({ rawText: 'Zutaten: Wasser.\n' + 'a'.repeat(19_000) });
+
+    expect(res.status).toBe(200);
+    expect(mockExtractFromText).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 200 with extracted label when a multipart image file is provided', async () => {
     injectFile.buffer = Buffer.from('fake-image-bytes');
     mockOcrLabelImage.mockResolvedValue('raw OCR text from the label image');

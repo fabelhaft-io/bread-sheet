@@ -17,6 +17,16 @@ export interface ExtractedLabel {
 // All patterns use the 'm' flag so '^' anchors to the start of each line.
 // This prevents sub-entry rows ("of which saturates", "davon Zucker") from
 // matching the parent-nutrient patterns.
+//
+// ReDoS: no two quantifiers may be able to match the same character, or the
+// engine can split a run of that character between them in O(n) ways and
+// backtrack quadratically. Two rules keep the patterns linear:
+//   - `[^\d\n]*` is disjoint from the `\d+` that follows it.
+//   - the optional leading dash on sub-entry rows is written `[ \t]*(?:-[ \t]*)?`.
+//     Writing it as an optional dash *between* two separate `[ \t]*` runs is the
+//     bug that was here: both runs match a space, so a 100 KB line of spaces can
+//     be split between them in ~100k ways and cost ~27 s of blocked event loop
+//     (CodeQL js/polynomial-redos). The two forms accept exactly the same input.
 
 const ENERGY_KCAL_PATTERNS: RegExp[] = [
   // "1234 kJ / 295 kcal": skip the kJ value explicitly so [^\d\n]* between
@@ -69,22 +79,22 @@ const SALT_PATTERNS: RegExp[] = [
 
 const SUGARS_PATTERNS: RegExp[] = [
   /^[ \t]*(?:of[ \t]+which[ \t]+)?sugars?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
-  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?zucker\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:-[ \t]*)?(?:davon[ \t]+)?zucker\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*(?:dont[ \t]+)?sucres?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   // two-column OCR fallback
   /^[ \t]*(?:of[ \t]+which[ \t]+)?sugars?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
-  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?zucker\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:-[ \t]*)?(?:davon[ \t]+)?zucker\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*(?:dont[ \t]+)?sucres?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
 const SATURATED_FAT_PATTERNS: RegExp[] = [
   /^[ \t]*(?:of[ \t]+which[ \t]+)?saturate[ds]?(?:[ \t]+fat)?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
-  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?gesättigte[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:-[ \t]*)?(?:davon[ \t]+)?gesättigte[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*(?:dont[ \t]+)?acides?[ \t]+gras[ \t]+saturés?\b[^\d\n]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   // two-column OCR fallback
   /^[ \t]*of[ \t]+which[ \t]+saturate[ds]?\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*saturated?[ \t]+fat\b[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
-  /^[ \t]*[-]?[ \t]*(?:davon[ \t]+)?gesättigte[ \t]+fettsäuren[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
+  /^[ \t]*(?:-[ \t]*)?(?:davon[ \t]+)?gesättigte[ \t]+fettsäuren[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
   /^[ \t]*(?:dont[ \t]+)?acides?[ \t]+gras[ \t]+saturés?[ \t]*\n[ \t]*(\d+(?:[.,]\d+)?)[ \t]*g\b/im,
 ];
 
