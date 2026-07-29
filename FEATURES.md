@@ -188,7 +188,7 @@ User History
 - [x] Required-field validation prevents submission of incomplete data.
 - [x] Product display photo uploads to S3; the returned object key is included in the submission payload as `productImageKey`.
 - [x] On successful submission, the user is navigated to the product screen.
-- [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(server-side image plausibility shipped in P5-005; nutritional-value plausibility still deferred)*
+- [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(server-side image plausibility shipped in P5-004; nutritional-value plausibility still deferred)*
 - [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx`; `unverified` + `submittedByUserId` in the GET response)*
 - [x] The submitter of a product does not see the reviewer banner for their own submission.
 
@@ -227,7 +227,7 @@ User History
 **Visibility rules for `PENDING_REVIEW` products:**
 - Visible immediately to the submitter in their own history.
 - Visible to all other registered users in scan/search results, but flagged with an `unverified: true` field in the response so the client can render a "Needs review" badge and a "Looks correct" action.
-- Hidden from anonymous users — `GET /products/:barcode` returns `404` when the only match is `PENDING_REVIEW`. **Superseded by P5-007** (2026-07-29): anonymous users now see the product and the "Needs review" banner, but cannot vote.
+- Hidden from anonymous users — `GET /products/:barcode` returns `404` when the only match is `PENDING_REVIEW`. **Superseded by P5-008** (2026-07-29): anonymous users now see the product and the "Needs review" banner, but cannot vote.
 **Image validation & normalisation (API-side, applies to all image uploads):**
 - **Registration gate:** `POST /products` and `POST /products/extract-label` must be protected by a `requireRegistered` middleware that checks the Supabase JWT claim `is_anonymous !== true`. Anonymous tokens are rejected with `403 Forbidden` and a message directing the user to create an account. This is a defence-in-depth measure alongside the client-side gate.
 - **Size gate (pre-processing):** Reject any multipart image field exceeding **4 MB** raw with `413 Payload Too Large` before touching the bytes. Configured via `multer` `limits.fileSize` in `routes/productRoutes.ts`. This acts as a hard server-side ceiling even if the client-side 2 MB check is bypassed.
@@ -259,22 +259,14 @@ User History
 - [x] `POST /products/extract-label` also accepts a label image as a fallback and runs Google Cloud Vision inference. *(T6; `VISION_MODE=llm` routes to Gemini instead)*
 - [x] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present.
 - [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
-- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(image plausibility shipped in **P5-005** — the product/label photo is gated at upload time; nutritional-value plausibility for text submissions still deferred)*
-- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — nutritional-value flagging not yet implemented)*
 - [x] `POST /products/:barcode/verify` casts an `APPROVE` vote from a registered non-submitter; returns `403` if the caller is the submitter. *(P5-003/T7)*
-- [ ] After 2 net-approvals the product is automatically promoted to `VERIFIED`; OFF sync is enqueued. *(threshold flip shipped in T7; OFF sync enqueue deferred to **P6-005**)*
 - [x] `DELETE /products/:barcode/verify` casts a `REJECT` vote (non-submitter only); 2 net-rejections flip status to `REJECTED`. *(P5-003/T7 — overloaded REJECT channel, not a retraction)*
-- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8 — the anonymous-`404` half is superseded by **P5-007**; the `unverified`/`submission` payload stays as-is.)*
+- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8 — the anonymous-`404` half is superseded by **P5-008**; the `unverified`/`submission` payload stays as-is.)*
 
-> **Moved out of this ticket (2026-07-29).** A former AC here read *"`PENDING_REVIEW` products show for all users, with banner indicating unverified. Users that are logged in have button to review information."* It directly contradicted the AC above, and honouring it is a behaviour change to already-shipped code rather than an unfinished slice of P5-003. It is now specified in **[TICKET-P5-007]**.
+> **Moved out of this ticket (2026-07-29).** A former AC here read *"`PENDING_REVIEW` products show for all users, with banner indicating unverified. Users that are logged in have button to review information."* It directly contradicted the AC above, and honouring it is a behaviour change to already-shipped code rather than an unfinished slice of P5-003. It is now specified in **[TICKET-P5-008]**.
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
-### [TICKET-P5-004] Anonymous users and FE Fixes
-**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings should be moved to their user profile. 
-**Acceptance Criteria:**
-- [ ] TODO!!!!
-
-### [TICKET-P5-005] Product Image Plausibility & Abuse Gating
+### [TICKET-P5-004] Product Image Plausibility & Abuse Gating
 **Goal:** Run an AI plausibility check on uploaded images so the app (1) rejects images that are not the expected subject (a chair, a pet, a selfie) with actionable feedback, (2) reads correct product identity (name/brand/generic name) off the product photo so the submission form pre-fills instead of showing confusingly empty fields, and (3) flags genuinely abusive uploads (sexual / graphic) server-side for moderation. Implementation plan: `docs/P5-005-implementation-plan.md`.
 **Where it runs:** Inside `POST /api/products/upload-image`, on the in-memory buffer **before** the S3 write — so a rejected image is never persisted (no orphan objects). Both `kind=product` and `kind=label` uploads are gated.
 **Provider / config:** New `imagePlausibilityService.ts` using Gemini multimodal, behind a dedicated `PLAUSIBILITY_MODE` env var (`mock | gemini`, no default — fail-fast). `mock` accepts all (local/test). Independent of `VISION_MODE`. (`tesseract` VISION_MODE was removed in this ticket.)
@@ -295,7 +287,7 @@ User History
 - [x] `tesseract` removed from `VISION_MODE`; no remaining references in code or docs (historical dated plan docs excepted).
 - [x] Nutritional-value plausibility (kcal ranges, macro sums) on `POST /products` — still deferred to a follow-up.
 
-### [TICKET-P5-006] Product Editing & Peer-Review of Changes
+### [TICKET-P5-005] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.
 **Key design decisions (resolved 2026-05-16):**
 - **Everyone goes through the proposal flow for VERIFIED products, including the original submitter.** There is no special-case bypass for the user who originally created the product — once peer-verified, every change requires fresh peer review. The PENDING_REVIEW correction path (`PATCH /products/:barcode`) is the *only* shortcut, and it only applies while the product hasn't been verified yet.
@@ -360,11 +352,42 @@ User History
 - [x] 2 rejections discard the edit. *(Author notification: deferred.)*
 - [x] Mixed votes (1–1) wait for a third voter rather than resolving early.
 - [x] Pending edits with no votes after **2 years** are expired by a daily in-process cleanup job.
-- [ ] Verified edits are synced to OFF as updates to the existing product entry. *(Deferred to P6-005.)*
 - [x] The original submitter of a VERIFIED product must use the same proposal flow as any other user — no bypass path exists.
 - [x] When an edit is APPLIED, the existing `Rating` rows on the product remain attached and unchanged.
 - [x] When an edit is APPLIED, `Product.lastModifiedByUserId` is set to the edit's `authorUserId`; `Product.submittedByUserId` is unchanged.
 - [x] Attempting to create a second `PENDING` `ProductEdit` for the same barcode fails at the database level (partial unique index violation), not only at the API layer.
+
+### [TICKET-P5-006] FE Fixes — Eliminate Marginal Scroll
+**Goal:** When a screen overflows the viewport by only a small amount (~20 px), tighten vertical spacing so the content fits instead of leaving the user with a page that scrolls almost imperceptibly. A screen that "nearly fits" reads as broken: the scroll indicator flashes, the content rubber-bands, and there is nothing meaningful below the fold.
+
+**Affected screens** (every current `ScrollView` host): `app/(app)/product/[barcode].tsx`, `app/(app)/add-product.tsx`, `app/(app)/edit-product/[barcode].tsx`, `app/(app)/review-product/[barcode].tsx`, `app/(app)/review-edit/[editId].tsx`, `app/(tabs)/index.tsx`, `app/(tabs)/profile.tsx`. Each currently hard-codes its vertical padding (e.g. `scrollContent: { paddingBottom: 40 }` at `product/[barcode].tsx:730`), so nothing adapts to viewport height.
+
+**Approach — measure, then compact:**
+- New hook `hooks/use-fit-to-screen.ts`. It takes the `ScrollView`'s `onLayout` height (viewport) and `onContentSizeChange` height (content) and returns `{ compact: boolean }`.
+- `compact` is `true` only when `0 < overflow <= COMPACT_MAX_OVERFLOW` (default **32 px**, exported as a named constant). Above that, the screen genuinely has more content than fits and must scroll normally — leave it alone.
+- Screens consume `compact` to swap a small set of **vertical spacing tokens** (section gaps, card padding, `paddingBottom`) for tightened values. Define these as a `SPACING` / `SPACING_COMPACT` pair rather than scattering conditionals through each stylesheet.
+
+**The trap this must not fall into — oscillation.** Compacting removes the overflow, which makes the hook report "fits", which un-compacts, which re-introduces the overflow. The hook must **latch**: once `compact` is `true` it stays true, and only reverts when the *uncompacted* content would fit with at least 8 px of slack. Track the last measured uncompacted content height and compare against that, never against the compacted measurement. Any implementation that simply re-evaluates the current measurement each render will flicker.
+
+**Accessibility guardrails (non-negotiable):**
+- Never scale font sizes — only margins, padding, and gaps.
+- Never shrink an interactive element below a 44×44 px touch target.
+- Skip compaction entirely when `PixelRatio.getFontScale() > 1.3`. A user who has asked for large text is better served by scrolling than by cramped or clipped content.
+
+**Complementary cheap fix (do this regardless):** set `alwaysBounceVertical={false}` and, on Android, `overScrollMode="never"` on these `ScrollView`s so a barely-overflowing screen does not rubber-band. This alone removes much of the "feels broken" sensation and is worth landing even if the measurement work is deferred.
+
+**Out of scope:** any change to horizontal layout, font scaling, or the parallax header in `components/parallax-scroll-view.tsx` (its scroll is intentional).
+
+**Acceptance Criteria:**
+- [ ] A screen overflowing by ≤ 32 px renders without scrolling, with vertical spacing tightened.
+- [ ] A screen overflowing by more than 32 px scrolls normally, with no spacing change.
+- [ ] A screen that already fits is visually unchanged.
+- [ ] Compaction does not oscillate: once applied it holds, and re-measurement on rotation or content change does not produce visible flicker.
+- [ ] No font size changes as a result of compaction.
+- [ ] No interactive element falls below a 44×44 px touch target when compacted.
+- [ ] With the OS font scale above 1.3, compaction is skipped and the screen scrolls normally.
+- [ ] `alwaysBounceVertical={false}` (and `overScrollMode="never"` on Android) is applied to the listed screens.
+- [ ] Behaviour is verified on both a small viewport (e.g. iPhone SE) and a large one (e.g. Pixel 7 Pro) — the same screen may compact on one and not the other.
 
 ### [TICKET-P5-007] Anonymous Visibility of Pending Products
 **Goal:** Let anonymous users see `PENDING_REVIEW` products instead of hitting a "Product not found" dead end. They get the same "Needs review" banner registered users get, so they understand *why* the data may be rough — but they cannot vote. In place of the review action they see a note telling them to log in.
@@ -397,7 +420,7 @@ User History
 - [ ] A registered submitter still sees no banner for their own submission.
 - [ ] `POST`/`DELETE /products/:barcode/verify` still return `403` for anonymous tokens.
 
-**Side effect to confirm before building:** `POST /ratings` is guarded by `requireAuth` only, so anonymous users can already rate anything they can see. Making pending products visible therefore also makes them *ratable* by anonymous users — ratings attached to data that has not passed peer review yet. This ticket assumes that is acceptable (the rating survives whatever the product's metadata settles on, and the `Product.id` is preserved through both the P5-006 edit path and the `PATCH` reset path). If it is not, the fix is a `requireRegistered` — or a status check — on the rating path, and it should be its own ticket.
+**Side effect to confirm before building:** `POST /ratings` is guarded by `requireAuth` only, so anonymous users can already rate anything they can see. Making pending products visible therefore also makes them *ratable* by anonymous users — ratings attached to data that has not passed peer review yet. This ticket assumes that is acceptable (the rating survives whatever the product's metadata settles on, and the `Product.id` is preserved through both the P5-005 edit path and the `PATCH` reset path). If it is not, the fix is a `requireRegistered` — or a status check — on the rating path, and it should be its own ticket.
 
 ## Phase 6: Social
 
@@ -454,7 +477,7 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - All sync activity should be idempotent — re-running on the same product must not create duplicates (use barcode as the OFF product key).
   **Acceptance Criteria:**
 - [ ] Products promoted to `VERIFIED` via peer review are automatically submitted to Open Food Facts.
-- [ ] Peer-verified product edits (from P5-006) are synced to OFF as updates to the existing product entry, not as new submissions.
+- [ ] Peer-verified product edits (from P5-005) are synced to OFF as updates to the existing product entry, not as new submissions.
 - [ ] Product images are uploaded to OFF alongside structured data.
 - [ ] Sync failures retry with exponential back-off and cap at 5 attempts.
 - [ ] After 5 failed attempts, the product is marked `REJECTED` and the submitter is notified.
@@ -513,7 +536,7 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 **Goal:** Keep users signed in across app restarts.
 **Problem:** `lib/supabase.ts` calls `createClient` without a `storage` adapter. `persistSession` defaults to `true`, but auth-js resolves storage in the order explicit `storage` → `globalThis.localStorage` → in-memory fallback (`GoTrueClient.js:222-241`). React Native has no `localStorage`, so the session lives in memory and dies with the process. On web (`react-native-web`) `localStorage` exists, so this affects native only.
 **Why this blocks the rest of Phase 8:** without a session, `authHeaders()` returns `{}` and every request 401s. An offline cold start cannot even establish *which user's* cache to read. This is a prerequisite, not a slice of the offline feature.
-**Side effect worth noting:** anonymous users currently get a brand-new anon user id on every restart, silently orphaning their earlier ratings server-side. Fixing persistence resolves most of what **P5-004** is reaching for without any local rating store — revisit that ticket once this ships.
+**Side effect worth noting:** anonymous users currently get a brand-new anon user id on every restart, silently orphaning their earlier ratings server-side. Fixing persistence resolves most of what **P5-006** is reaching for without any local rating store — see that ticket's findings.
 **Implementation:**
 - Pass a `storage` adapter to `createClient`. Recommended: `@react-native-async-storage/async-storage` — the path Supabase documents and tests. (`expo-file-system` would preserve the project's zero-new-native-deps streak, but auth is the wrong place to be clever.)
 - Set `autoRefreshToken: true` and drive it off `AppState` so refresh pauses while backgrounded.
@@ -547,7 +570,38 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] The product cache is LRU-capped (~200); a schema-version bump wipes rather than migrates.
 - [ ] `lib/api.ts` distinguishes network failure (`NetworkError`) from HTTP errors (`ApiError`).
 
-### [TICKET-P8-003] Offline Rating Submission (Outbox)
+### [TICKET-P8-003] Anonymous Ratings — Durable and Visible
+**Goal:** Anonymous users can rate products and see those ratings, and the ratings survive both an app restart and the upgrade to a registered account.
+
+**Findings (analysis 2026-07-29) — the original framing ("stored locally, then moved to the profile on register") is not the work this needs:**
+- **Anonymous ratings are already stored server-side.** `POST /api/ratings` is guarded by `requireAuth` only (`routes/ratingRoutes.ts:12`), and Supabase anonymous sessions satisfy it. `syncUser` already creates the backing `User` row for an anonymous session, normalising the empty-string email to `null` so the `@unique` constraint isn't violated (`controllers/userController.ts:8-30`).
+- **The upgrade path already preserves identity.** `upgradeAccount` calls `supabase.auth.updateUser({ email, password })` on the *existing* session (`features/auth/index.ts:27-29`) — Supabase's documented anonymous-upgrade path, which keeps the same user id. The ratings are therefore already attached to the right user the moment the upgrade completes. **No migration code is needed, and none should be written.**
+- **What is actually broken is durability.** The session is not persisted on native (see **P8-001**), so every cold start mints a *new* anonymous user id and silently orphans the previous session's ratings. This is the entire "my votes disappeared" problem.
+- **What is deliberately hidden is visibility.** Three UI gates keep anonymous users from seeing ratings they already own: the Home tab skips the fetch (`app/(tabs)/index.tsx:248`) and renders a sign-up empty state instead (`:318`), and the product screen skips the `/api/ratings/me/:barcode` lookup for anonymous sessions (`app/(app)/product/[barcode].tsx:390-393`), so a returning anonymous user never sees their own score pre-filled.
+
+**Why not local storage:** a local store would need a merge strategy on upgrade (local vs. server, duplicate detection, clock skew between the two). The id-preserving upgrade above makes all of that unnecessary. Persisting the *session* solves the same user-visible problem with a fraction of the surface area.
+
+**Depends on:** **P8-001** (persist the Supabase session). Without it, nothing else in this ticket is durable — do not start here.
+
+**Implementation:**
+- Land P8-001 first.
+- Remove the anonymous gate in `fetchRatings` (`app/(tabs)/index.tsx:248`) and render the real ratings list for anonymous users. Keep a *softer* sign-up prompt above the list ("Create an account so these don't stay tied to this device") rather than replacing the list with it.
+- Remove the `isAnonymous` short-circuit on the existing-rating lookup in the product screen so an anonymous user re-opening a product sees their previous score pre-filled and the button reads "Update rating".
+- Leave every contribution gate exactly as it is. This ticket is about ratings only — `requireRegistered` still guards submissions, edits, verification votes, and label extraction.
+- Update `docs/architecture/frontend.md` (the P4-001 note stating guest users see a prompt *instead of* ratings) once this ships.
+
+**Edge case to handle:** if an anonymous user tries to upgrade to an email that already has an account, `updateUser` fails and their anonymous ratings stay on the anonymous id. Surface a clear error ("That email is already registered — sign in instead"). Merging two existing accounts is explicitly out of scope.
+
+**Acceptance Criteria:**
+- [ ] An anonymous user can submit a rating and, after force-quitting and relaunching, still sees it (requires P8-001).
+- [ ] An anonymous user's Home tab lists their own ratings instead of the sign-in empty state.
+- [ ] A sign-up prompt still appears for anonymous users, alongside the list rather than in place of it.
+- [ ] Re-opening a previously rated product as an anonymous user pre-fills the existing score and the submit button reads as an update.
+- [ ] Upgrading an anonymous account to email/password keeps every previously submitted rating attached, with no migration step and no duplicates.
+- [ ] Upgrading to an email that already exists shows an actionable error and does not lose the anonymous ratings.
+- [ ] Anonymous users still cannot submit products, propose edits, or cast verification votes — all contribution gates unchanged.
+
+### [TICKET-P8-004] Offline Rating Submission (Outbox)
 **Goal:** Let a user rate a product with no connectivity and have it sync later.
 **Depends on:** P8-002.
 **Why ratings are safe to queue — and nothing else is:** a rating is solely owned by one user and `POST /api/ratings` upserts on `(userId, productId)` (`ratingController.ts:57`), so replay is idempotent and last-write-wins is *correct* — the local value is the user's latest intent. There is no genuine conflict to resolve. This does **not** hold for product submissions, edits, or peer votes: those depend on server state invisible offline (image plausibility checks, the one-pending-edit `409`, the self-vote `403`). Scope the outbox to ratings only; contribution flows stay online-only.
@@ -567,6 +621,9 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - **Session storage adapter (P8-001).** AsyncStorage (documented + tested by Supabase) vs `expo-file-system` (no new native dependency). *Recommendation: AsyncStorage.*
 
 # Future Plans and Ideas
+
+## Suspicious-but-plausible submissions for nutrition info
+Flagged (`plausibilityFlag: true`) but accepted. *(nutritional-value flagging not yet implemented)*
 
 ## If user added a product, go to home screen after rating and not back to scan screen
 See title
