@@ -503,13 +503,73 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] Ownership guards are implemented as composable middleware, not adD-hoc per-controller checks.
 - [ ] All new authorization rules are covered by integration tests.
 
+## Phase 8: Offline & Performance
+
+**Context (analysis 2026-07-29):** the app has no cache layer at all. Every screen calls `api.get` directly inside `useFocusEffect`, so re-focusing refetches and offline means spinner → error text. `RecentProductsProvider` (`hooks/use-recent-products.tsx`) holds its list in plain `useState`, so "Recently Opened" is empty on every cold start — that is most of the "not snappy" feeling. The product screen makes up to three round trips per open (product, my rating, pending edit). There are no storage or state dependencies in `bread-sheet-app/`: no react-query, AsyncStorage, MMKV, SQLite, or NetInfo. The only persistence primitive in the project is `expo-file-system`, used by `lib/pending-return-to.ts`.
+
+**Substrate decision:** JSON files via `expo-file-system`, **not** SQLite. This follows the precedent P5-001 set (avoid another native module; jest-expo keeps passing without it) and the data is small — ~200 products and at most one rating per product. SQLite only earns its place if we add offline product *search by name*.
+
+### [TICKET-P8-001] Persist the Supabase Session on Device
+**Goal:** Keep users signed in across app restarts.
+**Problem:** `lib/supabase.ts` calls `createClient` without a `storage` adapter. `persistSession` defaults to `true`, but auth-js resolves storage in the order explicit `storage` → `globalThis.localStorage` → in-memory fallback (`GoTrueClient.js:222-241`). React Native has no `localStorage`, so the session lives in memory and dies with the process. On web (`react-native-web`) `localStorage` exists, so this affects native only.
+**Why this blocks the rest of Phase 8:** without a session, `authHeaders()` returns `{}` and every request 401s. An offline cold start cannot even establish *which user's* cache to read. This is a prerequisite, not a slice of the offline feature.
+**Side effect worth noting:** anonymous users currently get a brand-new anon user id on every restart, silently orphaning their earlier ratings server-side. Fixing persistence resolves most of what **P5-004** is reaching for without any local rating store — revisit that ticket once this ships.
+**Implementation:**
+- Pass a `storage` adapter to `createClient`. Recommended: `@react-native-async-storage/async-storage` — the path Supabase documents and tests. (`expo-file-system` would preserve the project's zero-new-native-deps streak, but auth is the wrong place to be clever.)
+- Set `autoRefreshToken: true` and drive it off `AppState` so refresh pauses while backgrounded.
+**Verification note:** the above was read from auth-js internals, not observed on a device. Confirm the symptom on a real cold start before building.
+**Acceptance Criteria:**
+- [ ] A registered user who force-quits and relaunches lands authenticated, without a login screen.
+- [ ] An anonymous user keeps the same user id across a restart; ratings made before the restart are still theirs.
+- [ ] An expired token is refreshed on foreground without bouncing the user to login.
+- [ ] With no network at launch, a previously signed-in user is not logged out; requests fail but the session survives.
+- [ ] Signing out clears the persisted session and all user-namespaced caches.
+
+### [TICKET-P8-002] Offline Read Cache & Snappy Startup
+**Goal:** Products, the user's own ratings, and the recents list render instantly from disk on launch and stay readable with no connectivity — the supermarket case, where the user scans something they have already looked at.
+**Depends on:** P8-001.
+**Architecture:**
+- `lib/offline/store.ts` — typed, versioned, **user-namespaced** JSON store (`v1/{userId}/…`) over `expo-file-system`. Namespacing is not optional: the anon→registered upgrade and account switching must never leak one user's votes into another's view. A schema-version mismatch wipes rather than migrates.
+- `hooks/use-cached-resource.ts` — stale-while-revalidate. Paint from cache in the first frame (no spinner on a cache hit), revalidate in the background, swap on success, keep showing cache plus an "offline" indicator on failure. This is what actually delivers "snappy".
+- Three caches: product-by-barcode (LRU-capped ~200), the `/api/users/me/ratings` payload, and the recents list (persist the existing provider's state).
+- **Index the cached ratings list by barcode and have the product screen read "my rating" from it** instead of calling `/api/ratings/me/:barcode`. This removes a round trip per product open, online as well as off.
+**Correctness trap to fix here:** `lib/api.ts` throws a raw `TypeError` from `fetch` on network failure, not an `ApiError`. P5-001's not-found branch checks `err.status === 404`, so it is safe today — but it is one refactor away from showing "This product isn't in the database yet — add it?" to someone who is merely offline. Introduce a typed `NetworkError` so "offline" and "the server said no" are structurally distinguishable.
+**Acceptance Criteria:**
+- [ ] Recently Opened survives a cold start.
+- [ ] Opening a previously viewed product with no network renders name, brand, image, nutrition, and the user's own rating from cache — no spinner, no error screen.
+- [ ] The product image renders offline (`expo-image` with `cachePolicy="memory-disk"`).
+- [ ] Cached content paints before any network request resolves; fresh data swaps in when it arrives without a visible flash.
+- [ ] An "offline" indicator appears when revalidation fails and clears on success.
+- [ ] Scanning an *uncached* barcode offline shows an offline message — **not** the "Product not found / Add this product" state.
+- [ ] The Home tab renders the cached ratings list offline; pull-to-refresh surfaces the offline state rather than emptying the list.
+- [ ] The product screen sources "my rating" from the cached ratings list instead of a second request.
+- [ ] Caches are namespaced per user id; signing out or switching accounts never shows another user's data.
+- [ ] The product cache is LRU-capped (~200); a schema-version bump wipes rather than migrates.
+- [ ] `lib/api.ts` distinguishes network failure (`NetworkError`) from HTTP errors (`ApiError`).
+
+### [TICKET-P8-003] Offline Rating Submission (Outbox)
+**Goal:** Let a user rate a product with no connectivity and have it sync later.
+**Depends on:** P8-002.
+**Why ratings are safe to queue — and nothing else is:** a rating is solely owned by one user and `POST /api/ratings` upserts on `(userId, productId)` (`ratingController.ts:57`), so replay is idempotent and last-write-wins is *correct* — the local value is the user's latest intent. There is no genuine conflict to resolve. This does **not** hold for product submissions, edits, or peer votes: those depend on server state invisible offline (image plausibility checks, the one-pending-edit `409`, the self-vote `403`). Scope the outbox to ratings only; contribution flows stay online-only.
+**Implementation:** `lib/offline/outbox.ts` — a persisted queue of `{ barcode, taste, comment, queuedAt }`, flushed on foreground or reconnect.
+**Acceptance Criteria:**
+- [ ] Submitting a rating offline shows immediate success and the value persists locally.
+- [ ] Queued ratings flush automatically on reconnect or next foreground.
+- [ ] The queue survives an app restart.
+- [ ] Replay is safe: re-sending a rating for an already-rated product updates rather than duplicates.
+- [ ] Multiple offline edits to the same product collapse to a single queued write (latest wins).
+- [ ] A queued rating is visibly marked "not yet synced"; the marker clears on success.
+- [ ] A permanent failure (4xx that is not auth) drops the item with a user-visible message; transient failures retry with back-off.
+- [ ] Product submissions, edits, and peer votes are **not** queued — they show an offline message and remain online-only.
+
+**Open choices (decide before starting P8-002):**
+- **Connectivity detection.** `@react-native-community/netinfo` gives a reliable offline banner and prompt flush, at the cost of a native dependency. P8-002 can ship without it using `AppState` plus failure-driven retry. *Recommendation: start without it; add it only if the UX feels sloppy.*
+- **Session storage adapter (P8-001).** AsyncStorage (documented + tested by Supabase) vs `expo-file-system` (no new native dependency). *Recommendation: AsyncStorage.*
+
 # Future Plans and Ideas
 
 ## If user added a product, go to home screen after rating and not back to scan screen
 See title
-
-## Ensure offline usability
-Snappy startup and offline usability - cached user votes and products on device (in supermarkets the mobile connection is often poor)
 
 ## Tracing id and Idempotency
 Help tracing the path of requests to different systems with tracing and span ids, detect duplicated requests with idempotency keys
