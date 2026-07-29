@@ -95,6 +95,13 @@ describe('ReviewEditScreen — diff rendering', () => {
     await findByText('Sourdough Boule'); // proposed
   });
 
+  it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
+    const { findByTestId } = render(<ReviewEditScreen />);
+    const scroll = await findByTestId('review-edit-screen');
+    expect(scroll.props.alwaysBounceVertical).toBe(false);
+    expect(scroll.props.overScrollMode).toBe('never');
+  });
+
   it('shows the vote tally', async () => {
     const { findByTestId } = render(<ReviewEditScreen />);
     const tally = await findByTestId('vote-tally');

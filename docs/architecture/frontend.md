@@ -20,7 +20,7 @@ bread-sheet-app/
 ├── lib/                         # Third-party client singletons + small utilities (Supabase, API, pending-return-to)
 ├── components/                  # Shared UI components and design primitives
 │   └── ui/                      # Platform-bridging components (icons, etc.)
-└── constants/                   # Design tokens (colours, theme)
+└── constants/                   # Design tokens (colours, theme, vertical spacing)
 ```
 
 ---
@@ -101,7 +101,7 @@ session + not in authenticated group  → router.replace('/(tabs)')
 no session                            → router.replace('/(auth)/login')
 ```
 
-Post-signup deep-link return: before any auth call that triggers email verification, the calling screen persists the intended destination to `AsyncStorage` under `pendingReturnTo`. On `SIGNED_IN`, the guard reads and clears this key and navigates there instead of `/(tabs)`.
+Post-signup deep-link return: before any auth call that triggers email verification, the calling screen persists the intended destination to disk under `pendingReturnTo` (`lib/pending-return-to.ts`, backed by `expo-file-system/legacy` — not AsyncStorage). On `SIGNED_IN`, the guard reads and clears this key and navigates there instead of `/(tabs)`.
 
 ---
 
@@ -223,7 +223,7 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 | `edit-form.ts` | P5-006 edit-form logic: `productToFormValues` (pre-population), `buildEditChanges` (changed-fields diff for the proposal payload), `buildCorrectionPayload` (full PATCH payload), `formHasChanges` / `validateFormValues`, `FIELD_LABELS` (shared with the diff screen) |
 | `ocr.ts` | `recogniseLabelText` — thin wrapper over `@react-native-ml-kit/text-recognition`, returns `{rawText, unavailable}` |
 | `image-picker.ts` | `captureImage` — camera or library, returns the raw URI |
-| `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError`. Emits one dev-only `log.debug('[image]')` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
+| `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 2 MB client cap (`MAX_IMAGE_BYTES`) via `ImageTooLargeError`. Emits one dev-only `log.debug('[image]')` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
 | `extract.ts` | `extractFromLabelImage` — orchestrates OCR-then-backend: text path when OCR text ≥ `MIN_OCR_LENGTH`, image fallback otherwise, never throws. Emits one dev-only `log.debug('[extract]')` line per attempt (OCR availability, text length, chosen path, plus the raw OCR text — dev-only so it never ships to prod logs) |
 
 ### Capture feedback
@@ -269,3 +269,30 @@ For registered users on `VERIFIED` products the screen additionally calls `GET /
 **Edit form** (`app/(app)/edit-product/[barcode].tsx`): same field layout as Add Product but pre-populated from the current product values; the barcode is read-only. The submit button stays disabled until something actually changed (`formHasChanges`). The product photo can optionally be replaced — the new photo is uploaded at capture time (plausibility-gated, like Add Product) and its key is included as `productImageKey` only when replaced. All form logic lives in `features/products/edit-form.ts`.
 
 **Review banner + diff screen.** When a registered non-author opens a product with a pending edit they haven't voted on or dismissed, a "Someone suggested a change" banner links to `app/(app)/review-edit/[editId].tsx`. The diff screen renders, per changed field, the `originalValues` snapshot (struck through, muted) against the proposed value (bold, accent) — the baseline comes from the edit record, not the live product. Unchanged fields sit in a collapsed section. Actions: "Looks correct" (`APPROVE`), "Something's wrong" (`REJECT`), and "Dismiss" (`POST /edits/:editId/dismissals`, a server-side record so the banner stays hidden across devices; not a vote). The current tally is shown ("1 of 2 approvals needed") without revealing who voted. Authors and users who already voted see a passive note instead of the action buttons.
+
+---
+
+## Marginal Scroll Compaction (TICKET-P5-006 FE Fixes)
+
+A screen that overflows the viewport by only a handful of pixels reads as broken: the scroll indicator flashes, the content rubber-bands, and there is nothing meaningful below the fold. Every screen-level `ScrollView` host therefore measures itself and tightens its vertical spacing when — and only when — that closes the gap.
+
+**The hook — `hooks/use-fit-to-screen.ts`.** `useFitToScreen()` returns `{ compact, scrollProps }`. Spread `scrollProps` onto the `ScrollView`; it supplies `onLayout` (viewport height), `onContentSizeChange` (content height), and the bounce suppressors `alwaysBounceVertical={false}` / `overScrollMode="never"`.
+
+| Constant | Default | Meaning |
+|----------|---------|---------|
+| `COMPACT_MAX_OVERFLOW` | 32 px | Compact only when `0 < content − viewport ≤ this`. More overflow than this is a screen that genuinely needs to scroll. |
+| `COMPACT_RELEASE_SLACK` | 8 px | Compaction is released only when the *relaxed* content fits with at least this much room to spare. |
+| `COMPACT_MAX_FONT_SCALE` | 1.3 | Above this OS font scale compaction is skipped entirely — a user who asked for large text is better served by scrolling. |
+
+**The latch (why this is not a one-liner).** Compacting removes the overflow, so re-deciding from the new measurement reports "it fits", un-compacts, re-introduces the overflow, and flickers forever. The hook never decides from a compacted measurement: it tracks the content height as it measures *uncompacted* and compares that against the viewport in both directions. While compacted the relaxed height cannot be observed, so changes to the compacted height (a section appears, text rewraps, the device rotates) are carried over to the baseline as a delta — spacing savings are constant, so the two heights move together.
+
+**The spacing tokens — `constants/spacing.ts`.** `SPACING` documents the relaxed baseline; `SPACING_COMPACT` is its tightened counterpart. Screens keep their existing (relaxed) `StyleSheet` untouched and add a single `compactStyles` sheet built from `SPACING_COMPACT`, applied as `[styles.x, compact && compactStyles.x]`. Keeping the two sheets separate means an uncompacted screen renders exactly as it did before this feature existed, and the compaction stays one reviewable block per file.
+
+**Accessibility guardrails (non-negotiable).**
+- Only margins, padding and gaps are compacted — never font sizes.
+- Never the padding *inside* a pressable. Tightening a container is free; tightening a button's own padding is what drives a touch target below 44×44. Compact overrides adjust the margin around controls, not the padding within them.
+- Above `COMPACT_MAX_FONT_SCALE` the screen scrolls normally.
+
+**Screens wired up:** `product/[barcode]`, `add-product`, `edit-product/[barcode]`, `review-product/[barcode]`, `review-edit/[editId]`, `(tabs)/index`, `(tabs)/profile`. The parallax header in `components/parallax-scroll-view.tsx` is deliberately excluded — its scroll is the point.
+
+> Testing note: `PixelRatio.getFontScale()` falls back to the pixel *density* when the window carries no `fontScale`. That never happens on a device, but jest-expo's default window reports `fontScale: 2`, so any test that exercises the compaction path must stub `PixelRatio.getFontScale`.

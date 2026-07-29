@@ -12,8 +12,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
 import { api } from '@/lib/api';
 
@@ -51,6 +53,8 @@ export default function ReviewProductScreen() {
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [imageError, setImageError] = useState(false);
+
+  const { compact, scrollProps } = useFitToScreen();
 
   useEffect(() => {
     // Skip the fetch when the caller isn't allowed to review — the render
@@ -172,8 +176,9 @@ export default function ReviewProductScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[styles.scrollContent, compact && compactStyles.scrollContent]}
       testID="review-product-screen"
+      {...scrollProps}
     >
       {product.image && !imageError ? (
         <Image
@@ -188,7 +193,7 @@ export default function ReviewProductScreen() {
         </View>
       )}
 
-      <View style={styles.infoSection}>
+      <View style={[styles.infoSection, compact && compactStyles.infoSection]}>
         <ThemedText type="title" style={styles.productName}>
           {product.name}
         </ThemedText>
@@ -201,7 +206,10 @@ export default function ReviewProductScreen() {
 
       <View style={[styles.divider, { backgroundColor: colors.icon + '33' }]} />
 
-      <View style={styles.detailsSection} testID="review-details">
+      <View
+        style={[styles.detailsSection, compact && compactStyles.detailsSection]}
+        testID="review-details"
+      >
         {rows.map(([label, value]) => (
           <View key={label} style={styles.detailRow}>
             <ThemedText style={styles.detailLabel}>{label}</ThemedText>
@@ -227,7 +235,7 @@ export default function ReviewProductScreen() {
           </ThemedText>
         </View>
       ) : (
-        <View style={styles.actionsSection}>
+        <View style={[styles.actionsSection, compact && compactStyles.actionsSection]}>
           {actionError ? (
             <ThemedText style={styles.errorText} testID="review-action-error">
               {actionError}
@@ -374,5 +382,28 @@ const styles = StyleSheet.create({
   },
   title: {
     textAlign: 'center',
+  },
+});
+
+/**
+ * Tightened vertical spacing applied when `useFitToScreen()` reports `compact`
+ * (P5-006 FE Fixes). Vertical margins/padding/gaps only — no font sizes, and
+ * no padding inside a pressable, so touch targets stay at their full size.
+ */
+const compactStyles = StyleSheet.create({
+  scrollContent: {
+    paddingBottom: SPACING_COMPACT.screenBottom,
+  },
+  infoSection: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+    gap: SPACING_COMPACT.tightGap,
+  },
+  detailsSection: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+    gap: SPACING_COMPACT.sectionGap,
+  },
+  actionsSection: {
+    paddingTop: SPACING_COMPACT.sectionGap,
+    gap: SPACING_COMPACT.sectionGap,
   },
 });

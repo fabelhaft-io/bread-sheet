@@ -101,9 +101,9 @@ User History
   - **Anonymous/guest user:** the same "This product isn't in the database yet" message, a secondary explanation ("Sign up to help add it"), and a **"Sign up"** button. Do **not** redirect automatically — the user stays on the product-not-found screen and chooses whether to act.
 **Post-signup navigation (deep-link return):**
 - When a guest taps "Sign up" from this screen, navigate to `/(auth)/signup` and pass the current barcode as a route parameter: `/(auth)/signup?returnTo=/product/[barcode]`.
-- The sign-up screen must immediately persist `returnTo` to `AsyncStorage` under the key `pendingReturnTo` before initiating any auth call. This is necessary because email verification fires a magic link that relaunches the app as a cold deep link, destroying any in-memory navigation state.
-- When the magic link returns the user to the app and `supabase.auth.onAuthStateChange` fires with a `SIGNED_IN` event, the auth completion logic in `app/_layout.tsx` reads `pendingReturnTo` from `AsyncStorage`, clears it, and navigates there instead of the default `/(tabs)` redirect — landing the user back on the product-not-found screen, now authenticated, where the "Add this product" button is visible.
-- If signup is abandoned or fails, `pendingReturnTo` is cleared from `AsyncStorage` and normal post-auth routing applies.
+- The sign-up screen must immediately persist `returnTo` to on-disk storage under the key `pendingReturnTo` before initiating any auth call. This is necessary because email verification fires a magic link that relaunches the app as a cold deep link, destroying any in-memory navigation state.
+- When the magic link returns the user to the app and `supabase.auth.onAuthStateChange` fires with a `SIGNED_IN` event, the auth completion logic in `app/_layout.tsx` reads `pendingReturnTo` from disk, clears it, and navigates there instead of the default `/(tabs)` redirect — landing the user back on the product-not-found screen, now authenticated, where the "Add this product" button is visible.
+- If signup is abandoned or fails, `pendingReturnTo` is cleared and normal post-auth routing applies.
 **Acceptance Criteria:**
 - [x] Scanning an unknown barcode shows a "Product not found" state (not an error/crash).
 - [x] Registered users see the "Add this product" button; tapping navigates to the Add Product screen with the barcode pre-filled.
@@ -150,22 +150,24 @@ User History
 **Technical notes:**
 - `@react-native-ml-kit/text-recognition` is an on-device library; add to `bread-sheet-app/` dependencies. Requires no API key.
 - Form validation: name and barcode are required; numeric nutrient fields must be non-negative.
-- Product display photo uploads go to S3 via pre-signed URL (reuse `imageService.ts` pattern). The label photo is only uploaded as a fallback if on-device OCR fails — not stored permanently.
+- The product display photo is uploaded through `POST /products/upload-image` (the API streams it to S3 — see `imageService.ts`); the endpoint returns an object **key**, which the form echoes back as `productImageKey` on submit. The client never receives or persists an absolute URL — keys are resolved to URLs at read time. The label photo is only uploaded as a fallback if on-device OCR fails — not stored permanently.
 - The OCR sufficiency threshold is `MIN_OCR_LENGTH = 50` characters, defined as a shared constant. The same value must be used on both client (to decide whether to send text or image) and referenced in the backend docs.
 **Submission payload (`POST /products` request body):**
 ```json
 {
-  "barcode": "string (required)",
+  "barcode": "string (required, 8–14 digits)",
   "name": "string (required)",
   "brand": "string | null",
   "genericName": "string | null",
   "energyKcal": "number | null",
   "carbohydrates": "number | null",
+  "sugars": "number | null",
   "fat": "number | null",
+  "saturatedFat": "number | null",
   "protein": "number | null",
   "salt": "number | null",
   "servingSize": "string | null",
-  "productImageUrl": "string (S3 URL, required)",
+  "productImageKey": "string (required — the S3 object KEY issued by POST /products/upload-image, shape `processed/{uuid}.jpg`)",
   "ingredients": "string | null"
 }
 ```
@@ -174,33 +176,33 @@ User History
   - *Product display photo*: resize to max 1200 px on the longest side, compress to JPEG at 85% quality.
   - *Label photo (OCR fallback)*: resize to max 1600 px on the longest side (higher res aids OCR accuracy), compress to JPEG at 90% quality.
 - Run manipulation after capture/selection, before showing the preview — the preview should already display the processed version.
-- If the processed file still exceeds **5 MB**, show an inline error ("Photo is too large — please try again in better lighting or closer to the subject") and block the upload.
+- If the processed file still exceeds **2 MB** (`MAX_IMAGE_BYTES` in `features/products/constants.ts`), show an inline error ("Photo is too large — please try again in better lighting or closer to the subject") and block the upload.
 **Acceptance Criteria:**
 - [x] User can photograph the product and the nutritional label from within the screen. *(client skeleton — uses `expo-image-picker` with camera + library fallback)*
 - [x] On-device OCR runs locally after the label photo is captured (no network request at this stage). *(client skeleton — `features/products/ocr.ts` gracefully degrades when the native module isn't installed)*
 - [x] If OCR text is sufficient, only the raw text (not the image) is sent to the backend.
 - [x] If OCR text is insufficient, the label image is sent as a fallback for backend vision inference.
 - [x] All images are resized and compressed client-side before upload using `expo-image-manipulator`.
-- [x] Images exceeding 5 MB after compression show an inline error and are not uploaded.
+- [x] Images exceeding 2 MB after compression show an inline error and are not uploaded.
 - [x] All three fill modes work correctly (manual, pre-fill+edit, accept-all).
 - [x] Required-field validation prevents submission of incomplete data.
-- [x] Product display photo uploads to S3; URL is included in the submission payload. *(client sends to `POST /api/products/upload-image`; backend endpoint pending P5-003)*
-- [x] On successful submission, the user is navigated to the product screen *(client navigates; backend `POST /api/products` shipped via P5-003/T3 — full end-to-end still depends on P5-003/T4 image upload)*
-- [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(client handles 422 — server-side plausibility checks pending P5-003)*
-- [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx` shipped; `unverified` + `submittedByUserId` in GET response shipped in P5-003/T8)*
+- [x] Product display photo uploads to S3; the returned object key is included in the submission payload as `productImageKey`.
+- [x] On successful submission, the user is navigated to the product screen.
+- [x] A `422` response displays the AI rejection reason inline on the form; the user can correct the data and resubmit. *(server-side image plausibility shipped in P5-004; nutritional-value plausibility still deferred)*
+- [x] Registered users who scan a `PENDING_REVIEW` product see a reviewer banner and can cast an approval or rejection. *(banner + `app/(app)/review-product/[barcode].tsx`; `unverified` + `submittedByUserId` in the GET response)*
 - [x] The submitter of a product does not see the reviewer banner for their own submission.
 
-**Implementation status (client skeleton, 2026-04-17):**
+**Implementation status (client skeleton 2026-04-17; backend complete as of 2026-07-29):**
 - Client-side multi-step flow and reviewer screen are shipped in `bread-sheet-app/app/(app)/add-product.tsx` and `app/(app)/review-product/[barcode].tsx`.
 - Business logic lives in `features/products/` (`api.ts`, `extract.ts`, `ocr.ts`, `image-picker.ts`, `image-processing.ts`, `constants.ts`, `types.ts`) — screens stay UI-only per the `features/` convention.
 - `MIN_OCR_LENGTH = 50` is exported from `features/products/constants.ts`; the backend (P5-003) must reference the same value.
 - Native modules (`@react-native-ml-kit/text-recognition`, `expo-image-picker`, `expo-image-manipulator`) are consumed via guarded `require()` so jest-expo tests pass without them. The user must install them and rebuild the native client before the full flow works end-to-end.
-- `POST /api/products` — shipped (P5-003/T3). `POST /api/products/upload-image` — shipped (P5-003/T4). `POST /api/products/extract-label` text path — shipped (P5-003/T5). Image path returns `501` (pending T6). `POST/DELETE /api/products/:barcode/verify` — shipped (P5-003/T7). `GET /api/products/:barcode` `unverified`/`submittedByUserId`/`submission` augmentation — shipped (P5-003/T8).
+- All backing endpoints are shipped: `POST /api/products` (T3), `POST /api/products/upload-image` (T4), `POST /api/products/extract-label` — both the text path (T5) and the image path (T6, Google Cloud Vision / Gemini), `POST/DELETE /api/products/:barcode/verify` (T7), and the `GET /api/products/:barcode` `unverified`/`submittedByUserId`/`submission` augmentation (T8).
 
 ### [TICKET-P5-003] Backend: Label Extraction, Submission, & Peer Verification
 **Goal:** Provide three backend capabilities: (1) structure nutritional data from on-device OCR text (primary) or a label image (fallback); (2) validate and normalise incoming images server-side; (3) accept product submissions from registered users and gate promotion to `VERIFIED` behind peer review by a second registered user.
 **Endpoints:**
-- `POST /products/extract-label` — accepts either `{ rawText: string }` (primary path, from on-device OCR) or a multipart label image (fallback path, when OCR was insufficient). Uses Claude text API for the text path; falls back to Claude vision API when an image is provided. Returns best-effort partial results on low-confidence extractions; never blocks the user flow. Response shape:
+- `POST /products/extract-label` — accepts either `{ rawText: string }` (primary path, from on-device OCR) or a multipart label image (fallback path, when OCR was insufficient). The text path runs a hand-rolled regex parser (`labelExtractionService.ts`, English + German) — no LLM call. The image path is selected by `VISION_MODE`: `live` runs Google Cloud Vision OCR and feeds the result through the same regex parser; `llm` sends the image to Gemini for one-shot structuring (`labelExtractionLlmService.ts`); `mock` returns fixtures. Returns best-effort partial results on low-confidence extractions; never blocks the user flow. Response shape:
   ```json
   {
     "name": "string | null",
@@ -208,7 +210,9 @@ User History
     "genericName": "string | null",
     "energyKcal": "number | null",
     "carbohydrates": "number | null",
+    "sugars": "number | null",
     "fat": "number | null",
+    "saturatedFat": "number | null",
     "protein": "number | null",
     "salt": "number | null",
     "servingSize": "string | null",
@@ -219,16 +223,16 @@ User History
   The `confidence` field lets the client decide whether to default to "pre-fill & edit" (`medium`/`high`) or "fill manually" (`low`).
 - `POST /products` — accepts the payload defined in P5-002. Runs AI plausibility checks, persists the product as `status: PENDING_REVIEW`, returns `201` with the created product. Only registered users may call this endpoint (see registration gate below).
 - `POST /products/:barcode/verify` — no request body. A registered user who is **not** the original submitter confirms the product data looks correct. Records a `ProductVerification` row (`userId`, `barcode`, `createdAt`). Once **2 distinct verifications** exist for a product, the backend automatically promotes it to `status: VERIFIED` and enqueues the Open Food Facts sync job. Submitters attempting to verify their own submission receive `403 Forbidden`.
-- `DELETE /products/:barcode/verify` — no request body. Allows a verifier to retract their own verification before the threshold is reached (e.g. they spotted an error after the fact).
+- `DELETE /products/:barcode/verify` — no request body. Casts a **REJECT** vote (it is not a retraction — the DELETE verb carries the negative vote). Registered non-submitters only. 2 net-rejections flip the product to `status: REJECTED`.
 **Visibility rules for `PENDING_REVIEW` products:**
 - Visible immediately to the submitter in their own history.
 - Visible to all other registered users in scan/search results, but flagged with an `unverified: true` field in the response so the client can render a "Needs review" badge and a "Looks correct" action.
-- Hidden from anonymous users — `GET /products/:barcode` returns `404` when the only match is `PENDING_REVIEW`.
+- Hidden from anonymous users — `GET /products/:barcode` returns `404` when the only match is `PENDING_REVIEW`. **Superseded by P5-008** (2026-07-29): anonymous users now see the product and the "Needs review" banner, but cannot vote.
 **Image validation & normalisation (API-side, applies to all image uploads):**
 - **Registration gate:** `POST /products` and `POST /products/extract-label` must be protected by a `requireRegistered` middleware that checks the Supabase JWT claim `is_anonymous !== true`. Anonymous tokens are rejected with `403 Forbidden` and a message directing the user to create an account. This is a defence-in-depth measure alongside the client-side gate.
-- **Size gate (pre-processing):** Reject any multipart image field exceeding **8 MB** raw with `413 Payload Too Large` before touching the bytes. Configure via `multer` (or equivalent) `limits.fileSize`. This acts as a hard server-side ceiling even if the client-side 5 MB check is bypassed.
+- **Size gate (pre-processing):** Reject any multipart image field exceeding **4 MB** raw with `413 Payload Too Large` before touching the bytes. Configured via `multer` `limits.fileSize` in `routes/productRoutes.ts`. This acts as a hard server-side ceiling even if the client-side 2 MB check is bypassed.
 - **Format normalisation:** Inspect the actual file signature (magic bytes via `file-type` or `sharp` metadata), not just the `Content-Type` header. If the image is not already JPEG or WebP, convert it to JPEG in-process using `sharp` before uploading. Unsupported formats (SVG, PDF, etc.) are rejected with `415 Unsupported Media Type`. This conversion is intentionally kept in the API (not Lambda) so that format rejection happens synchronously and the client gets an immediate error.
-- **Resize via Lambda (S3-triggered):** After validation and format normalisation, the API uploads the image to the `raw/` prefix in S3 (`raw/{uuid}.jpg`) and immediately returns the predicted processed URL (`processed/{uuid}.jpg`) to the client — it does not wait for resizing to complete. A Lambda function (defined in `terraform/`, triggered by S3 `ObjectCreated` events on the `raw/` prefix) handles the definitive resize:
+- **Resize via Lambda (S3-triggered):** After validation and format normalisation, the API uploads the image to the `raw/` prefix in S3 (`raw/{kind}/{uuid}.jpg`) and immediately returns the predicted processed object **key** (`processed/{uuid}.jpg`) to the client — it does not wait for resizing to complete. A key, not a URL: the client echoes it back on submit, and it is resolved to a URL at read time via `ASSET_BASE_URL`. A Lambda function (defined in `terraform/`, triggered by S3 `ObjectCreated` events on the `raw/` prefix) handles the definitive resize:
   - Product display photos: capped at 1200 px on the longest side.
   - Label images (OCR fallback): capped at 1600 px on the longest side.
   - Output always written as JPEG to `processed/{uuid}.jpg`.
@@ -243,33 +247,26 @@ User History
 - Add `status` enum to `Product`: `VERIFIED` (from Open Food Facts cache or peer-approved), `PENDING_REVIEW` (user-submitted, awaiting verification), `REJECTED`.
 - Add `submittedByUserId: String?` to `Product` — references the registered user who created the submission.
 - Add `plausibilityFlag: Boolean` to `Product` (default `false`) — set when AI considers data unusual but acceptable.
-- Add new model `ProductVerification`: `userId`, `barcode`, `createdAt` — composite unique key on `(userId, barcode)` to prevent duplicate votes.
+- Add new model `ProductVerification`: `productId`, `userId`, `vote` (`APPROVE | REJECT`), `createdAt` — composite unique key on `(productId, userId)` to prevent duplicate votes. (Keyed on `productId`, not `barcode`, so verifications cascade with the product row.)
 **Acceptance Criteria:**
-- [x] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403`. *(text path via T5; image path pending T6)*
-- [ ] Images larger than 8 MB are rejected with `413` before any processing occurs.
-- [ ] Images in unexpected formats are converted to JPEG via `sharp`; unsupported formats return `415`.
-- [ ] Format detection uses magic bytes, not `Content-Type`.
-- [ ] After upload, a Lambda automatically resizes images to the appropriate cap and writes to the `processed/` S3 prefix.
-- [ ] The API returns the predicted `processed/` URL immediately without waiting for the Lambda.
-- [x] `POST /products/extract-label` accepts raw OCR text and returns structured nutritional fields. *(T5: hand-rolled regex parser, English + German; Claude/Vision approach superseded — see implementation plan)*
-- [ ] `POST /products/extract-label` also accepts a label image as a fallback and runs Google Cloud Vision inference. *(pending T6)*
-- [x] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present. *(text path T5; image path returns 501 until T6)*
+- [x] Anonymous users calling `POST /products` or `POST /products/extract-label` receive `403` (both the text and the image path).
+- [x] Images larger than 4 MB are rejected with `413` before any processing occurs.
+- [x] Images in unexpected formats are converted to JPEG via `sharp`; unsupported formats return `415`.
+- [x] Format detection uses magic bytes, not `Content-Type`. *(`file-type`'s `fileTypeFromBuffer`)*
+- [x] After upload, a Lambda automatically resizes images to the appropriate cap and writes to the `processed/` S3 prefix. *(`server/lambda/imageResizer`; wired up in `terraform/lambda.tf` and, locally, by `scripts/localstack-init.sh`)*
+- [x] The API returns the predicted `processed/` object key immediately without waiting for the Lambda.
+- [x] `POST /products/extract-label` accepts raw OCR text and returns structured nutritional fields. *(T5: hand-rolled regex parser, English + German; the original Claude-based approach was superseded — see implementation plan)*
+- [x] `POST /products/extract-label` also accepts a label image as a fallback and runs Google Cloud Vision inference. *(T6; `VISION_MODE=llm` routes to Gemini instead)*
+- [x] The text path is used whenever `rawText` is provided; the image path is only invoked when no text is present.
 - [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
-- [ ] AI plausibility check runs synchronously before the response; clearly implausible submissions return a `422` with a human-readable reason. *(image plausibility shipped in **P5-005** — the product/label photo is gated at upload time; nutritional-value plausibility for text submissions still deferred)*
-- [ ] Suspicious-but-plausible submissions are flagged (`plausibilityFlag: true`) but accepted. *(deferred — nutritional-value flagging not yet implemented)*
 - [x] `POST /products/:barcode/verify` casts an `APPROVE` vote from a registered non-submitter; returns `403` if the caller is the submitter. *(P5-003/T7)*
-- [ ] After 2 net-approvals the product is automatically promoted to `VERIFIED`; OFF sync is enqueued. *(threshold flip shipped in T7; OFF sync enqueue deferred to P5-004)*
 - [x] `DELETE /products/:barcode/verify` casts a `REJECT` vote (non-submitter only); 2 net-rejections flip status to `REJECTED`. *(P5-003/T7 — overloaded REJECT channel, not a retraction)*
-- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8)*
-- [ ] `PENDING_REVIEW` products show for all users, with banner indicating unverified. Users that are logged in have button to review information.
+- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8 — the anonymous-`404` half is superseded by **P5-008**; the `unverified`/`submission` payload stays as-is.)*
+
+> **Moved out of this ticket (2026-07-29).** A former AC here read *"`PENDING_REVIEW` products show for all users, with banner indicating unverified. Users that are logged in have button to review information."* It directly contradicted the AC above, and honouring it is a behaviour change to already-shipped code rather than an unfinished slice of P5-003. It is now specified in **[TICKET-P5-008]**.
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
-### [TICKET-P5-004] Anonymous users and FE Fixes
-**Goal:** Anonymous users can rate products, too. These ratings are stored locally. If they register, these ratings should be moved to their user profile. 
-**Acceptance Criteria:**
-- [ ] TODO!!!!
-
-### [TICKET-P5-005] Product Image Plausibility & Abuse Gating
+### [TICKET-P5-004] Product Image Plausibility & Abuse Gating
 **Goal:** Run an AI plausibility check on uploaded images so the app (1) rejects images that are not the expected subject (a chair, a pet, a selfie) with actionable feedback, (2) reads correct product identity (name/brand/generic name) off the product photo so the submission form pre-fills instead of showing confusingly empty fields, and (3) flags genuinely abusive uploads (sexual / graphic) server-side for moderation. Implementation plan: `docs/P5-005-implementation-plan.md`.
 **Where it runs:** Inside `POST /api/products/upload-image`, on the in-memory buffer **before** the S3 write — so a rejected image is never persisted (no orphan objects). Both `kind=product` and `kind=label` uploads are gated.
 **Provider / config:** New `imagePlausibilityService.ts` using Gemini multimodal, behind a dedicated `PLAUSIBILITY_MODE` env var (`mock | gemini`, no default — fail-fast). `mock` accepts all (local/test). Independent of `VISION_MODE`. (`tesseract` VISION_MODE was removed in this ticket.)
@@ -290,7 +287,7 @@ User History
 - [x] `tesseract` removed from `VISION_MODE`; no remaining references in code or docs (historical dated plan docs excepted).
 - [x] Nutritional-value plausibility (kcal ranges, macro sums) on `POST /products` — still deferred to a follow-up.
 
-### [TICKET-P5-006] Product Editing & Peer-Review of Changes
+### [TICKET-P5-005] Product Editing & Peer-Review of Changes
 **Goal:** Allow registered users to propose corrections to existing product data. Changes are not applied immediately — two other registered users must review and confirm the diff before it takes effect. Verified edits are synced back to Open Food Facts.
 **Key design decisions (resolved 2026-05-16):**
 - **Everyone goes through the proposal flow for VERIFIED products, including the original submitter.** There is no special-case bypass for the user who originally created the product — once peer-verified, every change requires fresh peer review. The PENDING_REVIEW correction path (`PATCH /products/:barcode`) is the *only* shortcut, and it only applies while the product hasn't been verified yet.
@@ -326,7 +323,7 @@ User History
 - Tie-breaking: if votes are mixed (e.g. 1 approve + 1 reject), wait for a third voter to reach 2 on either side.
 - Edits that receive no votes within **2 years** are automatically expired (`status: EXPIRED`) by a scheduled cleanup job. *(Was 30 days; widened 2026-07-03 for the current user-base size.)*
 **OFF sync for edits:**
-- Reuses the P5-004 sync infrastructure. On `APPLIED`, enqueue an OFF update for the changed fields only (partial update via the OFF product write API). Image fields are re-uploaded to OFF if they changed.
+- Reuses the P6-005 sync infrastructure. On `APPLIED`, enqueue an OFF update for the changed fields only (partial update via the OFF product write API). Image fields are re-uploaded to OFF if they changed.
 - Sync is idempotent — uses the barcode as the OFF product key, so repeated syncs update rather than duplicate.
 **Schema additions:**
 - Add to `Product`: `lastModifiedByUserId: String?` — references the user whose edit was most recently APPLIED. Set by the edit-resolution job at the moment a `ProductEdit` flips to APPLIED. Stays `null` until the first applied edit. `submittedByUserId` is intentionally left untouched on edit so the original-author attribution is preserved permanently.
@@ -355,19 +352,79 @@ User History
 - [x] 2 rejections discard the edit. *(Author notification: deferred.)*
 - [x] Mixed votes (1–1) wait for a third voter rather than resolving early.
 - [x] Pending edits with no votes after **2 years** are expired by a daily in-process cleanup job.
-- [ ] Verified edits are synced to OFF as updates to the existing product entry. *(Deferred to P6-005.)*
 - [x] The original submitter of a VERIFIED product must use the same proposal flow as any other user — no bypass path exists.
 - [x] When an edit is APPLIED, the existing `Rating` rows on the product remain attached and unchanged.
 - [x] When an edit is APPLIED, `Product.lastModifiedByUserId` is set to the edit's `authorUserId`; `Product.submittedByUserId` is unchanged.
 - [x] Attempting to create a second `PENDING` `ProductEdit` for the same barcode fails at the database level (partial unique index violation), not only at the API layer.
 
+### [TICKET-P5-006] FE Fixes — Eliminate Marginal Scroll
+**Goal:** When a screen overflows the viewport by only a small amount (~20 px), tighten vertical spacing so the content fits instead of leaving the user with a page that scrolls almost imperceptibly. A screen that "nearly fits" reads as broken: the scroll indicator flashes, the content rubber-bands, and there is nothing meaningful below the fold.
+
+**Affected screens** (every current `ScrollView` host): `app/(app)/product/[barcode].tsx`, `app/(app)/add-product.tsx`, `app/(app)/edit-product/[barcode].tsx`, `app/(app)/review-product/[barcode].tsx`, `app/(app)/review-edit/[editId].tsx`, `app/(tabs)/index.tsx`, `app/(tabs)/profile.tsx`. Each currently hard-codes its vertical padding (e.g. `scrollContent: { paddingBottom: 40 }` at `product/[barcode].tsx:730`), so nothing adapts to viewport height.
+
+**Approach — measure, then compact:**
+- New hook `hooks/use-fit-to-screen.ts`. It takes the `ScrollView`'s `onLayout` height (viewport) and `onContentSizeChange` height (content) and returns `{ compact: boolean }`.
+- `compact` is `true` only when `0 < overflow <= COMPACT_MAX_OVERFLOW` (default **32 px**, exported as a named constant). Above that, the screen genuinely has more content than fits and must scroll normally — leave it alone.
+- Screens consume `compact` to swap a small set of **vertical spacing tokens** (section gaps, card padding, `paddingBottom`) for tightened values. Define these as a `SPACING` / `SPACING_COMPACT` pair rather than scattering conditionals through each stylesheet.
+
+**The trap this must not fall into — oscillation.** Compacting removes the overflow, which makes the hook report "fits", which un-compacts, which re-introduces the overflow. The hook must **latch**: once `compact` is `true` it stays true, and only reverts when the *uncompacted* content would fit with at least 8 px of slack. Track the last measured uncompacted content height and compare against that, never against the compacted measurement. Any implementation that simply re-evaluates the current measurement each render will flicker.
+
+**Accessibility guardrails (non-negotiable):**
+- Never scale font sizes — only margins, padding, and gaps.
+- Never shrink an interactive element below a 44×44 px touch target.
+- Skip compaction entirely when `PixelRatio.getFontScale() > 1.3`. A user who has asked for large text is better served by scrolling than by cramped or clipped content.
+
+**Complementary cheap fix (do this regardless):** set `alwaysBounceVertical={false}` and, on Android, `overScrollMode="never"` on these `ScrollView`s so a barely-overflowing screen does not rubber-band. This alone removes much of the "feels broken" sensation and is worth landing even if the measurement work is deferred.
+
+**Out of scope:** any change to horizontal layout, font scaling, or the parallax header in `components/parallax-scroll-view.tsx` (its scroll is intentional).
+
+**Acceptance Criteria:**
+- [x] A screen overflowing by ≤ 32 px renders without scrolling, with vertical spacing tightened.
+- [x] A screen overflowing by more than 32 px scrolls normally, with no spacing change.
+- [x] A screen that already fits is visually unchanged. *(Base stylesheets are untouched; compaction lives in a separate `compactStyles` sheet applied only when `compact` is true.)*
+- [x] Compaction does not oscillate: once applied it holds, and re-measurement on rotation or content change does not produce visible flicker.
+- [x] No font size changes as a result of compaction.
+- [x] No interactive element falls below a 44×44 px touch target when compacted. *(Structural: compact overrides never touch the padding inside a pressable — only container padding/gaps and the margins around controls.)*
+- [x] With the OS font scale above 1.3, compaction is skipped and the screen scrolls normally.
+- [x] `alwaysBounceVertical={false}` (and `overScrollMode="never"` on Android) is applied to the listed screens.
+
+### [TICKET-P5-007] Anonymous Visibility of Pending Products
+**Goal:** Let anonymous users see `PENDING_REVIEW` products instead of hitting a "Product not found" dead end. They get the same "Needs review" banner registered users get, so they understand *why* the data may be rough — but they cannot vote. In place of the review action they see a note telling them to log in.
+**Supersedes:** the visibility rule in P5-003 that returns `404` to anonymous callers for `PENDING_REVIEW` products.
+**Rationale:** the `404` was chosen so unverified, user-supplied content was only ever shown to accountable (registered) users. In practice it produces a worse failure than the problem it avoids: an anonymous user who scans a barcode a neighbour just submitted is told the product does not exist, and the app offers them nothing. Showing the product behind an explicit "unverified" banner is honest about the data quality while keeping every write path registered-only, which is where the abuse risk actually lives.
+
+**Backend — `GET /products/:barcode`:**
+- Drop the anonymous `PENDING_REVIEW` → `404` branch in `productController.getProductByBarcode`. Anonymous callers receive the product with `unverified: true` and the same `submission` block registered users get.
+- **Do not** include `submittedByUserId` in responses to anonymous callers. Registered clients need it for the "don't show me a banner for my own submission" check; anonymous users cannot submit, so the field has no purpose for them and omitting it avoids handing a user UUID to an unauthenticated session (see `docs/architecture/data.md` §5.4 on that linkage).
+- No change to any write path. `POST`/`DELETE /products/:barcode/verify` keep `requireRegistered`, so an anonymous token still gets `403`. The client-side gate below is UX, not the security boundary.
+- `REJECTED` products remain invisible to everyone — this ticket only changes `PENDING_REVIEW`.
+
+**Frontend — Product Detail screen (`app/(app)/product/[barcode].tsx`):**
+- The "Needs review" banner currently renders only when `product.unverified && !isAnonymous && product.submittedByUserId !== userId`. Drop the `!isAnonymous` condition so anonymous users see it too.
+- For anonymous users the banner is **informational, not interactive**: it must not be a `TouchableOpacity`, must not navigate to `app/(app)/review-product/[barcode].tsx`, and must carry a third line of copy — "Log in to review this product." — in place of the tap affordance.
+- Keep the banner copy otherwise identical ("Needs review" / "This product was added by a user — does it look correct?") so both audiences read the same explanation of the product's state.
+- Registered-user behaviour is unchanged, including the rule that submitters do not see the banner for their own submission.
+- Out of scope: making the anonymous note tappable. The P5-001 `returnTo` deep-link pattern is available if we later want it to route into signup and return here, but this ticket ships a plain note.
+
+**Frontend — Reviewer screen (`app/(app)/review-product/[barcode].tsx`):**
+- Unchanged. It already refuses to render for `!session || isAnonymous`; that guard stays as defence-in-depth for deep links.
+
+**Acceptance Criteria:**
+- [ ] `GET /products/:barcode` returns a `PENDING_REVIEW` product to an anonymous caller with `unverified: true` and the `submission` block, instead of `404`.
+- [ ] That response omits `submittedByUserId`; the registered-user response still includes it.
+- [ ] `REJECTED` products still return `404` for every caller.
+- [ ] An anonymous user viewing a `PENDING_REVIEW` product sees the "Needs review" banner with the same title and explanation a registered user sees.
+- [ ] The anonymous banner additionally shows "Log in to review this product." and is not tappable — no navigation to the reviewer screen occurs on press.
+- [ ] A registered non-submitter still sees the tappable banner and can still open the reviewer screen and vote.
+- [ ] A registered submitter still sees no banner for their own submission.
+- [ ] `POST`/`DELETE /products/:barcode/verify` still return `403` for anonymous tokens.
+
+**Side effect to confirm before building:** `POST /ratings` is guarded by `requireAuth` only, so anonymous users can already rate anything they can see. Making pending products visible therefore also makes them *ratable* by anonymous users — ratings attached to data that has not passed peer review yet. This ticket assumes that is acceptable (the rating survives whatever the product's metadata settles on, and the `Product.id` is preserved through both the P5-005 edit path and the `PATCH` reset path). If it is not, the fix is a `requireRegistered` — or a status check — on the rating path, and it should be its own ticket.
+
 ## Phase 6: Social
 
-### [TICKET-P6-001]  Add Product Categories
+### [TICKET-P6-001]  Add Allergen Information
 Add allergenic information to products.
-
-### [TICKET-P6-001]  Add Product Categories
-Allow easy selection to see own votes in categories (e.g. what wine I liked, what cigars, what cocktails)
 
 ### [TICKET-P6-002] Group Management
 **Goal:** Enable private sharing contexts. E.g., a household shares ratings for basic foods while enabling different opinios.
@@ -383,7 +440,10 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] User can create a group.
 - [ ] User can join a group with a code.
 - [ ] Ratings can be filtered by group context.
-- 
+
+### [TICKET-P6-003]  Add Product Categories
+Allow easy selection to see own votes in categories (e.g. what wine I liked, what cigars, what cocktails)
+
 ### [TICKET-P6-004] User Scenario - Supermarket Lookup
 - If rating (personal or group) is already given, show not a rating screen but a rating overview (personal, groups (same logic, highest with user, and median))
 
@@ -401,7 +461,7 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - **Edit sync (triggered when a `ProductEdit` reaches `status: APPLIED`):**
     1. Fetch the `ProductEdit` record and its `proposedChanges` JSON.
     2. Submit only the changed fields to OFF using the same product write API (partial update — OFF uses the barcode to identify the existing entry and merges the provided fields).
-    3. Re-upload image to OFF only if `productImageUrl` is in `proposedChanges`.
+    3. Re-upload image to OFF only if `productImageKey` is in `proposedChanges`.
     4. Same retry and failure logic as new product sync; failure notification goes to the edit author.
 - Image assets (product photo) are pushed to OFF's image upload endpoint; the label photo is never stored or sent.
 - All sync activity is idempotent — re-running on the same barcode updates the existing OFF entry rather than creating a duplicate.
@@ -465,13 +525,107 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] Ownership guards are implemented as composable middleware, not adD-hoc per-controller checks.
 - [ ] All new authorization rules are covered by integration tests.
 
+## Phase 8: Offline & Performance
+
+**Context (analysis 2026-07-29):** the app has no cache layer at all. Every screen calls `api.get` directly inside `useFocusEffect`, so re-focusing refetches and offline means spinner → error text. `RecentProductsProvider` (`hooks/use-recent-products.tsx`) holds its list in plain `useState`, so "Recently Opened" is empty on every cold start — that is most of the "not snappy" feeling. The product screen makes up to three round trips per open (product, my rating, pending edit). There are no storage or state dependencies in `bread-sheet-app/`: no react-query, AsyncStorage, MMKV, SQLite, or NetInfo. The only persistence primitive in the project is `expo-file-system`, used by `lib/pending-return-to.ts`.
+
+**Substrate decision:** JSON files via `expo-file-system`, **not** SQLite. This follows the precedent P5-001 set (avoid another native module; jest-expo keeps passing without it) and the data is small — ~200 products and at most one rating per product. SQLite only earns its place if we add offline product *search by name*.
+
+### [TICKET-P8-001] Persist the Supabase Session on Device
+**Goal:** Keep users signed in across app restarts.
+**Problem:** `lib/supabase.ts` calls `createClient` without a `storage` adapter. `persistSession` defaults to `true`, but auth-js resolves storage in the order explicit `storage` → `globalThis.localStorage` → in-memory fallback (`GoTrueClient.js:222-241`). React Native has no `localStorage`, so the session lives in memory and dies with the process. On web (`react-native-web`) `localStorage` exists, so this affects native only.
+**Why this blocks the rest of Phase 8:** without a session, `authHeaders()` returns `{}` and every request 401s. An offline cold start cannot even establish *which user's* cache to read. This is a prerequisite, not a slice of the offline feature.
+**Side effect worth noting:** anonymous users currently get a brand-new anon user id on every restart, silently orphaning their earlier ratings server-side. Fixing persistence resolves most of what **P5-006** is reaching for without any local rating store — see that ticket's findings.
+**Implementation:**
+- Pass a `storage` adapter to `createClient`. Recommended: `@react-native-async-storage/async-storage` — the path Supabase documents and tests. (`expo-file-system` would preserve the project's zero-new-native-deps streak, but auth is the wrong place to be clever.)
+- Set `autoRefreshToken: true` and drive it off `AppState` so refresh pauses while backgrounded.
+**Verification note:** the above was read from auth-js internals, not observed on a device. Confirm the symptom on a real cold start before building.
+**Acceptance Criteria:**
+- [ ] A registered user who force-quits and relaunches lands authenticated, without a login screen.
+- [ ] An anonymous user keeps the same user id across a restart; ratings made before the restart are still theirs.
+- [ ] An expired token is refreshed on foreground without bouncing the user to login.
+- [ ] With no network at launch, a previously signed-in user is not logged out; requests fail but the session survives.
+- [ ] Signing out clears the persisted session and all user-namespaced caches.
+
+### [TICKET-P8-002] Offline Read Cache & Snappy Startup
+**Goal:** Products, the user's own ratings, and the recents list render instantly from disk on launch and stay readable with no connectivity — the supermarket case, where the user scans something they have already looked at.
+**Depends on:** P8-001.
+**Architecture:**
+- `lib/offline/store.ts` — typed, versioned, **user-namespaced** JSON store (`v1/{userId}/…`) over `expo-file-system`. Namespacing is not optional: the anon→registered upgrade and account switching must never leak one user's votes into another's view. A schema-version mismatch wipes rather than migrates.
+- `hooks/use-cached-resource.ts` — stale-while-revalidate. Paint from cache in the first frame (no spinner on a cache hit), revalidate in the background, swap on success, keep showing cache plus an "offline" indicator on failure. This is what actually delivers "snappy".
+- Three caches: product-by-barcode (LRU-capped ~200), the `/api/users/me/ratings` payload, and the recents list (persist the existing provider's state).
+- **Index the cached ratings list by barcode and have the product screen read "my rating" from it** instead of calling `/api/ratings/me/:barcode`. This removes a round trip per product open, online as well as off.
+**Correctness trap to fix here:** `lib/api.ts` throws a raw `TypeError` from `fetch` on network failure, not an `ApiError`. P5-001's not-found branch checks `err.status === 404`, so it is safe today — but it is one refactor away from showing "This product isn't in the database yet — add it?" to someone who is merely offline. Introduce a typed `NetworkError` so "offline" and "the server said no" are structurally distinguishable.
+**Acceptance Criteria:**
+- [ ] Recently Opened survives a cold start.
+- [ ] Opening a previously viewed product with no network renders name, brand, image, nutrition, and the user's own rating from cache — no spinner, no error screen.
+- [ ] The product image renders offline (`expo-image` with `cachePolicy="memory-disk"`).
+- [ ] Cached content paints before any network request resolves; fresh data swaps in when it arrives without a visible flash.
+- [ ] An "offline" indicator appears when revalidation fails and clears on success.
+- [ ] Scanning an *uncached* barcode offline shows an offline message — **not** the "Product not found / Add this product" state.
+- [ ] The Home tab renders the cached ratings list offline; pull-to-refresh surfaces the offline state rather than emptying the list.
+- [ ] The product screen sources "my rating" from the cached ratings list instead of a second request.
+- [ ] Caches are namespaced per user id; signing out or switching accounts never shows another user's data.
+- [ ] The product cache is LRU-capped (~200); a schema-version bump wipes rather than migrates.
+- [ ] `lib/api.ts` distinguishes network failure (`NetworkError`) from HTTP errors (`ApiError`).
+
+### [TICKET-P8-003] Anonymous Ratings — Durable and Visible
+**Goal:** Anonymous users can rate products and see those ratings, and the ratings survive both an app restart and the upgrade to a registered account.
+
+**Findings (analysis 2026-07-29) — the original framing ("stored locally, then moved to the profile on register") is not the work this needs:**
+- **Anonymous ratings are already stored server-side.** `POST /api/ratings` is guarded by `requireAuth` only (`routes/ratingRoutes.ts:12`), and Supabase anonymous sessions satisfy it. `syncUser` already creates the backing `User` row for an anonymous session, normalising the empty-string email to `null` so the `@unique` constraint isn't violated (`controllers/userController.ts:8-30`).
+- **The upgrade path already preserves identity.** `upgradeAccount` calls `supabase.auth.updateUser({ email, password })` on the *existing* session (`features/auth/index.ts:27-29`) — Supabase's documented anonymous-upgrade path, which keeps the same user id. The ratings are therefore already attached to the right user the moment the upgrade completes. **No migration code is needed, and none should be written.**
+- **What is actually broken is durability.** The session is not persisted on native (see **P8-001**), so every cold start mints a *new* anonymous user id and silently orphans the previous session's ratings. This is the entire "my votes disappeared" problem.
+- **What is deliberately hidden is visibility.** Three UI gates keep anonymous users from seeing ratings they already own: the Home tab skips the fetch (`app/(tabs)/index.tsx:248`) and renders a sign-up empty state instead (`:318`), and the product screen skips the `/api/ratings/me/:barcode` lookup for anonymous sessions (`app/(app)/product/[barcode].tsx:390-393`), so a returning anonymous user never sees their own score pre-filled.
+
+**Why not local storage:** a local store would need a merge strategy on upgrade (local vs. server, duplicate detection, clock skew between the two). The id-preserving upgrade above makes all of that unnecessary. Persisting the *session* solves the same user-visible problem with a fraction of the surface area.
+
+**Depends on:** **P8-001** (persist the Supabase session). Without it, nothing else in this ticket is durable — do not start here.
+
+**Implementation:**
+- Land P8-001 first.
+- Remove the anonymous gate in `fetchRatings` (`app/(tabs)/index.tsx:248`) and render the real ratings list for anonymous users. Keep a *softer* sign-up prompt above the list ("Create an account so these don't stay tied to this device") rather than replacing the list with it.
+- Remove the `isAnonymous` short-circuit on the existing-rating lookup in the product screen so an anonymous user re-opening a product sees their previous score pre-filled and the button reads "Update rating".
+- Leave every contribution gate exactly as it is. This ticket is about ratings only — `requireRegistered` still guards submissions, edits, verification votes, and label extraction.
+- Update `docs/architecture/frontend.md` (the P4-001 note stating guest users see a prompt *instead of* ratings) once this ships.
+
+**Edge case to handle:** if an anonymous user tries to upgrade to an email that already has an account, `updateUser` fails and their anonymous ratings stay on the anonymous id. Surface a clear error ("That email is already registered — sign in instead"). Merging two existing accounts is explicitly out of scope.
+
+**Acceptance Criteria:**
+- [ ] An anonymous user can submit a rating and, after force-quitting and relaunching, still sees it (requires P8-001).
+- [ ] An anonymous user's Home tab lists their own ratings instead of the sign-in empty state.
+- [ ] A sign-up prompt still appears for anonymous users, alongside the list rather than in place of it.
+- [ ] Re-opening a previously rated product as an anonymous user pre-fills the existing score and the submit button reads as an update.
+- [ ] Upgrading an anonymous account to email/password keeps every previously submitted rating attached, with no migration step and no duplicates.
+- [ ] Upgrading to an email that already exists shows an actionable error and does not lose the anonymous ratings.
+- [ ] Anonymous users still cannot submit products, propose edits, or cast verification votes — all contribution gates unchanged.
+
+### [TICKET-P8-004] Offline Rating Submission (Outbox)
+**Goal:** Let a user rate a product with no connectivity and have it sync later.
+**Depends on:** P8-002.
+**Why ratings are safe to queue — and nothing else is:** a rating is solely owned by one user and `POST /api/ratings` upserts on `(userId, productId)` (`ratingController.ts:57`), so replay is idempotent and last-write-wins is *correct* — the local value is the user's latest intent. There is no genuine conflict to resolve. This does **not** hold for product submissions, edits, or peer votes: those depend on server state invisible offline (image plausibility checks, the one-pending-edit `409`, the self-vote `403`). Scope the outbox to ratings only; contribution flows stay online-only.
+**Implementation:** `lib/offline/outbox.ts` — a persisted queue of `{ barcode, taste, comment, queuedAt }`, flushed on foreground or reconnect.
+**Acceptance Criteria:**
+- [ ] Submitting a rating offline shows immediate success and the value persists locally.
+- [ ] Queued ratings flush automatically on reconnect or next foreground.
+- [ ] The queue survives an app restart.
+- [ ] Replay is safe: re-sending a rating for an already-rated product updates rather than duplicates.
+- [ ] Multiple offline edits to the same product collapse to a single queued write (latest wins).
+- [ ] A queued rating is visibly marked "not yet synced"; the marker clears on success.
+- [ ] A permanent failure (4xx that is not auth) drops the item with a user-visible message; transient failures retry with back-off.
+- [ ] Product submissions, edits, and peer votes are **not** queued — they show an offline message and remain online-only.
+
+**Open choices (decide before starting P8-002):**
+- **Connectivity detection.** `@react-native-community/netinfo` gives a reliable offline banner and prompt flush, at the cost of a native dependency. P8-002 can ship without it using `AppState` plus failure-driven retry. *Recommendation: start without it; add it only if the UX feels sloppy.*
+- **Session storage adapter (P8-001).** AsyncStorage (documented + tested by Supabase) vs `expo-file-system` (no new native dependency). *Recommendation: AsyncStorage.*
+
 # Future Plans and Ideas
+
+## Suspicious-but-plausible submissions for nutrition info
+Flagged (`plausibilityFlag: true`) but accepted. *(nutritional-value flagging not yet implemented)*
 
 ## If user added a product, go to home screen after rating and not back to scan screen
 See title
-
-## Ensure offline usability
-Snappy startup and offline usability - cached user votes and products on device (in supermarkets the mobile connection is often poor)
 
 ## Tracing id and Idempotency
 Help tracing the path of requests to different systems with tracing and span ids, detect duplicated requests with idempotency keys

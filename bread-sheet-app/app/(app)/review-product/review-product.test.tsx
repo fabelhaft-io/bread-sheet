@@ -133,4 +133,21 @@ describe('ReviewProductScreen', () => {
     await findByTestId('review-details');
     expect(getAllByText('Not provided').length).toBeGreaterThanOrEqual(9);
   });
+
+  it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
+    api.get.mockResolvedValue({
+      id: 'p1',
+      barcode: '0000000000001',
+      name: 'Mystery bread',
+      brand: null,
+      image: null,
+      description: null,
+      unverified: true,
+      submission: { submittedByUserId: 'submitter' },
+    });
+    const { findByTestId } = render(<ReviewProductScreen />);
+    const scroll = await findByTestId('review-product-screen');
+    expect(scroll.props.alwaysBounceVertical).toBe(false);
+    expect(scroll.props.overScrollMode).toBe('never');
+  });
 });

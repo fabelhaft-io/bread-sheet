@@ -138,7 +138,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. |
+| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. *(P5-007 will change this: anonymous callers will receive the product with the `unverified` banner data but without `submittedByUserId`, and still cannot vote.)* |
 | `POST` | `/products/upload-image` | Auth | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ imageKey, name, brand, genericName }`; for `kind=label` returns `{ imageKey }`. `imageKey` is the `processed/{uuid}.jpg` S3 object key — echoed back as `productImageKey` in the submission |
 | `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/live/llm) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
@@ -226,7 +226,7 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
 
 ## Image Processing
 
-1. **API (synchronous):** Validates raw upload (size gate: 8 MB max via `multer`; format detection via magic bytes). Rejects unsupported formats (`415`).
+1. **API (synchronous):** Validates raw upload (size gate: 4 MB max via `multer` (`413`); format detection via magic bytes). Rejects unsupported formats (`415`).
 2. **Plausibility / abuse gate (synchronous, P5-005):** `imagePlausibilityService.checkImage(buffer, mime, kind)` runs on the in-memory buffer **before** any S3 write. Gated by `PLAUSIBILITY_MODE` (`mock` accepts all; `gemini` runs a Gemini multimodal classification). Applies to **both** `product` and `label` uploads. Verdicts:
    - `ok` → proceed. For `product` photos the same call also returns front-of-pack `name`/`brand`/`genericName` suggestions (returned to the client to pre-fill the Add Product form).
    - `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.

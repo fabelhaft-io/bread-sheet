@@ -129,6 +129,13 @@ describe('EditProductScreen — pre-population & unchanged submits', () => {
     expect((await findByTestId('field-ingredients')).props.value).toBe('Flour, water, salt');
   });
 
+  it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
+    const { findByTestId } = render(<EditProductScreen />);
+    const scroll = await findByTestId('edit-product-screen');
+    expect(scroll.props.alwaysBounceVertical).toBe(false);
+    expect(scroll.props.overScrollMode).toBe('never');
+  });
+
   it('renders the barcode read-only', async () => {
     const { findByTestId } = render(<EditProductScreen />);
     const barcodeField = await findByTestId('field-barcode');

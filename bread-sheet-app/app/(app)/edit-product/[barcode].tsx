@@ -16,8 +16,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
 import { ApiError, api } from '@/lib/api';
 import { formatApiError } from '@/lib/format-error';
@@ -83,6 +85,8 @@ export default function EditProductScreen() {
   const [newImageKey, setNewImageKey] = useState<string | null>(null);
   const [photoProcessing, setPhotoProcessing] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
+
+  const { compact, scrollProps } = useFitToScreen();
 
   useEffect(() => {
     if (!session || isAnonymous) return;
@@ -249,8 +253,12 @@ export default function EditProductScreen() {
       style={{ flex: 1, backgroundColor: colors.background }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent} testID="edit-product-screen">
-        <View style={styles.section}>
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, compact && compactStyles.scrollContent]}
+        testID="edit-product-screen"
+        {...scrollProps}
+      >
+        <View style={[styles.section, compact && compactStyles.section]}>
           <ThemedText type="subtitle" style={styles.sectionTitle}>
             {isCorrection ? 'Correct this submission' : 'Edit product'}
           </ThemedText>
@@ -414,6 +422,7 @@ export default function EditProductScreen() {
             testID="submit-edit"
             style={[
               styles.button,
+              compact && compactStyles.button,
               { backgroundColor: colors.tint },
               (!hasChanges || submitting) && styles.buttonDisabled,
             ]}
@@ -587,5 +596,23 @@ const styles = StyleSheet.create({
   },
   title: {
     textAlign: 'center',
+  },
+});
+
+/**
+ * Tightened vertical spacing applied when `useFitToScreen()` reports `compact`
+ * (P5-006 FE Fixes). Vertical margins/padding/gaps only — no font sizes, and
+ * no padding inside a pressable, so touch targets stay at their full size.
+ */
+const compactStyles = StyleSheet.create({
+  scrollContent: {
+    paddingBottom: SPACING_COMPACT.screenBottom,
+  },
+  section: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+    gap: SPACING_COMPACT.sectionGap,
+  },
+  button: {
+    marginTop: SPACING_COMPACT.tightGap,
   },
 });
