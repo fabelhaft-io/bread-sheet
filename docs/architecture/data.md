@@ -49,7 +49,7 @@ Anonymous (guest) users have a Supabase UUID and session but no email or usernam
 |------|-------|-------|
 | Supabase JWT + refresh token | Supabase (managed) | Stored per Supabase's security practices |
 | Server logs | Server process / ECS Fargate → CloudWatch Logs | May contain IP addresses and user UUIDs; `[TODO: Define retention period and log scrubbing policy]` |
-| `pendingReturnTo` | `AsyncStorage` (device) | Temporary; cleared after use |
+| `pendingReturnTo` | App document directory (device, via `expo-file-system/legacy`) | Temporary; cleared after use |
 
 ---
 
@@ -195,7 +195,7 @@ Full schema with types and constraints: `server/prisma/schema.prisma`.
 
 ### 5.4 Data Minimisation
 
-- Label photos sent to the Claude vision API should be the minimum crop needed (just the nutritional panel).
+- Label photos sent to Google Cloud Vision (`VISION_MODE=live`) or Gemini (`VISION_MODE=llm`) should be the minimum crop needed (just the nutritional panel).
 - The on-device OCR path (P5-002) means label images often never leave the device at all — this is the preferred path and should be documented as a privacy feature.
 - `submittedByUserId` links a user UUID to a public product record. Consider whether this linkage needs to be disclosed in the privacy policy.
 
@@ -211,4 +211,4 @@ Full schema with types and constraints: `server/prisma/schema.prisma`.
 - [ ] Define and implement log retention and scrubbing policy.
 - [ ] Define S3 lifecycle rule: auto-delete `raw/label/` objects after 24 hours.
 - [ ] Legal review of Terms of Service image licence clause.
-- [ ] Legal review of legitimate-interest balancing tests for OFF contribution and Claude API calls.
+- [ ] Legal review of legitimate-interest balancing tests for OFF contribution and Google Cloud Vision / Gemini API calls.

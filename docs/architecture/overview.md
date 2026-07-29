@@ -34,7 +34,8 @@ BreadSheet is built on a **client-server model** with three pillars:
 │ PostgreSQL  │ │  Amazon S3  │  │   External Services   │
 │  (RDS/     │ │  (images)   │  │  Open Food Facts API  │
 │  local PG) │ │             │  │  Supabase Auth        │
-└─────────────┘ └─────────────┘  │  Anthropic Claude API │
+└─────────────┘ └─────────────┘  │  Google Cloud Vision  │
+                                  │  Google Gemini/Vertex │
                                   └───────────────────────┘
 ```
 
@@ -50,7 +51,8 @@ BreadSheet is built on a **client-server model** with three pillars:
 6. **External calls (conditional)**
    - Barcode lookup → Open Food Facts API
    - Image upload → S3 (LocalStack in dev)
-   - Label text extraction / plausibility check → Anthropic Claude API
+   - Label OCR (`VISION_MODE=live`) → Google Cloud Vision
+   - Label structuring (`VISION_MODE=llm`) and image plausibility / abuse gating (`PLAUSIBILITY_MODE=gemini`) → Google Gemini (Developer API locally, Vertex AI in prod)
 7. **Response** — server returns JSON; client updates state and re-renders.
 
 ---
@@ -61,7 +63,8 @@ BreadSheet is built on a **client-server model** with three pillars:
 |---------|----------|-----------|
 | **Supabase Auth** | User auth, anonymous sessions, JWT issuance | Email, password hash (managed by Supabase) |
 | **Open Food Facts API** | Read: barcode lookups; Write: contributing new/corrected products | Product data, images (via bot account) |
-| **Anthropic Claude API** | OCR text structuring, product plausibility checks | Nutritional label text or image; product fields |
+| **Google Cloud Vision** | OCR of label images (`VISION_MODE=live`) | Nutritional label image bytes |
+| **Google Gemini / Vertex AI** | One-shot label structuring (`VISION_MODE=llm`); image plausibility + abuse gating (`PLAUSIBILITY_MODE=gemini`) | Label or product image bytes |
 | **Amazon S3** | Storing user-uploaded product images | Image files (keyed by UUID, no PII in key) |
 | **AWS Lambda** | S3-triggered image resizing (raw → processed prefix) | Image bytes |
 

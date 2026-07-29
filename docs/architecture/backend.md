@@ -226,7 +226,7 @@ Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerifi
 
 ## Image Processing
 
-1. **API (synchronous):** Validates raw upload (size gate: 8 MB max via `multer`; format detection via magic bytes). Rejects unsupported formats (`415`).
+1. **API (synchronous):** Validates raw upload (size gate: 4 MB max via `multer` (`413`); format detection via magic bytes). Rejects unsupported formats (`415`).
 2. **Plausibility / abuse gate (synchronous, P5-005):** `imagePlausibilityService.checkImage(buffer, mime, kind)` runs on the in-memory buffer **before** any S3 write. Gated by `PLAUSIBILITY_MODE` (`mock` accepts all; `gemini` runs a Gemini multimodal classification). Applies to **both** `product` and `label` uploads. Verdicts:
    - `ok` → proceed. For `product` photos the same call also returns front-of-pack `name`/`brand`/`genericName` suggestions (returned to the client to pre-fill the Add Product form).
    - `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.

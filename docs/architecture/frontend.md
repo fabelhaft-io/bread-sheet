@@ -101,7 +101,7 @@ session + not in authenticated group  → router.replace('/(tabs)')
 no session                            → router.replace('/(auth)/login')
 ```
 
-Post-signup deep-link return: before any auth call that triggers email verification, the calling screen persists the intended destination to `AsyncStorage` under `pendingReturnTo`. On `SIGNED_IN`, the guard reads and clears this key and navigates there instead of `/(tabs)`.
+Post-signup deep-link return: before any auth call that triggers email verification, the calling screen persists the intended destination to disk under `pendingReturnTo` (`lib/pending-return-to.ts`, backed by `expo-file-system/legacy` — not AsyncStorage). On `SIGNED_IN`, the guard reads and clears this key and navigates there instead of `/(tabs)`.
 
 ---
 
@@ -223,7 +223,7 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 | `edit-form.ts` | P5-006 edit-form logic: `productToFormValues` (pre-population), `buildEditChanges` (changed-fields diff for the proposal payload), `buildCorrectionPayload` (full PATCH payload), `formHasChanges` / `validateFormValues`, `FIELD_LABELS` (shared with the diff screen) |
 | `ocr.ts` | `recogniseLabelText` — thin wrapper over `@react-native-ml-kit/text-recognition`, returns `{rawText, unavailable}` |
 | `image-picker.ts` | `captureImage` — camera or library, returns the raw URI |
-| `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 5 MB client cap via `ImageTooLargeError`. Emits one dev-only `log.debug('[image]')` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
+| `image-processing.ts` | `processCaptureForUpload` — runs `expo-image-manipulator` to resize/recompress, enforces the 2 MB client cap (`MAX_IMAGE_BYTES`) via `ImageTooLargeError`. Emits one dev-only `log.debug('[image]')` line per capture (kind, whether the resize ran or the module was unavailable, longest-edge cap, quality, processed size) |
 | `extract.ts` | `extractFromLabelImage` — orchestrates OCR-then-backend: text path when OCR text ≥ `MIN_OCR_LENGTH`, image fallback otherwise, never throws. Emits one dev-only `log.debug('[extract]')` line per attempt (OCR availability, text length, chosen path, plus the raw OCR text — dev-only so it never ships to prod logs) |
 
 ### Capture feedback
