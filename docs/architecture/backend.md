@@ -138,7 +138,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. |
+| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. *(P5-007 will change this: anonymous callers will receive the product with the `unverified` banner data but without `submittedByUserId`, and still cannot vote.)* |
 | `POST` | `/products/upload-image` | Auth | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ imageKey, name, brand, genericName }`; for `kind=label` returns `{ imageKey }`. `imageKey` is the `processed/{uuid}.jpg` S3 object key — echoed back as `productImageKey` in the submission |
 | `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/live/llm) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
