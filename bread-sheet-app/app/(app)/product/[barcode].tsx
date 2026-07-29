@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -10,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { scheduleOnRN } from 'react-native-worklets';
 import Animated, {
@@ -24,34 +24,20 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
-import { ApiError, api } from '@/lib/api';
+import { ApiError, NetworkError, api } from '@/lib/api';
 import { formatApiError } from '@/lib/format-error';
+import { upsertCachedRating, productCache } from '@/lib/offline/caches';
+import { useCachedResource } from '@/hooks/use-cached-resource';
 import { useFitToScreen } from '@/hooks/use-fit-to-screen';
+import { useMyRating } from '@/hooks/use-my-rating';
+import { useOutbox } from '@/hooks/use-outbox';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
 import { getPendingEdit } from '@/features/products/api';
-import type { PendingEdit, ProductStatus } from '@/features/products/types';
+import type { PendingEdit, ProductDetail } from '@/features/products/types';
+import type { RatingEntry } from '@/features/ratings/types';
 
-interface Product {
-  id: string;
-  barcode: string;
-  name: string;
-  brand: string | null;
-  image: string | null;
-  description: string | null;
-  /** VERIFIED | PENDING_REVIEW | REJECTED — drives the edit entry point (P5-006). */
-  status?: ProductStatus;
-  /** Present when the product is awaiting peer review (P5-002). */
-  unverified?: boolean;
-  /** Supabase user id of the submitter, when the product was user-contributed. */
-  submittedByUserId?: string | null;
-}
-
-interface UserRating {
-  id: string;
-  taste: number;
-  comment: string | null;
-}
+type Product = ProductDetail;
 
 // ─── Taste Score Colour ───────────────────────────────────────────────────────
 // Interpolates amber → green as score rises 0 → 10
@@ -354,110 +340,156 @@ export default function ProductScreen() {
 
   const { addRecentProduct } = useRecentProducts();
   const { isAnonymous, session } = useSession();
+  const { enqueue, isQueued } = useOutbox();
   const userId = session?.user.id ?? null;
 
   const { compact, scrollProps } = useFitToScreen();
 
-  const [product, setProduct] = useState<Product | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [notFound, setNotFound] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const fetchProduct = useCallback(() => api.get<Product>(`/api/products/${barcode}`), [barcode]);
+
+  // Product: painted from the on-disk cache first, revalidated in the
+  // background (P8-002). `error` only ever holds an HTTP failure — a request
+  // that never reached the server surfaces as `isOffline` instead, which is
+  // what keeps "no signal" from being rendered as "product not found".
+  const {
+    data: product,
+    isLoading: loading,
+    isOffline,
+    error: loadError,
+    refresh: refreshProduct,
+  } = useCachedResource<Product>({
+    key: `product:${barcode}`,
+    cache: productCache(barcode),
+    fetcher: fetchProduct,
+  });
+
+  const notFound = loadError instanceof ApiError && loadError.status === 404;
 
   // Pending edit on a VERIFIED product (P5-006). Drives both the "review this
   // change" banner and the hide-edit-button-with-notice state.
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
 
-  const [existingRating, setExistingRating] = useState<UserRating | null>(null);
+  const { rating: existingRating, applyLocalRating } = useMyRating(userId, barcode);
+
   const [taste, setTaste] = useState(5);
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  // Captured at submit time: applying the new rating locally would otherwise
+  // make a first-time submission report itself as an update.
+  const [submittedAsUpdate, setSubmittedAsUpdate] = useState(false);
+  const [queuedOffline, setQueuedOffline] = useState(false);
   const [imageError, setImageError] = useState(false);
 
-  // useFocusEffect instead of useEffect so the product data refreshes whenever
-  // this screen is navigated back to (e.g. after a peer review changes the status).
+  // Pre-fill from the cached rating. Anonymous sessions are included (P8-003):
+  // their ratings are stored server-side under their anonymous user id, and now
+  // that the session survives a restart it is the same id tomorrow.
+  const prefilledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!existingRating || prefilledFor.current === existingRating.id) return;
+    prefilledFor.current = existingRating.id;
+    setTaste(existingRating.taste);
+    setComment(existingRating.comment ?? '');
+  }, [existingRating]);
+
+  useEffect(() => {
+    if (product) {
+      addRecentProduct({
+        barcode: product.barcode,
+        name: product.name,
+        brand: product.brand,
+        image: product.image,
+      });
+    }
+  }, [product, addRecentProduct]);
+
+  // Pending-edit lookup (P5-006) — registered users on VERIFIED products only.
+  // Failures (including being offline) degrade to "no pending edit"; the lookup
+  // must never block the screen.
+  useEffect(() => {
+    if (!product || isAnonymous || product.status !== 'VERIFIED') {
+      // Clearing a lookup result that no longer applies to the current product
+      // is exactly the synchronisation an effect is for; the rule over-flags it.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPendingEdit(null);
+      return;
+    }
+    let cancelled = false;
+    getPendingEdit(product.barcode)
+      .then(({ edit }) => { if (!cancelled) setPendingEdit(edit); })
+      .catch(() => { if (!cancelled) setPendingEdit(null); });
+    return () => { cancelled = true; };
+  }, [product, isAnonymous]);
+
+  // Refresh on *re*-focus (e.g. returning from a peer review that changed the
+  // status). The first focus is skipped — the cached-resource hook has already
+  // kicked off that request.
+  const focusedBefore = useRef(false);
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-      setNotFound(false);
-      setLoadError(null);
-      setImageError(false);
-      setLoading(true);
-
-      // Fetch the product and the caller's existing rating in parallel. Anonymous
-      // sessions don't have a persistent rating to fetch yet (P5-004), so skip the
-      // /me lookup for them. Any failure on the rating lookup (404 "not rated yet"
-      // or otherwise) degrades to "no existing rating" so it never blocks the
-      // product screen — the user can still submit a fresh rating.
-      const productReq = api.get<Product>(`/api/products/${barcode}`);
-      const ratingReq: Promise<UserRating | null> = isAnonymous
-        ? Promise.resolve(null)
-        : api
-            .get<UserRating>(`/api/ratings/me/${barcode}`)
-            .catch(() => null);
-
-      productReq
-        .then((data) => {
-          if (cancelled) return;
-          setProduct(data);
-          addRecentProduct({ barcode: data.barcode, name: data.name, brand: data.brand, image: data.image });
-
-          // Pending-edit lookup (P5-006) — registered users on VERIFIED products
-          // only. Failures degrade to "no pending edit"; never block the screen.
-          if (!isAnonymous && data.status === 'VERIFIED') {
-            getPendingEdit(data.barcode)
-              .then(({ edit }) => {
-                if (!cancelled) setPendingEdit(edit);
-              })
-              .catch(() => {
-                if (!cancelled) setPendingEdit(null);
-              });
-          } else {
-            setPendingEdit(null);
-          }
-
-          return ratingReq.then((rating) => {
-            if (cancelled || !rating) return;
-            setExistingRating(rating);
-            setTaste(rating.taste);
-            setComment(rating.comment ?? '');
-          });
-        })
-        .catch((err: unknown) => {
-          if (cancelled) return;
-          if (err instanceof ApiError && err.status === 404) {
-            setNotFound(true);
-          } else {
-            setLoadError(formatApiError(err, 'Could not load this product. Please try again.'));
-          }
-        })
-        .finally(() => { if (!cancelled) setLoading(false); });
-      return () => { cancelled = true; };
-    }, [addRecentProduct, barcode, isAnonymous])
+      if (!focusedBefore.current) {
+        focusedBefore.current = true;
+        return;
+      }
+      void refreshProduct();
+    }, [refreshProduct])
   );
 
   const handleSubmit = useCallback(async () => {
     if (!product || submitting) return;
     setSubmitError(null);
     setSubmitting(true);
+    setSubmittedAsUpdate(existingRating !== null);
+    const trimmed = comment.trim();
     try {
-      await api.post('/api/ratings', {
+      const saved = await api.post<RatingEntry>('/api/ratings', {
         barcode: product.barcode,
         taste,
-        comment: comment.trim() || undefined,
+        comment: trimmed || undefined,
       });
+      if (saved?.product?.barcode) {
+        await upsertCachedRating(saved);
+        applyLocalRating(saved);
+      }
+      setQueuedOffline(false);
       setSubmitted(true);
     } catch (err: unknown) {
-      setSubmitError(formatApiError(err, 'Could not submit your rating. Please try again.'));
+      if (err instanceof NetworkError) {
+        // Ratings are the one write safe to queue: the endpoint upserts on
+        // (user, product), so replay is idempotent and the local value is by
+        // definition the user's latest intent (P8-004).
+        const optimistic: RatingEntry = {
+          id: existingRating?.id ?? `local:${product.barcode}`,
+          score: taste,
+          taste,
+          comment: trimmed || null,
+          createdAt: new Date().toISOString(),
+          product: {
+            id: product.id,
+            barcode: product.barcode,
+            name: product.name,
+            brand: product.brand,
+            image: product.image,
+          },
+        };
+        await enqueue({ barcode: product.barcode, taste, comment: trimmed || null });
+        await upsertCachedRating(optimistic);
+        applyLocalRating(optimistic);
+        setQueuedOffline(true);
+        setSubmitted(true);
+      } else {
+        setSubmitError(formatApiError(err, 'Could not submit your rating. Please try again.'));
+      }
     } finally {
       setSubmitting(false);
     }
-  }, [product, taste, comment, submitting]);
+  }, [product, taste, comment, submitting, existingRating, enqueue, applyLocalRating]);
 
   const isUpdate = existingRating !== null;
+  const pendingSync = product ? isQueued(product.barcode) : false;
 
-  if (loading) {
+  if (loading || (!product && !notFound && !loadError && !isOffline)) {
     return (
       <ThemedView style={styles.center}>
         <ActivityIndicator size="large" color={colors.tint} />
@@ -465,15 +497,41 @@ export default function ProductScreen() {
     );
   }
 
-  if (loadError) {
+  // Offline with nothing cached for this barcode. Deliberately *not* the
+  // not-found state: we have no idea whether this product exists (P8-002).
+  if (!product && isOffline) {
     return (
-      <ThemedView style={styles.center}>
-        <ThemedText style={styles.errorText}>{loadError}</ThemedText>
+      <ThemedView style={styles.center} testID="product-offline">
+        <Text style={styles.successIcon}>📴</Text>
+        <ThemedText type="title" style={styles.successTitle}>
+          You&apos;re offline
+        </ThemedText>
+        <ThemedText style={styles.notFoundBody}>
+          We haven&apos;t saved this product on this device yet. Reconnect to look it up.
+        </ThemedText>
+        <ThemedText style={styles.barcodeChip}>{barcode}</ThemedText>
+        <TouchableOpacity
+          testID="product-offline-retry"
+          style={[styles.button, { backgroundColor: colors.tint }]}
+          onPress={() => { void refreshProduct(); }}
+        >
+          <Text style={[styles.buttonText, { color: colors.background }]}>Try again</Text>
+        </TouchableOpacity>
       </ThemedView>
     );
   }
 
-  if (notFound) {
+  if (loadError && !notFound && !product) {
+    return (
+      <ThemedView style={styles.center}>
+        <ThemedText style={styles.errorText}>
+          {formatApiError(loadError, 'Could not load this product. Please try again.')}
+        </ThemedText>
+      </ThemedView>
+    );
+  }
+
+  if (notFound && !product) {
     return (
       <ThemedView style={styles.center} testID="product-not-found">
         <Text style={styles.successIcon}>🤔</Text>
@@ -527,14 +585,23 @@ export default function ProductScreen() {
 
   if (submitted) {
     return (
-      <ThemedView style={styles.center}>
-        <Text style={styles.successIcon}>🎉</Text>
+      <ThemedView style={styles.center} testID="rating-submitted">
+        <Text style={styles.successIcon}>{queuedOffline ? '💾' : '🎉'}</Text>
         <ThemedText type="title" style={styles.successTitle}>
-          {isUpdate ? 'Rating Updated!' : 'Rating Submitted!'}
+          {queuedOffline
+            ? 'Saved on this device'
+            : submittedAsUpdate
+              ? 'Rating Updated!'
+              : 'Rating Submitted!'}
         </ThemedText>
         <ThemedText style={styles.successSubtitle}>
           You gave it a {taste % 1 === 0 ? taste.toFixed(1) : taste}/10 for taste.
         </ThemedText>
+        {queuedOffline ? (
+          <ThemedText testID="rating-queued-offline" style={styles.successSubtitle}>
+            You&apos;re offline — we&apos;ll send it as soon as you&apos;re back online.
+          </ThemedText>
+        ) : null}
         <TouchableOpacity
           style={[styles.button, { backgroundColor: colors.tint }]}
           onPress={() => router.back()}
@@ -553,10 +620,13 @@ export default function ProductScreen() {
       {...scrollProps}
     >
       {product?.image && !imageError ? (
+        // `memory-disk` is what makes the hero shot render on an offline
+        // launch — RN's own Image keeps nothing across restarts (P8-002).
         <Image
           source={{ uri: product.image }}
           style={styles.heroImage}
-          resizeMode="cover"
+          contentFit="cover"
+          cachePolicy="memory-disk"
           onError={() => setImageError(true)}
         />
       ) : (
@@ -564,6 +634,22 @@ export default function ProductScreen() {
           <Text style={styles.placeholderIcon}>🍞</Text>
         </View>
       )}
+
+      {isOffline ? (
+        <View testID="product-offline-indicator" style={styles.offlineStrip}>
+          <Text style={styles.offlineStripText}>
+            📴 Offline — showing the last version saved on this device.
+          </Text>
+        </View>
+      ) : null}
+
+      {pendingSync ? (
+        <View testID="product-pending-sync" style={styles.offlineStrip}>
+          <Text style={styles.offlineStripText}>
+            ⏳ Your rating is saved here and not yet sent to the server.
+          </Text>
+        </View>
+      ) : null}
 
       {/*
         Reviewer banner (P5-002). Shown to registered, non-submitter users
@@ -899,6 +985,19 @@ const styles = StyleSheet.create({
     opacity: 0.55,
     fontStyle: 'italic',
     marginTop: 10,
+  },
+  offlineStrip: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0c04022',
+  },
+  offlineStripText: {
+    fontSize: 13,
+    color: '#a5761b',
+    fontWeight: '500',
   },
 });
 

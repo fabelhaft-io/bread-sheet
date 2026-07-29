@@ -48,29 +48,10 @@ jest.mock('@/hooks/use-recent-products', () => {
   return { useRecentProducts: () => value };
 });
 
-// Preserve ApiError as a real class so `instanceof` checks in the component
-// match errors constructed in the tests.
-jest.mock('@/lib/api', () => {
-  class ApiError extends Error {
-    status: number;
-    body: unknown;
-    constructor(status: number, message: string, body: unknown) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = status;
-      this.body = body;
-    }
-  }
-  return {
-    ApiError,
-    api: {
-      get: jest.fn(),
-      post: jest.fn(),
-      put: jest.fn(),
-      delete: jest.fn(),
-    },
-  };
-});
+// Uses the manual mock in lib/__mocks__/api.ts, which keeps ApiError and
+// NetworkError as real classes so the component's `instanceof` checks match
+// errors constructed in the tests.
+jest.mock('@/lib/api');
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { ApiError, api } = require('@/lib/api') as typeof import('@/lib/api');
@@ -78,21 +59,33 @@ const mockApiGet = api.get as jest.Mock;
 const mockApiPost = api.post as jest.Mock;
 
 /**
- * The product screen now issues two parallel GETs on load:
+ * Since P8-002 the screen loads:
  *  - GET /api/products/:barcode
- *  - GET /api/ratings/me/:barcode (registered users only)
+ *  - GET /api/users/me/ratings — only when this device has no cached copy of
+ *    the list; "my rating" is then read out of it by barcode. The per-product
+ *    `GET /api/ratings/me/:barcode` round trip is gone.
  *
- * Tests that don't care about the existing-rating path can call this to
- * stub the product response and have the /me/:barcode call resolve to a
- * 404 (= "no rating yet").
+ * Tests that don't care about the existing-rating path use this to stub the
+ * product and return an empty rating history.
  */
 function mockProductAndNoExistingRating(product: unknown) {
   mockApiGet.mockImplementation((path: string) => {
-    if (path.startsWith('/api/ratings/me/')) {
-      return Promise.reject(new ApiError(404, 'No rating yet', {}));
-    }
+    if (path.startsWith('/api/users/me/ratings')) return Promise.resolve([]);
     return Promise.resolve(product);
   });
+}
+
+/** Build one `/api/users/me/ratings` entry for the given product. */
+function ratingEntry(product: { id: string; barcode: string; name: string; brand: string | null },
+  taste: number, comment: string | null) {
+  return {
+    id: 'r1',
+    score: taste,
+    taste,
+    comment,
+    createdAt: new Date().toISOString(),
+    product: { ...product, image: null },
+  };
 }
 
 describe('ProductScreen — product-not-found state', () => {
@@ -352,8 +345,8 @@ describe('ProductScreen — existing rating pre-fill', () => {
 
   it('pre-populates the slider and comment from the user’s existing rating and shows "Update Rating"', async () => {
     mockApiGet.mockImplementation((path: string) => {
-      if (path.startsWith('/api/ratings/me/')) {
-        return Promise.resolve({ id: 'r1', taste: 8, comment: 'Solid loaf' });
+      if (path.startsWith('/api/users/me/ratings')) {
+        return Promise.resolve([ratingEntry(PRODUCT, 8, 'Solid loaf')]);
       }
       return Promise.resolve(PRODUCT);
     });
@@ -377,12 +370,12 @@ describe('ProductScreen — existing rating pre-fill', () => {
 
   it('shows "Rating Updated!" on the success screen after re-rating', async () => {
     mockApiGet.mockImplementation((path: string) => {
-      if (path.startsWith('/api/ratings/me/')) {
-        return Promise.resolve({ id: 'r1', taste: 6, comment: null });
+      if (path.startsWith('/api/users/me/ratings')) {
+        return Promise.resolve([ratingEntry(PRODUCT, 6, null)]);
       }
       return Promise.resolve(PRODUCT);
     });
-    mockApiPost.mockResolvedValue({ id: 'r1', taste: 6 });
+    mockApiPost.mockResolvedValue(ratingEntry(PRODUCT, 6, null));
 
     const { findByText, getByText } = render(<ProductScreen />);
     await findByText('Update Rating');
@@ -390,26 +383,31 @@ describe('ProductScreen — existing rating pre-fill', () => {
     await findByText(/Rating Updated!/i);
   });
 
-  it('skips the /me/:barcode lookup for anonymous users', async () => {
+  it('never issues the per-product /api/ratings/me/:barcode lookup (P8-002)', async () => {
+    mockProductAndNoExistingRating(PRODUCT);
+    const { findByText } = render(<ProductScreen />);
+    await findByText('Submit Rating');
+    const meCalls = mockApiGet.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && args[0].startsWith('/api/ratings/me/'),
+    );
+    expect(meCalls).toHaveLength(0);
+  });
+
+  it('pre-fills an anonymous user’s own previous rating (P8-003)', async () => {
     mockUseSession.mockReturnValue({
       session: { user: { id: 'guest', is_anonymous: true } },
       isAnonymous: true,
       isLoading: false,
     });
     mockApiGet.mockImplementation((path: string) => {
-      if (path.startsWith('/api/ratings/me/')) {
-        // If this ever fires for an anonymous user, the test must fail —
-        // we don't want to spam the backend with auth'd lookups for guests.
-        throw new Error('Anonymous users must not call /api/ratings/me/:barcode');
+      if (path.startsWith('/api/users/me/ratings')) {
+        return Promise.resolve([ratingEntry(PRODUCT, 7, null)]);
       }
       return Promise.resolve(PRODUCT);
     });
+
     const { findByText } = render(<ProductScreen />);
-    await findByText('Submit Rating');
-    // Asserting the /me call did NOT happen
-    const meCalls = mockApiGet.mock.calls.filter((args) =>
-      typeof args[0] === 'string' && args[0].startsWith('/api/ratings/me/'),
-    );
-    expect(meCalls).toHaveLength(0);
+    await findByText('Update Rating');
+    await findByText('7.0');
   });
 });

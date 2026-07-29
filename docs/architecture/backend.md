@@ -175,7 +175,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/ratings` | Auth | Upsert the caller's rating for a product. `201` on first submission, `200` on update of an existing `(userId, productId)` row. |
-| `GET` | `/ratings/me/:barcode` | Auth | Return the caller's rating for a product, or `404` if they haven't rated it yet. Used by the product screen to pre-populate the form on a return visit. |
+| `GET` | `/ratings/me/:barcode` | Auth | Return the caller's rating for a product, or `404` if they haven't rated it yet. **No longer used by the app** — since P8-002 the product screen reads "my rating" out of the cached `/users/me/ratings` payload, saving a round trip per product open. Kept for API consumers and ad-hoc testing. |
 | `GET` | `/ratings/product/:barcode` | Auth | All ratings for a product (most recent first) with author id / username / avatar. |
 | `DELETE` | `/ratings/:id` | Owner | Delete own rating |
 

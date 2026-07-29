@@ -1,9 +1,16 @@
-import { ApiError } from './api';
+import { ApiError, NetworkError } from './api';
+
+/** Copy shown whenever a request never reached the server (P8-002). */
+export const OFFLINE_MESSAGE =
+  'You appear to be offline. Check your connection and try again.';
 
 /**
  * Turn any thrown value into a short, user-facing message.
  *
  * Rules:
+ *   - For a `NetworkError` (the request never reached the server), the
+ *     offline copy — regardless of `fallback`, which describes what the
+ *     *server* failed to do.
  *   - For an `ApiError`, branch on the HTTP status:
  *       401 / 403 — auth / permission copy
  *       404       — not found copy
@@ -24,6 +31,11 @@ import { ApiError } from './api';
  */
 export function formatApiError(err: unknown, fallback?: string): string {
   const FALLBACK = fallback ?? 'Something went wrong. Please try again.';
+
+  // Checked before ApiError: an offline user must never be told the server
+  // rejected them. This is also what keeps the online-only contribution flows
+  // (add product, edits, verification votes) honest when connectivity drops.
+  if (err instanceof NetworkError) return OFFLINE_MESSAGE;
 
   if (err instanceof ApiError) {
     switch (err.status) {

@@ -2,7 +2,12 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { isValidEmail, upgradeAccount } from '@/features/auth';
+import {
+  EMAIL_ALREADY_REGISTERED_MESSAGE,
+  isEmailAlreadyRegistered,
+  isValidEmail,
+  upgradeAccount,
+} from '@/features/auth';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -34,6 +39,12 @@ export default function UpgradeScreen() {
     const { error } = await upgradeAccount(email, password);
     setLoading(false);
     if (error) {
+      // The taken-email case is the only one the user can do something about,
+      // and Supabase's raw copy for it doesn't say what to do (P8-003).
+      if (isEmailAlreadyRegistered(error)) {
+        setEmailError(EMAIL_ALREADY_REGISTERED_MESSAGE);
+        return;
+      }
       Alert.alert('Upgrade failed', error.message);
       return;
     }

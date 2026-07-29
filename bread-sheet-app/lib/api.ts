@@ -19,6 +19,26 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Thrown when the request never reached the server — no connectivity, DNS
+ * failure, timeout. `fetch` signals this with a bare `TypeError`, which is
+ * indistinguishable from a programming mistake and, more importantly, was
+ * indistinguishable from an HTTP error at the call site. Screens must be able
+ * to tell "you are offline" apart from "the server said no": rendering
+ * "Product not found — add it?" to someone who merely has no signal is the
+ * failure mode this type exists to prevent (P8-002).
+ */
+export class NetworkError extends Error {
+  /** The original `fetch` rejection, kept for logging. */
+  readonly cause: unknown;
+
+  constructor(message = 'Could not reach the server.', cause?: unknown) {
+    super(message);
+    this.name = 'NetworkError';
+    this.cause = cause;
+  }
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) return {};
@@ -27,14 +47,20 @@ async function authHeaders(): Promise<Record<string, string>> {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = await authHeaders();
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-      ...(options.headers as Record<string, string>),
-    },
-  });
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+        ...(options.headers as Record<string, string>),
+      },
+    });
+  } catch (err) {
+    throw new NetworkError(undefined, err);
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

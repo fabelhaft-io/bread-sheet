@@ -16,7 +16,10 @@ auth:bearer {
 
 docs {
   Returns the authenticated caller's rating for the given product, or 404 if they haven't rated it yet.
-  Used by the product screen to pre-populate the slider and comment field on a return visit.
+
+  No longer called by the app: since P8-002 the product screen reads "my rating" out of the cached
+  `/api/users/me/ratings` payload instead, which removes a round trip per product open and works offline.
+  This endpoint remains for API consumers and ad-hoc testing.
 
   Errors:
   - 404 — product not found in the local cache, OR product exists but the caller has not rated it.

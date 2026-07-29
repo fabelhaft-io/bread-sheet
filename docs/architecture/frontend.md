@@ -15,9 +15,11 @@ bread-sheet-app/
 │   └── (account)/               # Account management screens (change email/password, upgrade, verify)
 ├── features/                    # Business logic grouped by domain
 │   ├── auth/                    # Auth actions and validation (no UI)
-│   └── products/                # Product submission flow — API helpers, OCR, image processing, types (no UI)
+│   ├── products/                # Product submission flow — API helpers, OCR, image processing, types (no UI)
+│   └── ratings/                 # Rating wire types shared by the Home tab, product screen and offline caches
 ├── hooks/                       # React context and custom hooks
 ├── lib/                         # Third-party client singletons + small utilities (Supabase, API, pending-return-to)
+│   └── offline/                 # On-disk cache: versioned store, typed caches, rating outbox
 ├── components/                  # Shared UI components and design primitives
 │   └── ui/                      # Platform-bridging components (icons, etc.)
 └── constants/                   # Design tokens (colours, theme, vertical spacing)
@@ -66,6 +68,8 @@ EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY
 ```
 
 Throws at startup if either var is missing. Only `features/auth/` and `hooks/use-session.tsx` import the client directly — screens never reach for it.
+
+**Session persistence (TICKET-P8-001).** The client is constructed with an explicit `storage: AsyncStorage` adapter. `persistSession` defaults to `true`, but auth-js resolves storage in the order explicit `storage` → `globalThis.localStorage` → in-memory fallback; React Native has no `localStorage`, so without the adapter the session died with the process. Two user-visible consequences of fixing this: registered users are no longer bounced to the login screen after a cold start, and anonymous users keep the same user id across restarts instead of being handed a new one that orphans their previous ratings. `autoRefreshToken` is driven off `AppState` — paused while backgrounded, resumed (and refreshed if expired) on the next foreground.
 
 ### 2. Auth Feature — `features/auth/`
 
@@ -149,9 +153,13 @@ features/auth → upgradeAccount(email, password)
 
 ```
 features/auth → signOut()
+  → supabase clears the persisted session from AsyncStorage
+  → clearAllCaches() wipes every user-namespaced offline document (P8-001)
   → onAuthStateChange fires, session becomes null
   → guard redirects to /(auth)/login
 ```
+
+The cache wipe is part of `signOut()` itself, not of the calling screen: the persisted session and the on-disk caches must go together, or the next account to sign in on the device inherits the previous one's ratings, recents and pending outbox.
 
 ---
 
@@ -162,9 +170,10 @@ React Context is used for lightweight global state. All context providers are co
 | Provider | Hook | State |
 |----------|------|-------|
 | `SessionProvider` | `useSession()` | Auth session, loading state, anonymous flag |
-| `RecentProductsProvider` | `useRecentProducts()` | In-memory list of recently viewed product barcodes |
+| `OutboxProvider` | `useOutbox()` | Queued offline ratings, permanent-failure notices, flush trigger |
+| `RecentProductsProvider` | `useRecentProducts()` | Recently viewed products, mirrored to disk per user |
 
-For server data (ratings, products, groups), hooks fetch directly from the API — no global cache layer. Pull-to-refresh is the primary re-fetch mechanism.
+Server data is read through the offline cache described below (`hooks/use-cached-resource.ts`) rather than fetched directly in each screen. Pull-to-refresh remains the manual re-fetch mechanism, and additionally drains the rating outbox.
 
 ---
 
@@ -243,14 +252,19 @@ The reviewer screen renders every submitted field — including `null` values, s
 
 ## Product Detail & Rating (`app/(app)/product/[barcode].tsx`)
 
-The product screen does two GETs in parallel on mount:
+The product itself is read through `useCachedResource` (see *Offline & Performance* below): painted from the on-disk cache first, then revalidated with `GET /api/products/:barcode` in the background. Three terminal states, and keeping them distinct is the point:
 
-1. `GET /api/products/:barcode` — load-blocking. A `404` flips the screen to the "Product not found" state (P5-001).
-2. `GET /api/ratings/me/:barcode` — issued only for registered users. **Any failure (including the `404` that means "not rated yet") degrades silently to "no existing rating"** so an outage on this optional lookup never blocks the product screen.
+| Outcome | State |
+|---------|-------|
+| `ApiError` 404 and nothing cached | "Product not found" + add/sign-up CTA (P5-001) |
+| `NetworkError` and nothing cached | "You're offline" + retry (P8-002) — **never** the add CTA |
+| Anything cached | The product renders; an offline strip appears if revalidation failed |
 
-When the rating lookup returns a row, the slider and comment field are pre-populated with the existing values, the section title flips from "How does it taste?" to "Your rating", and the submit button reads "Update Rating" instead of "Submit Rating". The success screen mirrors the same wording ("Rating Updated!" vs "Rating Submitted!").
+**"My rating" comes from the cached ratings list, not a second request.** `hooks/use-my-rating.ts` reads the cached `/api/users/me/ratings` payload and looks the barcode up in it. Only when this device has never cached that list (fresh install, or a deep link straight into a product) does it fetch the list once — still one request, and it primes the Home tab at the same time. The old per-product `GET /api/ratings/me/:barcode` call is gone.
 
-Submission always calls `POST /api/ratings`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven entirely off whether the pre-load fetch found an existing rating.
+When a rating is found, the slider and comment field are pre-populated, the section title flips from "How does it taste?" to "Your rating", and the submit button reads "Update Rating". This applies to anonymous users too (P8-003) — their ratings are stored server-side under their anonymous user id, which now survives a restart.
+
+Submission always calls `POST /api/ratings`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven off whether a rating was found before submitting. A `NetworkError` on submit queues the rating in the outbox and reports success ("Saved on this device") rather than an error.
 
 For registered users on `VERIFIED` products the screen additionally calls `GET /api/products/:barcode/edits/pending` (failures degrade to "no pending edit") to drive the P5-006 edit entry point and review banner, described below.
 
@@ -296,3 +310,82 @@ A screen that overflows the viewport by only a handful of pixels reads as broken
 **Screens wired up:** `product/[barcode]`, `add-product`, `edit-product/[barcode]`, `review-product/[barcode]`, `review-edit/[editId]`, `(tabs)/index`, `(tabs)/profile`. The parallax header in `components/parallax-scroll-view.tsx` is deliberately excluded — its scroll is the point.
 
 > Testing note: `PixelRatio.getFontScale()` falls back to the pixel *density* when the window carries no `fontScale`. That never happens on a device, but jest-expo's default window reports `fontScale: 2`, so any test that exercises the compaction path must stub `PixelRatio.getFontScale`.
+
+---
+
+## Offline & Performance (Phase 8)
+
+Before this phase the app had no cache layer at all: every screen called `api.get` inside a focus effect, so re-focusing refetched and being offline meant a spinner followed by error text. "Recently Opened" lived in plain `useState` and was empty on every cold start — the single biggest contributor to the app feeling unresponsive at launch.
+
+**Substrate: JSON files via `expo-file-system`, not SQLite.** The data is small (~200 products, at most one rating per product) and this avoids another native module, keeping jest-expo green without shims. SQLite only earns its place if offline product *search by name* is added.
+
+### The store — `lib/offline/store.ts`
+
+A typed, versioned, **user-namespaced** document store laid out as `<documentDirectory>offline/v<VERSION>/<userId>/<name>.json`.
+
+| Property | Why |
+|----------|-----|
+| Namespaced by Supabase user id | The anonymous→registered upgrade and account switching must never leak one user's data into another's view. |
+| Schema mismatch **wipes**, never migrates | These are caches; the server is the source of truth, so re-fetching always beats migration code for throwaway data. Directories from older versions are pruned once per process. |
+| Failures are non-fatal | A cache that cannot be read or written degrades to "no cache", never to a broken screen. |
+| Synchronous memory mirror (`peekCache`) | Lets a screen paint in its *first frame* rather than after a disk round trip. |
+
+`setActiveCacheUser(userId)` is called from `SessionProvider` before the session lands in state, so a consumer's first render already peeks into the right namespace. With no active user every read returns `null` and every write is a no-op. When there is no document directory (web, tests) the store falls back to AsyncStorage, which is `localStorage` on web.
+
+### The caches — `lib/offline/caches.ts`
+
+Three documents, exposed as `ResourceCache<T>` descriptors (`peek` / `read` / `write`):
+
+| Document | Contents | Notes |
+|----------|----------|-------|
+| `products` | `barcode → { data, touchedAt }` | LRU-capped at `PRODUCT_CACHE_LIMIT` (200). One map document rather than a file per barcode: eviction becomes a sort instead of a directory walk. |
+| `ratings` | The `/api/users/me/ratings` payload verbatim | Also serves as the "my rating for this barcode" lookup table. |
+| `recents` | The "Recently Opened" list | `viewedAt` is stored as an ISO string and revived on read. |
+
+### Stale-while-revalidate — `hooks/use-cached-resource.ts`
+
+```
+seed synchronously from memory  → paint (no spinner on a warm hit)
+  ↓ miss
+read from disk                  → paint
+  ↓
+revalidate over the network
+  ├─ success        → swap in, write through to the cache, clear isOffline
+  ├─ NetworkError   → keep the cached value, raise isOffline / isStale
+  └─ ApiError       → surface as `error` so the caller can branch (404 → not found)
+```
+
+The `error` / `isOffline` split is the contract: `error` means the server gave an answer, `isOffline` means it never got the question.
+
+### `NetworkError` — `lib/api.ts`
+
+`fetch` rejects with a bare `TypeError` when a request never leaves the device, which is indistinguishable from a programming mistake and, worse, from an HTTP failure at the call site. `lib/api.ts` now wraps that into a `NetworkError` carrying the original rejection as `cause`. `formatApiError` checks it **before** `ApiError` and returns `OFFLINE_MESSAGE` regardless of the caller's `fallback` — the fallback describes what the *server* failed to do. That single check is also what makes the online-only contribution flows (add product, edits, verification votes) report "you're offline" for free.
+
+### Images
+
+Product images use `expo-image` with `cachePolicy="memory-disk"`. React Native's own `Image` keeps nothing across restarts, so without this the text would render offline and the pictures would not.
+
+### The rating outbox — `lib/offline/outbox.ts` (TICKET-P8-004)
+
+A persisted queue of `{ barcode, taste, comment, queuedAt, attempts, nextAttemptAt }`, flushed on mount, on every app foreground, and on pull-to-refresh.
+
+**Only ratings are queued, and that is deliberate.** A rating is owned by exactly one user and `POST /api/ratings` upserts on `(userId, productId)`, so replay is idempotent and last-write-wins is *correct* — the queued value is the user's latest intent and there is no server state that could disagree. Product submissions, edits and peer votes hinge on state that is invisible offline (the image plausibility gate, the one-pending-edit `409`, the self-vote `403`); those stay online-only.
+
+| Behaviour | Rule |
+|-----------|------|
+| Collapse | Re-rating the same barcode replaces the queued item (original `queuedAt` preserved), so five slider fiddles cost one request. |
+| Transient failure | `NetworkError`, 5xx, 401, 408, 429 → retry with exponential back-off from 30 s, capped at 30 min. A `NetworkError` stops the pass early — the rest of the queue would fail too. |
+| Permanent failure | Any other 4xx → dropped, and the server's message is surfaced on the Home tab. Retrying a malformed request forever only hides it. |
+| Optimistic UI | The queued rating is folded into the cached ratings list immediately and marked "not yet synced" on the Home tab and product screen; on success the server's version replaces it. |
+
+**Connectivity detection.** No `@react-native-community/netinfo`. `AppState` foreground plus failure-driven retry covers the cases that matter without another native dependency; add it only if the UX proves sloppy in practice.
+
+### Anonymous ratings (TICKET-P8-003)
+
+Anonymous ratings were never a storage problem — `POST /api/ratings` is guarded by `requireAuth` only, and Supabase anonymous sessions satisfy it, so they have always been stored server-side under the anonymous user id. `upgradeAccount` calls `updateUser` on the *existing* session, which keeps that id, so the ratings are already attached to the right user the moment the upgrade completes. **There is no migration step and none should be written.**
+
+What was broken was durability (fixed by P8-001) and visibility. The gates that hid a guest's own ratings from them are gone: the Home tab lists them, with the sign-up prompt sitting *above* the list rather than replacing it, and the product screen pre-fills a guest's previous score. Every contribution gate is unchanged — `requireRegistered` still guards submissions, edits, verification votes and label extraction.
+
+Upgrading to an email that already has an account fails at `updateUser` and leaves the ratings on the anonymous id; the upgrade screen surfaces `EMAIL_ALREADY_REGISTERED_MESSAGE` inline rather than Supabase's raw copy. Merging two existing accounts is explicitly out of scope.
+
+> Testing note: `lib/__mocks__/api.ts` is the manual mock behind a bare `jest.mock('@/lib/api')`. It keeps `ApiError` and `NetworkError` as real classes, because screens and `formatApiError` branch on `instanceof`. Tests that exercise the caches mock `expo-file-system/legacy` with an in-memory `Map` and call `setActiveCacheUser` / `__resetOfflineStoreForTests` in `beforeEach`.

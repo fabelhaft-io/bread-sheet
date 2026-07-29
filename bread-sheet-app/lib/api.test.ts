@@ -1,4 +1,4 @@
-import { ApiError, api } from './api';
+import { ApiError, NetworkError, api } from './api';
 
 jest.mock('./supabase', () => ({
   supabase: {
@@ -43,6 +43,22 @@ describe('api', () => {
       expect(apiErr.status).toBe(404);
       expect(apiErr.message).toBe('Product not found');
       expect(apiErr.body).toEqual({ message: 'Product not found' });
+    }
+  });
+
+  // P8-002: `fetch` rejects with a bare TypeError when the request never left
+  // the device. Screens must be able to tell that apart from an HTTP error —
+  // otherwise an offline user gets "Product not found — add it?".
+  it('throws NetworkError, not ApiError, when the request never reaches the server', async () => {
+    (global.fetch as jest.Mock).mockRejectedValue(new TypeError('Network request failed'));
+
+    expect.assertions(3);
+    try {
+      await api.get('/api/products/123');
+    } catch (err) {
+      expect(err).toBeInstanceOf(NetworkError);
+      expect(err).not.toBeInstanceOf(ApiError);
+      expect((err as NetworkError).cause).toBeInstanceOf(TypeError);
     }
   });
 

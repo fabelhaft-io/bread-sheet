@@ -1,4 +1,5 @@
 import { api } from '@/lib/api';
+import { setActiveCacheUser } from '@/lib/offline/store';
 import { supabase } from '@/lib/supabase';
 import { AuthChangeEvent, Session } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
@@ -26,12 +27,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
+            // Point the offline caches at this user *before* the session lands
+            // in state, so the first render of any consumer already peeks into
+            // the right namespace (P8-002).
+            setActiveCacheUser(session?.user.id ?? null);
             setSession(session);
             setIsLoading(false);
             if (session) api.post('/api/users/sync', {}).catch(() => {});
         });
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+            setActiveCacheUser(session?.user.id ?? null);
             setSession(session);
             if (session && SYNC_EVENTS.includes(event)) {
                 api.post('/api/users/sync', {}).catch(() => {});
