@@ -1,5 +1,5 @@
-import { ApiError } from './api';
-import { formatApiError } from './format-error';
+import { ApiError, NetworkError } from './api';
+import { OFFLINE_MESSAGE, formatApiError } from './format-error';
 
 jest.mock('./supabase', () => ({
   supabase: {
@@ -64,5 +64,20 @@ describe('formatApiError', () => {
 
   it('returns the fallback for non-Error throwables', () => {
     expect(formatApiError('weird thing thrown')).toMatch(/something went wrong/i);
+  });
+
+  // P8-002: `fallback` describes what the *server* failed to do, so it must not
+  // be used when the request never got there. This is also what makes the
+  // online-only contribution flows say "you're offline" for free.
+  describe('NetworkError', () => {
+    it('returns the offline copy', () => {
+      expect(formatApiError(new NetworkError('Could not reach the server.'))).toBe(OFFLINE_MESSAGE);
+    });
+
+    it('ignores a caller-supplied fallback', () => {
+      const msg = formatApiError(new NetworkError(), 'Could not submit your edit.');
+      expect(msg).toBe(OFFLINE_MESSAGE);
+      expect(msg).toMatch(/offline/i);
+    });
   });
 });

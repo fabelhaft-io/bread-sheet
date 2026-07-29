@@ -80,6 +80,8 @@ cd ..
 ```
 These are loaded via guarded `require()` in `features/products/`, so tests and the sign-up/sign-in flows work without them — but the capture/OCR/processing steps won't run until they're installed and the native client is rebuilt (Expo Go is not sufficient; use a dev build).
 
+`@react-native-async-storage/async-storage` is a regular dependency (installed by `npm install` above) and is **not** optional: it backs Supabase session persistence, so without a native rebuild after adding it, users are signed out on every cold start.
+
 ### 3. Configure environment variables
 
 Create a Supabase project, then copy its **Project URL** and **anon/public key** from **Project Settings → API**, and enable **anonymous sign-in** for the project.

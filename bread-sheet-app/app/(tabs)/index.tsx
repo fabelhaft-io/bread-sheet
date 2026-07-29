@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
-  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -9,35 +8,22 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 
 import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
+import type { RatingEntry } from '@/features/ratings/types';
+import { useCachedResource } from '@/hooks/use-cached-resource';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFitToScreen } from '@/hooks/use-fit-to-screen';
+import { useOutbox } from '@/hooks/use-outbox';
 import { useSession } from '@/hooks/use-session';
 import { useRecentProducts, RecentProduct } from '@/hooks/use-recent-products';
 import { api } from '@/lib/api';
-
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface RatedProduct {
-  id: string;
-  barcode: string;
-  name: string;
-  brand: string | null;
-  image: string | null;
-}
-
-interface RatingEntry {
-  id: string;
-  score: number;   // 0–10, mirrors taste
-  taste: number;   // 0–10 in 0.5 increments
-  comment: string | null;
-  createdAt: string;
-  product: RatedProduct;
-}
+import { ratingsCache } from '@/lib/offline/caches';
+import { formatApiError } from '@/lib/format-error';
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
@@ -70,7 +56,16 @@ const badgeStyles = StyleSheet.create({
 
 function ProductThumb({ image }: { image: string | null }) {
   if (image) {
-    return <Image source={{ uri: image }} style={thumbStyles.image} resizeMode="cover" />;
+    // `expo-image` with a memory+disk policy is what makes thumbnails survive
+    // an offline launch — RN's own Image has no persistent cache (P8-002).
+    return (
+      <Image
+        source={{ uri: image }}
+        style={thumbStyles.image}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+      />
+    );
   }
   return (
     <View style={thumbStyles.placeholder}>
@@ -136,12 +131,15 @@ function RatingCard({
   bg,
   textColor,
   iconColor,
+  pendingSync,
   onPress,
 }: {
   entry: RatingEntry;
   bg: string;
   textColor: string;
   iconColor: string;
+  /** The rating is still sitting in the offline outbox (P8-004). */
+  pendingSync: boolean;
   onPress: () => void;
 }) {
   return (
@@ -159,6 +157,11 @@ function RatingCard({
         <View style={cardStyles.scoreRow}>
           <ScoreBadge score={entry.score} />
           <Text style={[cardStyles.time, { color: iconColor }]}>{relativeTime(entry.createdAt)}</Text>
+          {pendingSync ? (
+            <Text testID={`rating-pending-sync-${entry.product.barcode}`} style={cardStyles.pendingSync}>
+              ⏳ Not synced yet
+            </Text>
+          ) : null}
         </View>
         {entry.comment ? (
           <Text style={[cardStyles.comment, { color: iconColor }]} numberOfLines={2}>
@@ -214,8 +217,9 @@ const cardStyles = StyleSheet.create({
   info: { flex: 1, gap: 3 },
   name: { fontSize: 15, fontWeight: '600' },
   brand: { fontSize: 13 },
-  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  scoreRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2, flexWrap: 'wrap' },
   time: { fontSize: 12 },
+  pendingSync: { fontSize: 12, color: '#c98a1a', fontWeight: '600' },
   comment: { fontSize: 13, fontStyle: 'italic', marginTop: 2 },
 });
 
@@ -248,38 +252,36 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { session, isAnonymous } = useSession();
   const { recentProducts } = useRecentProducts();
+  const { isQueued, failures, dismissFailures, flush } = useOutbox();
 
-  const [ratings, setRatings] = useState<RatingEntry[]>([]);
-  const [loadingRatings, setLoadingRatings] = useState(false);
-  const [ratingsError, setRatingsError] = useState<string | null>(null);
+  const userId = session?.user.id ?? null;
+
+  const fetchRatings = useCallback(() => api.get<RatingEntry[]>('/api/users/me/ratings'), []);
+
+  // Anonymous sessions are no longer skipped (P8-003): their ratings live on
+  // the server under their anonymous user id, and now that the session survives
+  // a restart they are the same ratings tomorrow as they were today.
+  const {
+    data: ratings,
+    isLoading: loadingRatings,
+    isOffline,
+    error: ratingsError,
+    refresh,
+  } = useCachedResource<RatingEntry[]>({
+    key: userId ? `ratings:${userId}` : null,
+    cache: ratingsCache,
+    fetcher: fetchRatings,
+  });
+
   const [refreshing, setRefreshing] = useState(false);
-
-  const fetchRatings = useCallback(async () => {
-    if (!session || isAnonymous) return;
-    setLoadingRatings(true);
-    setRatingsError(null);
-    try {
-      const data = await api.get<RatingEntry[]>('/api/users/me/ratings');
-      setRatings(data);
-    } catch (err: unknown) {
-      setRatingsError(err instanceof Error ? err.message : 'Failed to load ratings');
-    } finally {
-      setLoadingRatings(false);
-    }
-  }, [session, isAnonymous]);
-
-  useEffect(() => {
-    // Fetch-on-mount: fetchRatings sets loading/error state synchronously,
-    // which is the standard data-fetching pattern the rule over-flags here.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchRatings();
-  }, [fetchRatings]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchRatings();
+    // A pull-to-refresh is also the clearest "I expect to be online now"
+    // signal we get without a connectivity library — drain the outbox too.
+    await Promise.all([refresh(), flush()]);
     setRefreshing(false);
-  }, [fetchRatings]);
+  }, [refresh, flush]);
 
   // Greeting based on time of day
   const hour = new Date().getHours();
@@ -316,6 +318,7 @@ export default function HomeScreen() {
         </Text>
         {isAnonymous && (
           <TouchableOpacity
+            testID="guest-upgrade-banner"
             style={[
               styles.guestBanner,
               compact && compactStyles.guestBanner,
@@ -324,11 +327,31 @@ export default function HomeScreen() {
             onPress={() => router.push('/(account)/upgrade')}
           >
             <Text style={[styles.guestBannerText, { color: colors.tint }]}>
-              Create an account to save your ratings across devices →
+              Create an account so these ratings don&apos;t stay tied to this device →
             </Text>
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Offline / sync-failure notices */}
+      {isOffline ? (
+        <View testID="offline-indicator" style={styles.notice}>
+          <Text style={styles.noticeText}>
+            📴 You&apos;re offline — showing your last saved data.
+          </Text>
+        </View>
+      ) : null}
+
+      {failures.length ? (
+        <TouchableOpacity testID="outbox-failures" style={styles.noticeError} onPress={dismissFailures}>
+          <Text style={styles.noticeErrorText}>
+            {failures.length === 1
+              ? `A rating could not be saved: ${failures[0].message}`
+              : `${failures.length} ratings could not be saved.`}
+            {'\n'}Tap to dismiss.
+          </Text>
+        </TouchableOpacity>
+      ) : null}
 
       {/* My Ratings */}
       <SectionHeader title="My Ratings" compact={compact} />
@@ -337,15 +360,19 @@ export default function HomeScreen() {
         <View style={[styles.loadingRow, compact && compactStyles.loadingRow]}>
           <ActivityIndicator size="small" color={colors.tint} />
         </View>
-      ) : ratingsError ? (
-        <EmptyState icon="⚠️" message={ratingsError} color={colors.icon} />
-      ) : isAnonymous ? (
+      ) : ratingsError && !ratings ? (
         <EmptyState
-          icon="🔐"
-          message="Sign in or create an account to see your rating history."
+          icon="⚠️"
+          message={formatApiError(ratingsError, 'Could not load your ratings.')}
           color={colors.icon}
         />
-      ) : ratings.length === 0 ? (
+      ) : isOffline && !ratings ? (
+        <EmptyState
+          icon="📴"
+          message={"You're offline and haven't opened this list on this device yet."}
+          color={colors.icon}
+        />
+      ) : !ratings || ratings.length === 0 ? (
         <EmptyState
           icon="⭐"
           message={"You haven't rated anything yet.\nScan a barcode to get started!"}
@@ -359,6 +386,7 @@ export default function HomeScreen() {
             bg={colors.background}
             textColor={colors.text}
             iconColor={colors.icon}
+            pendingSync={isQueued(entry.product.barcode)}
             onPress={() => router.push(`/(app)/product/${entry.product.barcode}`)}
           />
         ))
@@ -423,6 +451,33 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     paddingVertical: 24,
     alignItems: 'center',
+  },
+  notice: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#f0c04022',
+  },
+  noticeText: {
+    fontSize: 13,
+    color: '#a5761b',
+    fontWeight: '500',
+  },
+  noticeError: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#e05c5c22',
+  },
+  noticeErrorText: {
+    fontSize: 13,
+    color: '#c0392b',
+    fontWeight: '500',
+    lineHeight: 18,
   },
   bottomPad: {
     height: 32,

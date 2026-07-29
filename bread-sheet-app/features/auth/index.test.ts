@@ -1,5 +1,15 @@
-import { isValidEmail, signIn, signUp, signOut, signInAsGuest, upgradeAccount } from './index';
+import {
+  EMAIL_ALREADY_REGISTERED_MESSAGE,
+  isEmailAlreadyRegistered,
+  isValidEmail,
+  signIn,
+  signUp,
+  signOut,
+  signInAsGuest,
+  upgradeAccount,
+} from './index';
 import { supabase } from '@/lib/supabase';
+import { clearAllCaches } from '@/lib/offline/store';
 
 const TEST_REDIRECT_URL = 'http://localhost:3000/auth/callback';
 
@@ -21,6 +31,10 @@ jest.mock('@/lib/supabase', () => ({
       signOut: jest.fn(),
     },
   },
+}));
+
+jest.mock('@/lib/offline/store', () => ({
+  clearAllCaches: jest.fn().mockResolvedValue(undefined),
 }));
 
 const mockAuth = supabase.auth as jest.Mocked<typeof supabase.auth>;
@@ -95,5 +109,34 @@ describe('signOut', () => {
     (mockAuth.signOut as jest.Mock).mockResolvedValue({ error: null });
     await signOut();
     expect(mockAuth.signOut).toHaveBeenCalled();
+  });
+
+  // P8-001: the persisted session and every user-namespaced cache must go
+  // together, or the next account on this device inherits the previous one's
+  // ratings, recents and pending outbox.
+  it('clears all user-namespaced caches', async () => {
+    (mockAuth.signOut as jest.Mock).mockResolvedValue({ error: null });
+    await signOut();
+    expect(clearAllCaches).toHaveBeenCalled();
+  });
+});
+
+describe('isEmailAlreadyRegistered (P8-003)', () => {
+  it('recognises the Supabase error codes', () => {
+    expect(isEmailAlreadyRegistered({ code: 'email_exists' })).toBe(true);
+    expect(isEmailAlreadyRegistered({ code: 'user_already_exists' })).toBe(true);
+  });
+
+  it('falls back to matching the message text', () => {
+    expect(isEmailAlreadyRegistered({ message: 'A user with this email address has already been registered' })).toBe(true);
+  });
+
+  it('does not misclassify unrelated failures', () => {
+    expect(isEmailAlreadyRegistered({ code: 'weak_password', message: 'Password too short' })).toBe(false);
+    expect(isEmailAlreadyRegistered(null)).toBe(false);
+  });
+
+  it('offers copy that tells the user what to do next', () => {
+    expect(EMAIL_ALREADY_REGISTERED_MESSAGE).toMatch(/sign in/i);
   });
 });

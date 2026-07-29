@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { SessionProvider, useSession } from '@/hooks/use-session';
+import { OutboxProvider } from '@/hooks/use-outbox';
 import { RecentProductsProvider } from '@/hooks/use-recent-products';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useEffect, useRef } from 'react';
@@ -73,9 +74,11 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <SessionProvider>
-          <RecentProductsProvider>
-            <RootLayoutNav />
-          </RecentProductsProvider>
+          <OutboxProvider>
+            <RecentProductsProvider>
+              <RootLayoutNav />
+            </RecentProductsProvider>
+          </OutboxProvider>
         </SessionProvider>
         <StatusBar style="auto" />
       </ThemeProvider>

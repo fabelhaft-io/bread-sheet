@@ -39,22 +39,7 @@ jest.mock('@/lib/supabase', () => ({
 
 // Preserve ApiError as a real class so `instanceof` branches in the screen
 // (422 handling, in particular) resolve correctly.
-jest.mock('@/lib/api', () => {
-  class ApiError extends Error {
-    status: number;
-    body: unknown;
-    constructor(status: number, message: string, body: unknown) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = status;
-      this.body = body;
-    }
-  }
-  return {
-    ApiError,
-    api: { get: jest.fn(), post: jest.fn(), put: jest.fn(), delete: jest.fn() },
-  };
-});
+jest.mock('@/lib/api');
 
 jest.mock('@/features/products/api', () => ({
   submitProduct: jest.fn(),

@@ -5,7 +5,9 @@
   },
   "include": [
     "**/*.test.ts",
-    "**/*.test.tsx"
+    "**/*.test.tsx",
+    "**/__mocks__/*.ts",
+    "**/__mocks__/*.tsx"
   ],
   "exclude": [
     "node_modules"

@@ -541,11 +541,11 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - Set `autoRefreshToken: true` and drive it off `AppState` so refresh pauses while backgrounded.
 **Verification note:** the above was read from auth-js internals, not observed on a device. Confirm the symptom on a real cold start before building.
 **Acceptance Criteria:**
-- [ ] A registered user who force-quits and relaunches lands authenticated, without a login screen.
-- [ ] An anonymous user keeps the same user id across a restart; ratings made before the restart are still theirs.
-- [ ] An expired token is refreshed on foreground without bouncing the user to login.
-- [ ] With no network at launch, a previously signed-in user is not logged out; requests fail but the session survives.
-- [ ] Signing out clears the persisted session and all user-namespaced caches.
+- [x] A registered user who force-quits and relaunches lands authenticated, without a login screen.
+- [x] An anonymous user keeps the same user id across a restart; ratings made before the restart are still theirs.
+- [x] An expired token is refreshed on foreground without bouncing the user to login.
+- [x] With no network at launch, a previously signed-in user is not logged out; requests fail but the session survives.
+- [x] Signing out clears the persisted session and all user-namespaced caches.
 
 ### [TICKET-P8-002] Offline Read Cache & Snappy Startup
 **Goal:** Products, the user's own ratings, and the recents list render instantly from disk on launch and stay readable with no connectivity — the supermarket case, where the user scans something they have already looked at.
@@ -557,17 +557,17 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - **Index the cached ratings list by barcode and have the product screen read "my rating" from it** instead of calling `/api/ratings/me/:barcode`. This removes a round trip per product open, online as well as off.
 **Correctness trap to fix here:** `lib/api.ts` throws a raw `TypeError` from `fetch` on network failure, not an `ApiError`. P5-001's not-found branch checks `err.status === 404`, so it is safe today — but it is one refactor away from showing "This product isn't in the database yet — add it?" to someone who is merely offline. Introduce a typed `NetworkError` so "offline" and "the server said no" are structurally distinguishable.
 **Acceptance Criteria:**
-- [ ] Recently Opened survives a cold start.
-- [ ] Opening a previously viewed product with no network renders name, brand, image, nutrition, and the user's own rating from cache — no spinner, no error screen.
-- [ ] The product image renders offline (`expo-image` with `cachePolicy="memory-disk"`).
-- [ ] Cached content paints before any network request resolves; fresh data swaps in when it arrives without a visible flash.
-- [ ] An "offline" indicator appears when revalidation fails and clears on success.
-- [ ] Scanning an *uncached* barcode offline shows an offline message — **not** the "Product not found / Add this product" state.
-- [ ] The Home tab renders the cached ratings list offline; pull-to-refresh surfaces the offline state rather than emptying the list.
-- [ ] The product screen sources "my rating" from the cached ratings list instead of a second request.
-- [ ] Caches are namespaced per user id; signing out or switching accounts never shows another user's data.
-- [ ] The product cache is LRU-capped (~200); a schema-version bump wipes rather than migrates.
-- [ ] `lib/api.ts` distinguishes network failure (`NetworkError`) from HTTP errors (`ApiError`).
+- [x] Recently Opened survives a cold start.
+- [x] Opening a previously viewed product with no network renders name, brand, image, nutrition, and the user's own rating from cache — no spinner, no error screen.
+- [x] The product image renders offline (`expo-image` with `cachePolicy="memory-disk"`).
+- [x] Cached content paints before any network request resolves; fresh data swaps in when it arrives without a visible flash.
+- [x] An "offline" indicator appears when revalidation fails and clears on success.
+- [x] Scanning an *uncached* barcode offline shows an offline message — **not** the "Product not found / Add this product" state.
+- [x] The Home tab renders the cached ratings list offline; pull-to-refresh surfaces the offline state rather than emptying the list.
+- [x] The product screen sources "my rating" from the cached ratings list instead of a second request.
+- [x] Caches are namespaced per user id; signing out or switching accounts never shows another user's data.
+- [x] The product cache is LRU-capped (~200); a schema-version bump wipes rather than migrates.
+- [x] `lib/api.ts` distinguishes network failure (`NetworkError`) from HTTP errors (`ApiError`).
 
 ### [TICKET-P8-003] Anonymous Ratings — Durable and Visible
 **Goal:** Anonymous users can rate products and see those ratings, and the ratings survive both an app restart and the upgrade to a registered account.
@@ -592,13 +592,13 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 **Edge case to handle:** if an anonymous user tries to upgrade to an email that already has an account, `updateUser` fails and their anonymous ratings stay on the anonymous id. Surface a clear error ("That email is already registered — sign in instead"). Merging two existing accounts is explicitly out of scope.
 
 **Acceptance Criteria:**
-- [ ] An anonymous user can submit a rating and, after force-quitting and relaunching, still sees it (requires P8-001).
-- [ ] An anonymous user's Home tab lists their own ratings instead of the sign-in empty state.
-- [ ] A sign-up prompt still appears for anonymous users, alongside the list rather than in place of it.
-- [ ] Re-opening a previously rated product as an anonymous user pre-fills the existing score and the submit button reads as an update.
-- [ ] Upgrading an anonymous account to email/password keeps every previously submitted rating attached, with no migration step and no duplicates.
-- [ ] Upgrading to an email that already exists shows an actionable error and does not lose the anonymous ratings.
-- [ ] Anonymous users still cannot submit products, propose edits, or cast verification votes — all contribution gates unchanged.
+- [x] An anonymous user can submit a rating and, after force-quitting and relaunching, still sees it (requires P8-001).
+- [x] An anonymous user's Home tab lists their own ratings instead of the sign-in empty state.
+- [x] A sign-up prompt still appears for anonymous users, alongside the list rather than in place of it.
+- [x] Re-opening a previously rated product as an anonymous user pre-fills the existing score and the submit button reads as an update.
+- [x] Upgrading an anonymous account to email/password keeps every previously submitted rating attached, with no migration step and no duplicates.
+- [x] Upgrading to an email that already exists shows an actionable error and does not lose the anonymous ratings.
+- [x] Anonymous users still cannot submit products, propose edits, or cast verification votes — all contribution gates unchanged.
 
 ### [TICKET-P8-004] Offline Rating Submission (Outbox)
 **Goal:** Let a user rate a product with no connectivity and have it sync later.
@@ -606,18 +606,19 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 **Why ratings are safe to queue — and nothing else is:** a rating is solely owned by one user and `POST /api/ratings` upserts on `(userId, productId)` (`ratingController.ts:57`), so replay is idempotent and last-write-wins is *correct* — the local value is the user's latest intent. There is no genuine conflict to resolve. This does **not** hold for product submissions, edits, or peer votes: those depend on server state invisible offline (image plausibility checks, the one-pending-edit `409`, the self-vote `403`). Scope the outbox to ratings only; contribution flows stay online-only.
 **Implementation:** `lib/offline/outbox.ts` — a persisted queue of `{ barcode, taste, comment, queuedAt }`, flushed on foreground or reconnect.
 **Acceptance Criteria:**
-- [ ] Submitting a rating offline shows immediate success and the value persists locally.
-- [ ] Queued ratings flush automatically on reconnect or next foreground.
-- [ ] The queue survives an app restart.
-- [ ] Replay is safe: re-sending a rating for an already-rated product updates rather than duplicates.
-- [ ] Multiple offline edits to the same product collapse to a single queued write (latest wins).
-- [ ] A queued rating is visibly marked "not yet synced"; the marker clears on success.
-- [ ] A permanent failure (4xx that is not auth) drops the item with a user-visible message; transient failures retry with back-off.
-- [ ] Product submissions, edits, and peer votes are **not** queued — they show an offline message and remain online-only.
+- [x] Submitting a rating offline shows immediate success and the value persists locally.
+- [x] Queued ratings flush automatically on reconnect or next foreground.
+- [x] The queue survives an app restart.
+- [x] Replay is safe: re-sending a rating for an already-rated product updates rather than duplicates.
+- [x] Multiple offline edits to the same product collapse to a single queued write (latest wins).
+- [x] A queued rating is visibly marked "not yet synced"; the marker clears on success.
+- [x] A permanent failure (4xx that is not auth) drops the item with a user-visible message; transient failures retry with back-off.
+- [x] Product submissions, edits, and peer votes are **not** queued — they show an offline message and remain online-only.
 
-**Open choices (decide before starting P8-002):**
-- **Connectivity detection.** `@react-native-community/netinfo` gives a reliable offline banner and prompt flush, at the cost of a native dependency. P8-002 can ship without it using `AppState` plus failure-driven retry. *Recommendation: start without it; add it only if the UX feels sloppy.*
-- **Session storage adapter (P8-001).** AsyncStorage (documented + tested by Supabase) vs `expo-file-system` (no new native dependency). *Recommendation: AsyncStorage.*
+**Choices taken (2026-07-29, as shipped):**
+- **Connectivity detection.** No `@react-native-community/netinfo`. `AppState` foreground plus failure-driven retry drives the offline banner and the outbox flush; pull-to-refresh drains the queue too. Revisit only if the UX proves sloppy in practice.
+- **Session storage adapter (P8-001).** AsyncStorage — the path Supabase documents and tests. `@react-native-async-storage/async-storage` is a hard dependency now (a native rebuild is required); `jest.config.js` maps it to the package's in-memory jest mock.
+- **Cache substrate.** JSON documents via `expo-file-system` (`lib/offline/store.ts`), with AsyncStorage as the fallback where there is no document directory (web, tests). Not SQLite — see the substrate decision above.
 
 # Future Plans and Ideas
 

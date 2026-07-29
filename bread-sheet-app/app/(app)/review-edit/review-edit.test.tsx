@@ -27,22 +27,7 @@ jest.mock('@/hooks/use-session', () => ({
 
 // The screen pulls in @/lib/format-error → @/lib/api → @/lib/supabase; mock the
 // api module so the Supabase client (which needs env vars) is never constructed.
-jest.mock('@/lib/api', () => {
-  class ApiError extends Error {
-    status: number;
-    body: unknown;
-    constructor(status: number, message: string, body: unknown) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = status;
-      this.body = body;
-    }
-  }
-  return {
-    ApiError,
-    api: { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
-  };
-});
+jest.mock('@/lib/api');
 
 jest.mock('@/features/products/api', () => ({
   getPendingEdit: jest.fn(),

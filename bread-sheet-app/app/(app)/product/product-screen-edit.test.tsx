@@ -34,22 +34,7 @@ jest.mock('@/hooks/use-recent-products', () => {
   return { useRecentProducts: () => value };
 });
 
-jest.mock('@/lib/api', () => {
-  class ApiError extends Error {
-    status: number;
-    body: unknown;
-    constructor(status: number, message: string, body: unknown) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = status;
-      this.body = body;
-    }
-  }
-  return {
-    ApiError,
-    api: { get: jest.fn(), post: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
-  };
-});
+jest.mock('@/lib/api');
 
 // The pending-edit lookup goes through features/products/api — mock it at the
 // module boundary so tests control the banner/notice states directly.
