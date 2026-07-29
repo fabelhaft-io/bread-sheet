@@ -11,8 +11,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
 import { formatApiError } from '@/lib/format-error';
 
@@ -52,6 +54,8 @@ export default function ReviewEditScreen() {
   const [showUnchanged, setShowUnchanged] = useState(false);
   const [acting, setActing] = useState<'APPROVE' | 'REJECT' | 'DISMISS' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const { compact, scrollProps } = useFitToScreen();
 
   useEffect(() => {
     if (!session || isAnonymous || !barcode) return;
@@ -150,10 +154,11 @@ export default function ReviewEditScreen() {
   return (
     <ScrollView
       style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[styles.scrollContent, compact && compactStyles.scrollContent]}
       testID="review-edit-screen"
+      {...scrollProps}
     >
-      <View style={styles.section}>
+      <View style={[styles.section, compact && compactStyles.section]}>
         <ThemedText type="subtitle">Suggested change</ThemedText>
         <ThemedText style={styles.explanation}>
           Compare the current values with the suggested ones and confirm whether the
@@ -168,7 +173,7 @@ export default function ReviewEditScreen() {
       <View style={[styles.divider, { backgroundColor: colors.icon + '33' }]} />
 
       {/* Changed fields — old (struck through) vs new (bold, accent) */}
-      <View style={styles.section} testID="diff-rows">
+      <View style={[styles.section, compact && compactStyles.section]} testID="diff-rows">
         {changedFields.map((field) => (
           <View key={field} style={styles.diffRow} testID={`diff-${field}`}>
             <ThemedText style={styles.diffLabel}>{FIELD_LABELS[field] ?? field}</ThemedText>
@@ -186,7 +191,7 @@ export default function ReviewEditScreen() {
 
       {/* Unchanged fields — collapsed by default */}
       {unchangedFields.length > 0 ? (
-        <View style={styles.section}>
+        <View style={[styles.section, compact && compactStyles.section]}>
           <TouchableOpacity
             testID="toggle-unchanged"
             onPress={() => setShowUnchanged((s) => !s)}
@@ -197,7 +202,11 @@ export default function ReviewEditScreen() {
           </TouchableOpacity>
           {showUnchanged
             ? unchangedFields.map((field) => (
-                <View key={field} style={styles.unchangedRow} testID={`unchanged-${field}`}>
+                <View
+                  key={field}
+                  style={[styles.unchangedRow, compact && compactStyles.unchangedRow]}
+                  testID={`unchanged-${field}`}
+                >
                   <ThemedText style={styles.diffLabel}>
                     {FIELD_LABELS[field] ?? field}
                   </ThemedText>
@@ -211,19 +220,19 @@ export default function ReviewEditScreen() {
       ) : null}
 
       {edit.viewer.isAuthor ? (
-        <View style={styles.section}>
+        <View style={[styles.section, compact && compactStyles.section]}>
           <ThemedText style={styles.explanation} testID="own-edit-note">
             You suggested this change. Waiting on peer review.
           </ThemedText>
         </View>
       ) : edit.viewer.vote ? (
-        <View style={styles.section}>
+        <View style={[styles.section, compact && compactStyles.section]}>
           <ThemedText style={styles.explanation} testID="already-voted-note">
             You already reviewed this change.
           </ThemedText>
         </View>
       ) : (
-        <View style={styles.actionsSection}>
+        <View style={[styles.actionsSection, compact && compactStyles.actionsSection]}>
           {actionError ? (
             <ThemedText style={styles.errorText} testID="review-edit-action-error">
               {actionError}
@@ -378,5 +387,26 @@ const styles = StyleSheet.create({
   },
   title: {
     textAlign: 'center',
+  },
+});
+
+/**
+ * Tightened vertical spacing applied when `useFitToScreen()` reports `compact`
+ * (P5-006 FE Fixes). Vertical margins/padding/gaps only — no font sizes, and
+ * no padding inside a pressable, so touch targets stay at their full size.
+ */
+const compactStyles = StyleSheet.create({
+  scrollContent: {
+    paddingBottom: SPACING_COMPACT.screenBottom,
+  },
+  section: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+    gap: SPACING_COMPACT.tightGap,
+  },
+  unchangedRow: {
+    marginTop: SPACING_COMPACT.tightGap,
+  },
+  actionsSection: {
+    gap: SPACING_COMPACT.sectionGap,
   },
 });

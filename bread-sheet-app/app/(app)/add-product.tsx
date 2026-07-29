@@ -16,8 +16,10 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
 import { ApiError } from '@/lib/api';
 import { log } from '@/lib/log';
@@ -220,6 +222,8 @@ function AddProductFlow({
   const [fillMode, setFillMode] = useState<FillMode>('manual');
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const { compact, scrollProps } = useFitToScreen();
 
   // ─── Photos step handlers ─────────────────────────────────────────────
   const handleCapture = useCallback(
@@ -444,11 +448,12 @@ function AddProductFlow({
     >
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, compact && compactStyles.scrollContent]}
         keyboardShouldPersistTaps="handled"
         testID="add-product-screen"
+        {...scrollProps}
       >
-        <View style={styles.infoSection}>
+        <View style={[styles.infoSection, compact && compactStyles.infoSection]}>
           <ThemedText type="title">Add a product</ThemedText>
           <ThemedText style={styles.body}>
             Take two photos — a product shot for the listing and a nutritional
@@ -459,13 +464,14 @@ function AddProductFlow({
 
         {/* ── Photos step ─────────────────────────────────────────── */}
         {step === 'photos' ? (
-          <View style={styles.section}>
+          <View style={[styles.section, compact && compactStyles.section]}>
             <PhotoSlot
               label="Product photo"
               hint="Front of packaging — what people will see in listings."
               uri={productPhotoUri}
               processing={processingSlot === 'product'}
               colors={colors}
+              compact={compact}
               testID="product-photo-slot"
               onPickFromCamera={() => handleCapture('product', 'camera')}
               onPickFromLibrary={() => handleCapture('product', 'library')}
@@ -476,6 +482,7 @@ function AddProductFlow({
               uri={labelPhotoUri}
               processing={processingSlot === 'label'}
               colors={colors}
+              compact={compact}
               testID="label-photo-slot"
               onPickFromCamera={() => handleCapture('label', 'camera')}
               onPickFromLibrary={() => handleCapture('label', 'library')}
@@ -489,6 +496,7 @@ function AddProductFlow({
               testID="photos-continue"
               style={[
                 styles.button,
+                compact && compactStyles.button,
                 { backgroundColor: colors.tint },
                 !labelPhotoUri && styles.buttonDisabled,
               ]}
@@ -526,12 +534,13 @@ function AddProductFlow({
             fieldErrors={fieldErrors}
             extractionError={extractionError}
             productPhotoUri={productPhotoUri}
+            compact={compact}
           />
         ) : null}
 
         {/* ── Submit ──────────────────────────────────────────────── */}
         {step === 'review' ? (
-          <View style={styles.section}>
+          <View style={[styles.section, compact && compactStyles.section]}>
             {submitError ? (
               <ThemedText style={styles.errorText} testID="submit-error">
                 {submitError}
@@ -541,6 +550,7 @@ function AddProductFlow({
               testID="submit-product"
               style={[
                 styles.button,
+                compact && compactStyles.button,
                 { backgroundColor: colors.tint },
                 !canSubmit && styles.buttonDisabled,
               ]}
@@ -575,6 +585,7 @@ function PhotoSlot({
   uri,
   processing,
   colors,
+  compact,
   testID,
   onPickFromCamera,
   onPickFromLibrary,
@@ -584,12 +595,13 @@ function PhotoSlot({
   uri: string | null;
   processing?: boolean;
   colors: (typeof Colors)['light'];
+  compact: boolean;
   testID: string;
   onPickFromCamera: () => void;
   onPickFromLibrary: () => void;
 }) {
   return (
-    <View style={styles.slot} testID={testID}>
+    <View style={[styles.slot, compact && compactStyles.slot]} testID={testID}>
       <ThemedText style={styles.slotLabel}>{label}</ThemedText>
       <ThemedText style={styles.slotHint}>{hint}</ThemedText>
       {processing ? (
@@ -652,6 +664,7 @@ function ReviewStep({
   fieldErrors,
   extractionError,
   productPhotoUri,
+  compact,
 }: {
   form: FormState;
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
@@ -665,12 +678,13 @@ function ReviewStep({
   fieldErrors: Partial<Record<keyof FormState, string>>;
   extractionError: string | null;
   productPhotoUri: string | null;
+  compact: boolean;
 }) {
   const set = <K extends keyof FormState>(key: K, value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   return (
-    <View style={styles.section}>
+    <View style={[styles.section, compact && compactStyles.section]}>
       {productPhotoUri ? (
         <Image source={{ uri: productPhotoUri }} style={styles.reviewHero} resizeMode="cover" />
       ) : null}
@@ -1091,5 +1105,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 4,
+  },
+});
+
+/**
+ * Tightened vertical spacing applied when `useFitToScreen()` reports `compact`
+ * (P5-006 FE Fixes). Vertical margins/padding/gaps only — no font sizes, and
+ * no padding inside a pressable, so touch targets stay at their full size.
+ */
+const compactStyles = StyleSheet.create({
+  scrollContent: {
+    paddingBottom: SPACING_COMPACT.screenBottom,
+  },
+  infoSection: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+    gap: SPACING_COMPACT.tightGap,
+  },
+  section: {
+    paddingBottom: SPACING_COMPACT.sectionGap,
+    gap: SPACING_COMPACT.sectionGap,
+  },
+  slot: {
+    gap: SPACING_COMPACT.tightGap,
+  },
+  button: {
+    marginTop: SPACING_COMPACT.tightGap,
   },
 });

@@ -12,8 +12,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 
+import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
 import { useRecentProducts, RecentProduct } from '@/hooks/use-recent-products';
 import { api } from '@/lib/api';
@@ -105,8 +107,12 @@ function relativeTime(dateStr: string | Date): string {
 
 // ─── Section components ───────────────────────────────────────────────────────
 
-function SectionHeader({ title }: { title: string }) {
-  return <Text style={sectionStyles.header}>{title.toUpperCase()}</Text>;
+function SectionHeader({ title, compact }: { title: string; compact: boolean }) {
+  return (
+    <Text style={[sectionStyles.header, compact && sectionStyles.headerCompact]}>
+      {title.toUpperCase()}
+    </Text>
+  );
 }
 
 const sectionStyles = StyleSheet.create({
@@ -118,6 +124,10 @@ const sectionStyles = StyleSheet.create({
     marginTop: 24,
     marginBottom: 8,
     letterSpacing: 0.4,
+  },
+  headerCompact: {
+    marginTop: SPACING_COMPACT.sectionPaddingV,
+    marginBottom: SPACING_COMPACT.tightGap,
   },
 });
 
@@ -277,9 +287,13 @@ export default function HomeScreen() {
 
   const containerBg = colorScheme === 'dark' ? '#1C1C1E' : '#F2F2F7';
 
+  const { compact, scrollProps } = useFitToScreen();
+
   return (
     <ScrollView
+      testID="home-screen"
       style={[styles.container, { backgroundColor: containerBg }]}
+      {...scrollProps}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -289,14 +303,24 @@ export default function HomeScreen() {
       }
     >
       {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.background, marginTop: insets.top + 12 }]}>
+      <View
+        style={[
+          styles.header,
+          compact && compactStyles.header,
+          { backgroundColor: colors.background, marginTop: insets.top + 12 },
+        ]}
+      >
         <Text style={[styles.greeting, { color: colors.icon }]}>{greeting}</Text>
         <Text style={[styles.headline, { color: colors.text }]}>
           {isAnonymous ? 'Welcome, Guest 👋' : `Welcome back 👋`}
         </Text>
         {isAnonymous && (
           <TouchableOpacity
-            style={[styles.guestBanner, { backgroundColor: colors.tint + '15' }]}
+            style={[
+              styles.guestBanner,
+              compact && compactStyles.guestBanner,
+              { backgroundColor: colors.tint + '15' },
+            ]}
             onPress={() => router.push('/(account)/upgrade')}
           >
             <Text style={[styles.guestBannerText, { color: colors.tint }]}>
@@ -307,10 +331,10 @@ export default function HomeScreen() {
       </View>
 
       {/* My Ratings */}
-      <SectionHeader title="My Ratings" />
+      <SectionHeader title="My Ratings" compact={compact} />
 
       {loadingRatings ? (
-        <View style={styles.loadingRow}>
+        <View style={[styles.loadingRow, compact && compactStyles.loadingRow]}>
           <ActivityIndicator size="small" color={colors.tint} />
         </View>
       ) : ratingsError ? (
@@ -341,7 +365,7 @@ export default function HomeScreen() {
       )}
 
       {/* Recently Opened */}
-      <SectionHeader title="Recently Opened" />
+      <SectionHeader title="Recently Opened" compact={compact} />
 
       {recentProducts.length === 0 ? (
         <EmptyState
@@ -362,7 +386,7 @@ export default function HomeScreen() {
         ))
       )}
 
-      <View style={styles.bottomPad} />
+      <View style={[styles.bottomPad, compact && compactStyles.bottomPad]} />
     </ScrollView>
   );
 }
@@ -402,5 +426,25 @@ const styles = StyleSheet.create({
   },
   bottomPad: {
     height: 32,
+  },
+});
+
+/**
+ * Tightened vertical spacing applied when `useFitToScreen()` reports `compact`
+ * (P5-006 FE Fixes). Vertical margins/padding/gaps only — no font sizes, and
+ * no padding inside a pressable, so touch targets stay at their full size.
+ */
+const compactStyles = StyleSheet.create({
+  header: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+  },
+  guestBanner: {
+    marginTop: SPACING_COMPACT.tightGap,
+  },
+  loadingRow: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+  },
+  bottomPad: {
+    height: SPACING_COMPACT.screenBottom,
   },
 });

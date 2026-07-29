@@ -1,6 +1,8 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
 import { signOut } from '@/features/auth';
 import { useRouter } from 'expo-router';
@@ -39,8 +41,12 @@ function SettingsRow({ icon, label, onPress, tint, destructive }: RowProps) {
   );
 }
 
-function SectionHeader({ title }: { title: string }) {
-  return <Text style={styles.sectionHeader}>{title.toUpperCase()}</Text>;
+function SectionHeader({ title, compact }: { title: string; compact: boolean }) {
+  return (
+    <Text style={[styles.sectionHeader, compact && compactStyles.sectionHeader]}>
+      {title.toUpperCase()}
+    </Text>
+  );
 }
 
 export default function ProfileScreen() {
@@ -51,6 +57,8 @@ export default function ProfileScreen() {
   const textColor = Colors[colorScheme].text;
   const iconColor = Colors[colorScheme].icon;
   const router = useRouter();
+
+  const { compact, scrollProps } = useFitToScreen();
 
   async function handleSignOut() {
     const message = isAnonymous
@@ -73,9 +81,16 @@ export default function ProfileScreen() {
   }
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: Colors[colorScheme].background === '#fff' ? '#F2F2F7' : '#1C1C1E' }]}>
+    <ScrollView
+      testID="profile-screen"
+      style={[styles.container, { backgroundColor: Colors[colorScheme].background === '#fff' ? '#F2F2F7' : '#1C1C1E' }]}
+      {...scrollProps}
+    >
       {/* Account card */}
-      <View style={[styles.accountCard, { backgroundColor: bg }]}>
+      <View
+        testID="profile-account-card"
+        style={[styles.accountCard, compact && compactStyles.accountCard, { backgroundColor: bg }]}
+      >
         <View style={[styles.avatar, { backgroundColor: tint }]}>
           <Text style={[styles.avatarText, { color: bg }]}>
             {isAnonymous ? '?' : (session?.user.email?.[0] ?? '?').toUpperCase()}
@@ -93,7 +108,7 @@ export default function ProfileScreen() {
 
       {isAnonymous ? (
         <>
-          <SectionHeader title="Save your data" />
+          <SectionHeader title="Save your data" compact={compact} />
           <View style={[styles.section, { backgroundColor: bg }]}>
             <SettingsRow
               icon="person.badge.plus"
@@ -109,14 +124,14 @@ export default function ProfileScreen() {
               tint={tint}
             />
           </View>
-          <Text style={[styles.sectionFooter, { color: iconColor }]}>
+          <Text style={[styles.sectionFooter, compact && compactStyles.sectionFooter, { color: iconColor }]}>
             Link an email and password to keep your ratings and groups across devices.
             Your existing data won&lsquo;t be lost.
           </Text>
         </>
       ) : (
         <>
-          <SectionHeader title="Account" />
+          <SectionHeader title="Account" compact={compact} />
           <View style={[styles.section, { backgroundColor: bg }]}>
             <SettingsRow
               icon="envelope.fill"
@@ -135,7 +150,7 @@ export default function ProfileScreen() {
         </>
       )}
 
-      <SectionHeader title="Session" />
+      <SectionHeader title="Session" compact={compact} />
       <View style={[styles.section, { backgroundColor: bg }]}>
         <SettingsRow
           icon="arrow.right.square"
@@ -229,5 +244,26 @@ const styles = StyleSheet.create({
   separator: {
     borderBottomWidth: StyleSheet.hairlineWidth,
     marginLeft: 56,
+  },
+});
+
+/**
+ * Tightened vertical spacing applied when `useFitToScreen()` reports `compact`
+ * (P5-006 FE Fixes). Vertical margins/padding/gaps only — no font sizes, and
+ * no padding inside a pressable (`styles.row` is untouched), so touch targets
+ * stay at their full size.
+ */
+const compactStyles = StyleSheet.create({
+  accountCard: {
+    marginTop: SPACING_COMPACT.sectionPaddingV,
+    marginBottom: SPACING_COMPACT.tightGap,
+    paddingVertical: SPACING_COMPACT.cardPaddingV,
+  },
+  sectionHeader: {
+    marginTop: SPACING_COMPACT.sectionPaddingV,
+    marginBottom: SPACING_COMPACT.tightGap,
+  },
+  sectionFooter: {
+    marginTop: SPACING_COMPACT.tightGap,
   },
 });

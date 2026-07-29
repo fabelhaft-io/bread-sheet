@@ -22,9 +22,11 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { ApiError, api } from '@/lib/api';
 import { formatApiError } from '@/lib/format-error';
+import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
 import { getPendingEdit } from '@/features/products/api';
@@ -354,6 +356,8 @@ export default function ProductScreen() {
   const { isAnonymous, session } = useSession();
   const userId = session?.user.id ?? null;
 
+  const { compact, scrollProps } = useFitToScreen();
+
   const [product, setProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -543,8 +547,10 @@ export default function ProductScreen() {
 
   return (
     <ScrollView
+      testID="product-screen"
       style={{ flex: 1, backgroundColor: colors.background }}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[styles.scrollContent, compact && compactStyles.scrollContent]}
+      {...scrollProps}
     >
       {product?.image && !imageError ? (
         <Image
@@ -567,7 +573,11 @@ export default function ProductScreen() {
       {product?.unverified && !isAnonymous && product.submittedByUserId !== userId ? (
         <TouchableOpacity
           testID="review-product-banner"
-          style={[styles.reviewBanner, { backgroundColor: colors.tint + '22', borderColor: colors.tint }]}
+          style={[
+            styles.reviewBanner,
+            compact && compactStyles.reviewBanner,
+            { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+          ]}
           onPress={() =>
             router.push({
               pathname: '/(app)/review-product/[barcode]',
@@ -596,7 +606,11 @@ export default function ProductScreen() {
       !pendingEdit.viewer.vote ? (
         <TouchableOpacity
           testID="review-edit-banner"
-          style={[styles.reviewBanner, { backgroundColor: colors.tint + '22', borderColor: colors.tint }]}
+          style={[
+            styles.reviewBanner,
+            compact && compactStyles.reviewBanner,
+            { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+          ]}
           onPress={() =>
             router.push({
               pathname: '/(app)/review-edit/[editId]',
@@ -614,7 +628,7 @@ export default function ProductScreen() {
         </TouchableOpacity>
       ) : null}
 
-      <View style={styles.infoSection}>
+      <View style={[styles.infoSection, compact && compactStyles.infoSection]}>
         <ThemedText type="title" style={styles.productName}>{product?.name}</ThemedText>
         {product?.brand ? (
           <ThemedText style={styles.brand}>{product.brand}</ThemedText>
@@ -666,11 +680,11 @@ export default function ProductScreen() {
 
       <View style={[styles.divider, { backgroundColor: colors.icon + '33' }]} />
 
-      <View style={styles.ratingSection}>
+      <View style={[styles.ratingSection, compact && compactStyles.ratingSection]}>
         <ThemedText type="subtitle" style={styles.sectionTitle}>
           {isUpdate ? 'Your rating' : 'How does it taste?'}
         </ThemedText>
-        <ThemedText style={styles.sectionHint}>
+        <ThemedText style={[styles.sectionHint, compact && compactStyles.sectionHint]}>
           {isUpdate
             ? 'You rated this already — adjust the score or comment to update.'
             : 'Drag the slider or use − / + to set your score.'}
@@ -681,6 +695,7 @@ export default function ProductScreen() {
         <TextInput
           style={[
             styles.commentInput,
+            compact && compactStyles.commentInput,
             {
               color: colors.text,
               borderColor: colors.icon + '55',
@@ -702,7 +717,12 @@ export default function ProductScreen() {
         ) : null}
 
         <TouchableOpacity
-          style={[styles.button, { backgroundColor: colors.tint }, submitting && styles.buttonDisabled]}
+          style={[
+            styles.button,
+            compact && compactStyles.button,
+            { backgroundColor: colors.tint },
+            submitting && styles.buttonDisabled,
+          ]}
           onPress={handleSubmit}
           disabled={submitting}
         >
@@ -879,5 +899,36 @@ const styles = StyleSheet.create({
     opacity: 0.55,
     fontStyle: 'italic',
     marginTop: 10,
+  },
+});
+
+/**
+ * Tightened vertical spacing applied when `useFitToScreen()` reports `compact`
+ * (P5-006 FE Fixes). Vertical margins/padding/gaps only — no font sizes, and
+ * no padding inside a pressable, so touch targets stay at their full size.
+ */
+const compactStyles = StyleSheet.create({
+  scrollContent: {
+    paddingBottom: SPACING_COMPACT.screenBottom,
+  },
+  reviewBanner: {
+    marginTop: SPACING_COMPACT.sectionGap,
+    paddingVertical: SPACING_COMPACT.cardPaddingV,
+  },
+  infoSection: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+    gap: SPACING_COMPACT.tightGap,
+  },
+  ratingSection: {
+    paddingVertical: SPACING_COMPACT.sectionPaddingV,
+  },
+  sectionHint: {
+    marginBottom: SPACING_COMPACT.sectionGap,
+  },
+  commentInput: {
+    marginTop: SPACING_COMPACT.sectionPaddingV,
+  },
+  button: {
+    marginTop: SPACING_COMPACT.controlGap,
   },
 });

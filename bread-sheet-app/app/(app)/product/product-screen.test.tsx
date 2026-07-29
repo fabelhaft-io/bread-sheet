@@ -172,6 +172,22 @@ describe('ProductScreen — product-not-found state', () => {
     await findByText('Sourdough Loaf');
     await waitFor(() => expect(queryByTestId('product-not-found')).toBeNull());
   });
+
+  it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
+    mockProductAndNoExistingRating({
+      id: 'p1',
+      barcode: '0000000000001',
+      name: 'Sourdough Loaf',
+      brand: 'Artisan',
+      image: null,
+      description: null,
+    });
+    const { findByText, getByTestId } = render(<ProductScreen />);
+    await findByText('Sourdough Loaf');
+    const scroll = getByTestId('product-screen');
+    expect(scroll.props.alwaysBounceVertical).toBe(false);
+    expect(scroll.props.overScrollMode).toBe('never');
+  });
 });
 
 describe('ProductScreen — reviewer banner (P5-002)', () => {

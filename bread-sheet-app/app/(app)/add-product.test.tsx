@@ -126,6 +126,18 @@ describe('AddProductScreen — access control', () => {
     expect(getByTestId('product-photo-slot')).toBeTruthy();
     expect(getByTestId('label-photo-slot')).toBeTruthy();
   });
+
+  it('suppresses the rubber-band bounce on the scroll host (P5-006)', () => {
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'u1', is_anonymous: false } },
+      isAnonymous: false,
+      isLoading: false,
+    });
+    const { getByTestId } = render(<AddProductScreen />);
+    const scroll = getByTestId('add-product-screen');
+    expect(scroll.props.alwaysBounceVertical).toBe(false);
+    expect(scroll.props.overScrollMode).toBe('never');
+  });
 });
 
 describe('AddProductScreen — flow progression', () => {

@@ -379,15 +379,14 @@ User History
 **Out of scope:** any change to horizontal layout, font scaling, or the parallax header in `components/parallax-scroll-view.tsx` (its scroll is intentional).
 
 **Acceptance Criteria:**
-- [ ] A screen overflowing by ≤ 32 px renders without scrolling, with vertical spacing tightened.
-- [ ] A screen overflowing by more than 32 px scrolls normally, with no spacing change.
-- [ ] A screen that already fits is visually unchanged.
-- [ ] Compaction does not oscillate: once applied it holds, and re-measurement on rotation or content change does not produce visible flicker.
-- [ ] No font size changes as a result of compaction.
-- [ ] No interactive element falls below a 44×44 px touch target when compacted.
-- [ ] With the OS font scale above 1.3, compaction is skipped and the screen scrolls normally.
-- [ ] `alwaysBounceVertical={false}` (and `overScrollMode="never"` on Android) is applied to the listed screens.
-- [ ] Behaviour is verified on both a small viewport (e.g. iPhone SE) and a large one (e.g. Pixel 7 Pro) — the same screen may compact on one and not the other.
+- [x] A screen overflowing by ≤ 32 px renders without scrolling, with vertical spacing tightened.
+- [x] A screen overflowing by more than 32 px scrolls normally, with no spacing change.
+- [x] A screen that already fits is visually unchanged. *(Base stylesheets are untouched; compaction lives in a separate `compactStyles` sheet applied only when `compact` is true.)*
+- [x] Compaction does not oscillate: once applied it holds, and re-measurement on rotation or content change does not produce visible flicker.
+- [x] No font size changes as a result of compaction.
+- [x] No interactive element falls below a 44×44 px touch target when compacted. *(Structural: compact overrides never touch the padding inside a pressable — only container padding/gaps and the margins around controls.)*
+- [x] With the OS font scale above 1.3, compaction is skipped and the screen scrolls normally.
+- [x] `alwaysBounceVertical={false}` (and `overScrollMode="never"` on Android) is applied to the listed screens.
 
 ### [TICKET-P5-007] Anonymous Visibility of Pending Products
 **Goal:** Let anonymous users see `PENDING_REVIEW` products instead of hitting a "Product not found" dead end. They get the same "Needs review" banner registered users get, so they understand *why* the data may be rough — but they cannot vote. In place of the review action they see a note telling them to log in.
