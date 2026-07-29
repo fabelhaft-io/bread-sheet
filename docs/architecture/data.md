@@ -197,7 +197,7 @@ Full schema with types and constraints: `server/prisma/schema.prisma`.
 
 - Label photos sent to Google Cloud Vision (`VISION_MODE=live`) or Gemini (`VISION_MODE=llm`) should be the minimum crop needed (just the nutritional panel).
 - The on-device OCR path (P5-002) means label images often never leave the device at all — this is the preferred path and should be documented as a privacy feature.
-- `submittedByUserId` links a user UUID to a public product record. Consider whether this linkage needs to be disclosed in the privacy policy.
+- `submittedByUserId` links a user UUID to a public product record. Consider whether this linkage needs to be disclosed in the privacy policy. Since P5-007 it is **withheld from anonymous callers** of `GET /products/:barcode` — they can now see `PENDING_REVIEW` products, but cannot submit, so the field has no purpose for them and the linkage is not handed to an unauthenticated session.
 
 ---
 

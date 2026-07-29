@@ -235,7 +235,10 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     expect(queryByTestId('review-product-banner')).toBeNull();
   });
 
-  it('hides the banner for anonymous users', async () => {
+  // P5-007: anonymous users see the same banner copy, plus a note in place of
+  // the tap affordance. The server omits `submittedByUserId` from their copy of
+  // the product, so the "not my own submission" check passes on `undefined`.
+  it('shows the banner as a non-interactive note for anonymous users', async () => {
     mockUseSession.mockReturnValue({
       session: { user: { id: 'guest', is_anonymous: true } },
       isAnonymous: true,
@@ -249,11 +252,39 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       image: null,
       description: null,
       unverified: true,
+    });
+    const { findByTestId, getByText } = render(<ProductScreen />);
+    const banner = await findByTestId('review-product-banner');
+
+    // Same title and explanation a registered reviewer reads…
+    expect(getByText('Needs review')).toBeTruthy();
+    expect(getByText(/added by a user — does it look correct\?/i)).toBeTruthy();
+    // …plus the guest note, and no way to reach the reviewer screen.
+    expect(getByText('Log in to review this product.')).toBeTruthy();
+    expect(banner.props.onPress).toBeUndefined();
+    fireEvent.press(banner);
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+
+  it('omits the guest note for registered users', async () => {
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'reviewer', is_anonymous: false } },
+      isAnonymous: false,
+      isLoading: false,
+    });
+    mockProductAndNoExistingRating({
+      id: 'p1',
+      barcode: '0000000000001',
+      name: 'Mystery bread',
+      brand: null,
+      image: null,
+      description: null,
+      unverified: true,
       submittedByUserId: 'someone-else',
     });
-    const { findByText, queryByTestId } = render(<ProductScreen />);
-    await findByText('Mystery bread');
-    expect(queryByTestId('review-product-banner')).toBeNull();
+    const { findByTestId, queryByTestId } = render(<ProductScreen />);
+    await findByTestId('review-product-banner');
+    expect(queryByTestId('review-product-banner-guest-note')).toBeNull();
   });
 
   it('hides the banner for a VERIFIED product (no unverified flag)', async () => {

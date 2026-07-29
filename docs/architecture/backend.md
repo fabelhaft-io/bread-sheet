@@ -138,7 +138,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products return `404` for anonymous callers. *(P5-007 will change this: anonymous callers will receive the product with the `unverified` banner data but without `submittedByUserId`, and still cannot vote.)* |
+| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products are visible to every caller (P5-007), but the anonymous copy omits `submittedByUserId`. `REJECTED` products return `404` for every caller |
 | `POST` | `/products/upload-image` | Auth | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ imageKey, name, brand, genericName }`; for `kind=label` returns `{ imageKey }`. `imageKey` is the `processed/{uuid}.jpg` S3 object key — echoed back as `productImageKey` in the submission |
 | `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/live/llm) |
 | `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
@@ -206,6 +206,20 @@ Submission flow for the Add Product screen (P5-002/P5-003):
 A Prisma `P2002` (unique-violation race on `barcode`) is caught at the service boundary and translated to `ProductPendingByAnotherUserError` so the controller's 409 mapping handles it uniformly.
 
 The 422 body shape (`{ error, reason, field }`) is a wire contract with the client — the Add Product form keys field-level inline errors off `field`.
+
+**Product visibility on `GET /products/:barcode` (P5-007).** Status decides who sees what:
+
+| Status | Registered caller | Anonymous caller |
+|--------|-------------------|------------------|
+| `VERIFIED` | full record, `unverified: false` | same |
+| `PENDING_REVIEW` | full record, `unverified: true`, `submission` block, `submittedByUserId` | same **minus `submittedByUserId`** |
+| `REJECTED` | `404` | `404` |
+
+Anonymous callers used to get a `404` for `PENDING_REVIEW` (P5-003). That traded one failure for a worse one: a guest scanning a barcode a neighbour had just submitted was told the product did not exist. Showing it behind the client's "Needs review" banner is honest about the data quality, and the abuse surface is unchanged because every write path (`POST`/`DELETE /products/:barcode/verify`, `POST /products`, all edit routes) still runs through `requireRegistered`. `submittedByUserId` is withheld from anonymous callers because it links a user UUID to a piece of content (see `docs/architecture/data.md` §5.4) and only the registered client has a use for it — suppressing the banner on your own submission.
+
+`REJECTED` products stay invisible to everyone: peer review has already thrown that data out, and the resubmission path in the table above is reached through the client's "not found → add this product" flow.
+
+**Known side effect:** `POST /ratings` is guarded by `requireAuth` only, so anonymous users can rate anything they can see — which now includes pending products. This is accepted: the rating is attached to `Product.id`, which survives both the `PATCH` correction path and an applied `ProductEdit`, so it follows whatever the metadata settles on. Restricting it would be a change to the rating path, not to visibility.
 
 ---
 

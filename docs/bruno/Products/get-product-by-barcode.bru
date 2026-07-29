@@ -20,11 +20,12 @@ docs {
   Response augmentation:
   - All products include unverified: boolean.
   - VERIFIED products: unverified: false.
-  - PENDING_REVIEW / REJECTED products: unverified: true, plus submittedByUserId and a submission object with nutritional fields.
+  - PENDING_REVIEW products: unverified: true, plus a submission object with nutritional fields, and submittedByUserId for registered callers.
 
-  Visibility:
-  - Anonymous callers receive 404 for PENDING_REVIEW products.
-  - Registered callers see PENDING_REVIEW products with full augmentation.
+  Visibility (P5-007):
+  - PENDING_REVIEW products are returned to every caller. The anonymous copy omits submittedByUserId — anonymous users cannot submit, and the field links a user UUID to content.
+  - REJECTED products return 404 for every caller.
+  - Voting stays registered-only: POST/DELETE /products/:barcode/verify answer an anonymous token with 403.
 
-  Errors: 400 (invalid barcode format), 404 (not found / hidden).
+  Errors: 400 (invalid barcode format), 404 (not found / REJECTED).
 }

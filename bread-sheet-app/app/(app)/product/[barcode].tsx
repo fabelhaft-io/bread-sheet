@@ -652,33 +652,62 @@ export default function ProductScreen() {
       ) : null}
 
       {/*
-        Reviewer banner (P5-002). Shown to registered, non-submitter users
-        when the product is in PENDING_REVIEW. Tapping opens the reviewer
-        screen where the user can approve or reject the submission.
+        Reviewer banner (P5-002, extended by P5-007). Shown whenever the product
+        is in PENDING_REVIEW and the viewer is not its submitter — including
+        anonymous viewers, who since P5-007 can see pending products instead of
+        hitting a "not found" dead end. Registered users get a tappable banner
+        that opens the reviewer screen; anonymous users get the identical
+        explanation as a plain, non-interactive note (they cannot vote — the
+        server enforces that with `requireRegistered`; this is only the UX side).
       */}
-      {product?.unverified && !isAnonymous && product.submittedByUserId !== userId ? (
-        <TouchableOpacity
-          testID="review-product-banner"
-          style={[
-            styles.reviewBanner,
-            compact && compactStyles.reviewBanner,
-            { backgroundColor: colors.tint + '22', borderColor: colors.tint },
-          ]}
-          onPress={() =>
-            router.push({
-              pathname: '/(app)/review-product/[barcode]',
-              params: { barcode },
-            })
-          }
-        >
-          <Text style={styles.reviewBannerIcon}>🔎</Text>
-          <View style={styles.reviewBannerBody}>
-            <ThemedText style={styles.reviewBannerTitle}>Needs review</ThemedText>
-            <ThemedText style={styles.reviewBannerText}>
-              This product was added by a user — does it look correct?
-            </ThemedText>
+      {product?.unverified && product.submittedByUserId !== userId ? (
+        isAnonymous ? (
+          <View
+            testID="review-product-banner"
+            style={[
+              styles.reviewBanner,
+              compact && compactStyles.reviewBanner,
+              { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+            ]}
+          >
+            <Text style={styles.reviewBannerIcon}>🔎</Text>
+            <View style={styles.reviewBannerBody}>
+              <ThemedText style={styles.reviewBannerTitle}>Needs review</ThemedText>
+              <ThemedText style={styles.reviewBannerText}>
+                This product was added by a user — does it look correct?
+              </ThemedText>
+              <ThemedText
+                testID="review-product-banner-guest-note"
+                style={styles.reviewBannerNote}
+              >
+                Log in to review this product.
+              </ThemedText>
+            </View>
           </View>
-        </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            testID="review-product-banner"
+            style={[
+              styles.reviewBanner,
+              compact && compactStyles.reviewBanner,
+              { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+            ]}
+            onPress={() =>
+              router.push({
+                pathname: '/(app)/review-product/[barcode]',
+                params: { barcode },
+              })
+            }
+          >
+            <Text style={styles.reviewBannerIcon}>🔎</Text>
+            <View style={styles.reviewBannerBody}>
+              <ThemedText style={styles.reviewBannerTitle}>Needs review</ThemedText>
+              <ThemedText style={styles.reviewBannerText}>
+                This product was added by a user — does it look correct?
+              </ThemedText>
+            </View>
+          </TouchableOpacity>
+        )
       ) : null}
 
       {/*
@@ -966,6 +995,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     opacity: 0.8,
     marginTop: 2,
+    lineHeight: 18,
+  },
+  // Guest-only third line (P5-007) — replaces the tap affordance the
+  // registered-user banner carries implicitly.
+  reviewBannerNote: {
+    fontSize: 13,
+    fontWeight: '600',
+    opacity: 0.9,
+    marginTop: 6,
     lineHeight: 18,
   },
   editLink: {

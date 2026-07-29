@@ -243,8 +243,11 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 
 `app/(app)/review-product/[barcode].tsx` is the reviewer screen for peer approval. It's surfaced from the product detail screen via a "Needs review" banner that is shown when:
 - the product response carries `unverified: true`
-- the caller is registered (not anonymous)
 - the caller is not the submitter (`submittedByUserId !== session.user.id`)
+
+**Anonymous viewers see the banner too (P5-007), but as a plain note.** Since P5-007 the backend no longer hides `PENDING_REVIEW` products from anonymous callers, so a guest who scans a barcode a neighbour just submitted lands on the product rather than a "not found" dead end. They read the identical title and explanation ("Needs review" / "This product was added by a user — does it look correct?") plus a third line, **"Log in to review this product."**, and the banner renders as a `View`, not a `TouchableOpacity` — no tap, no navigation to the reviewer screen. It is deliberately not a link into signup; the P5-001 `returnTo` pattern is available if that changes. The submitter check still passes for guests because the anonymous copy of the response omits `submittedByUserId` entirely.
+
+None of this is the security boundary: `POST`/`DELETE /api/products/:barcode/verify` keep `requireRegistered` and answer an anonymous token with `403`. The reviewer screen also keeps its own `!session || isAnonymous` guard for deep links.
 
 The reviewer screen renders every submitted field — including `null` values, shown as "Not provided" — so the reviewer can judge completeness. "Looks correct" calls `POST /api/products/:barcode/verify`; "Something looks wrong" calls `DELETE /api/products/:barcode/verify` (reused as the "no" vote channel).
 

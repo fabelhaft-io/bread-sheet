@@ -59,15 +59,26 @@ export const getProductByBarcode = async (req: AuthRequest, res: Response, next:
     // 1. Check local cache first
     const cached = await prisma.product.findUnique({ where: { barcode } });
     if (cached) {
-      // PENDING_REVIEW products are invisible to anonymous callers
-      if (cached.status === ProductStatus.PENDING_REVIEW && req.user?.isAnonymous) {
+      // REJECTED products are invisible to every caller — peer review has
+      // already thrown this data out, and the resubmission path (P5-003) runs
+      // through the "not found → add it" flow. PENDING_REVIEW products, by
+      // contrast, are visible to everyone since P5-007: an anonymous scanner
+      // gets the product behind the "Needs review" banner rather than a
+      // dead-end 404. Writes stay registered-only.
+      if (cached.status === ProductStatus.REJECTED) {
         return res.status(404).json({ message: 'Product not found' });
       }
 
       logger.info(`Product cache hit: ${barcode}`);
       const unverified = cached.status !== ProductStatus.VERIFIED;
+      // `submittedByUserId` exists for the registered client's "don't show me a
+      // banner for my own submission" check. Anonymous users cannot submit, so
+      // it has no purpose for them — and it would hand a user UUID, linked to a
+      // piece of content, to an unauthenticated session (docs/architecture/data.md §5.4).
+      const { submittedByUserId: _submitter, ...withoutSubmitter } = cached;
+      const visible = req.user?.isAnonymous ? withoutSubmitter : cached;
       return res.json({
-        ...cached,
+        ...visible,
         image: resolveImageUrl(cached.image),
         unverified,
         ...(unverified && {

@@ -227,7 +227,7 @@ User History
 **Visibility rules for `PENDING_REVIEW` products:**
 - Visible immediately to the submitter in their own history.
 - Visible to all other registered users in scan/search results, but flagged with an `unverified: true` field in the response so the client can render a "Needs review" badge and a "Looks correct" action.
-- Hidden from anonymous users — `GET /products/:barcode` returns `404` when the only match is `PENDING_REVIEW`. **Superseded by P5-008** (2026-07-29): anonymous users now see the product and the "Needs review" banner, but cannot vote.
+- Hidden from anonymous users — `GET /products/:barcode` returns `404` when the only match is `PENDING_REVIEW`. **Superseded by P5-007** (2026-07-29): anonymous users now see the product and the "Needs review" banner, but cannot vote.
 **Image validation & normalisation (API-side, applies to all image uploads):**
 - **Registration gate:** `POST /products` and `POST /products/extract-label` must be protected by a `requireRegistered` middleware that checks the Supabase JWT claim `is_anonymous !== true`. Anonymous tokens are rejected with `403 Forbidden` and a message directing the user to create an account. This is a defence-in-depth measure alongside the client-side gate.
 - **Size gate (pre-processing):** Reject any multipart image field exceeding **4 MB** raw with `413 Payload Too Large` before touching the bytes. Configured via `multer` `limits.fileSize` in `routes/productRoutes.ts`. This acts as a hard server-side ceiling even if the client-side 2 MB check is bypassed.
@@ -261,9 +261,9 @@ User History
 - [x] `POST /products` persists a user-submitted product with `status: PENDING_REVIEW`. *(P5-003/T3)*
 - [x] `POST /products/:barcode/verify` casts an `APPROVE` vote from a registered non-submitter; returns `403` if the caller is the submitter. *(P5-003/T7)*
 - [x] `DELETE /products/:barcode/verify` casts a `REJECT` vote (non-submitter only); 2 net-rejections flip status to `REJECTED`. *(P5-003/T7 — overloaded REJECT channel, not a retraction)*
-- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8 — the anonymous-`404` half is superseded by **P5-008**; the `unverified`/`submission` payload stays as-is.)*
+- [x] `PENDING_REVIEW` products return `unverified: true` (with `submittedByUserId` and a `submission` block) in the response and are hidden from anonymous users (`404`). *(P5-003/T8 — the anonymous-`404` half is superseded by **P5-007**; the `unverified`/`submission` payload stays as-is.)*
 
-> **Moved out of this ticket (2026-07-29).** A former AC here read *"`PENDING_REVIEW` products show for all users, with banner indicating unverified. Users that are logged in have button to review information."* It directly contradicted the AC above, and honouring it is a behaviour change to already-shipped code rather than an unfinished slice of P5-003. It is now specified in **[TICKET-P5-008]**.
+> **Moved out of this ticket (2026-07-29).** A former AC here read *"`PENDING_REVIEW` products show for all users, with banner indicating unverified. Users that are logged in have button to review information."* It directly contradicted the AC above, and honouring it is a behaviour change to already-shipped code rather than an unfinished slice of P5-003. It is now specified in **[TICKET-P5-007]**.
 - [x] A migration adds the `status` field with a default of `VERIFIED` for existing Open Food Facts-sourced products. *(P5-003/T1)*
 
 ### [TICKET-P5-004] Product Image Plausibility & Abuse Gating
@@ -410,14 +410,14 @@ User History
 - Unchanged. It already refuses to render for `!session || isAnonymous`; that guard stays as defence-in-depth for deep links.
 
 **Acceptance Criteria:**
-- [ ] `GET /products/:barcode` returns a `PENDING_REVIEW` product to an anonymous caller with `unverified: true` and the `submission` block, instead of `404`.
-- [ ] That response omits `submittedByUserId`; the registered-user response still includes it.
-- [ ] `REJECTED` products still return `404` for every caller.
-- [ ] An anonymous user viewing a `PENDING_REVIEW` product sees the "Needs review" banner with the same title and explanation a registered user sees.
-- [ ] The anonymous banner additionally shows "Log in to review this product." and is not tappable — no navigation to the reviewer screen occurs on press.
-- [ ] A registered non-submitter still sees the tappable banner and can still open the reviewer screen and vote.
-- [ ] A registered submitter still sees no banner for their own submission.
-- [ ] `POST`/`DELETE /products/:barcode/verify` still return `403` for anonymous tokens.
+- [x] `GET /products/:barcode` returns a `PENDING_REVIEW` product to an anonymous caller with `unverified: true` and the `submission` block, instead of `404`.
+- [x] That response omits `submittedByUserId`; the registered-user response still includes it.
+- [x] `REJECTED` products still return `404` for every caller. *(This was **not** the shipped behaviour — `getProductByBarcode` returned `REJECTED` products to everyone with `unverified: true`; only `PENDING_REVIEW` was gated. The `404` branch was added here to make the invariant real. Nothing in the app consumed a `REJECTED` product, and the `404` is what routes a second submitter into the documented "REJECTED / different user → UPDATE in place" resubmission path.)*
+- [x] An anonymous user viewing a `PENDING_REVIEW` product sees the "Needs review" banner with the same title and explanation a registered user sees.
+- [x] The anonymous banner additionally shows "Log in to review this product." and is not tappable — no navigation to the reviewer screen occurs on press. *(Rendered as a `View`, not a `TouchableOpacity`.)*
+- [x] A registered non-submitter still sees the tappable banner and can still open the reviewer screen and vote.
+- [x] A registered submitter still sees no banner for their own submission.
+- [x] `POST`/`DELETE /products/:barcode/verify` still return `403` for anonymous tokens. *(Unchanged; covered by `verifyProduct.test.ts`.)*
 
 **Side effect to confirm before building:** `POST /ratings` is guarded by `requireAuth` only, so anonymous users can already rate anything they can see. Making pending products visible therefore also makes them *ratable* by anonymous users — ratings attached to data that has not passed peer review yet. This ticket assumes that is acceptable (the rating survives whatever the product's metadata settles on, and the `Product.id` is preserved through both the P5-005 edit path and the `PATCH` reset path). If it is not, the fix is a `requireRegistered` — or a status check — on the rating path, and it should be its own ticket.
 

@@ -237,13 +237,71 @@ describe('GET /api/products/:barcode', () => {
     expect(res.body.submission).not.toHaveProperty('productImageKey');
   });
 
-  it('returns 404 for a PENDING_REVIEW product when the caller is anonymous', async () => {
+  // P5-007: anonymous callers used to get a 404 here. They now see the product
+  // behind the same "unverified" payload registered users get — minus the
+  // submitter's user id, which is of no use to a session that cannot submit.
+  it('returns a PENDING_REVIEW product to an anonymous caller, without submittedByUserId', async () => {
     session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
     mockFindUnique.mockResolvedValue({
       id: 'p1',
       barcode: VALID_BARCODE,
       name: 'Mystery Bread',
+      brand: 'Artisan',
+      image: null,
       status: ProductStatus.PENDING_REVIEW,
+      submittedByUserId: 'user-42',
+      genericName: 'Bread',
+      energyKcal: 250,
+      fat: 3,
+      saturatedFat: 1.0,
+      carbohydrates: 45,
+      sugars: 4.0,
+      protein: 8,
+      salt: 1,
+      servingSize: '50g',
+      ingredients: 'flour, water',
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${VALID_BARCODE}`)
+      .set('Authorization', 'Bearer anon-token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.unverified).toBe(true);
+    expect(res.body).not.toHaveProperty('submittedByUserId');
+    expect(res.body.submission).toMatchObject({
+      name: 'Mystery Bread',
+      brand: 'Artisan',
+      genericName: 'Bread',
+      energyKcal: 250,
+    });
+    expect(mockFetchFromOFF).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a REJECTED product to a registered caller', async () => {
+    mockFindUnique.mockResolvedValue({
+      id: 'p1',
+      barcode: VALID_BARCODE,
+      name: 'Bad Bread',
+      status: ProductStatus.REJECTED,
+      submittedByUserId: 'user-42',
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${VALID_BARCODE}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(404);
+    expect(mockFetchFromOFF).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a REJECTED product to an anonymous caller', async () => {
+    session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
+    mockFindUnique.mockResolvedValue({
+      id: 'p1',
+      barcode: VALID_BARCODE,
+      name: 'Bad Bread',
+      status: ProductStatus.REJECTED,
       submittedByUserId: 'user-42',
     });
 
@@ -253,32 +311,6 @@ describe('GET /api/products/:barcode', () => {
 
     expect(res.status).toBe(404);
     expect(mockFetchFromOFF).not.toHaveBeenCalled();
-  });
-
-  it('returns unverified: true without a submission block for a REJECTED product', async () => {
-    mockFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_BARCODE,
-      name: 'Bad Bread',
-      status: ProductStatus.REJECTED,
-      submittedByUserId: 'user-42',
-      genericName: null,
-      energyKcal: null,
-      carbohydrates: null,
-      fat: null,
-      protein: null,
-      salt: null,
-      servingSize: null,
-      ingredients: null,
-    });
-
-    const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
-      .set('Authorization', 'Bearer token');
-
-    expect(res.status).toBe(200);
-    expect(res.body.unverified).toBe(true);
-    expect(res.body.submission).toBeDefined();
   });
 
   it('returns 404 when OFF does not recognise the barcode', async () => {
