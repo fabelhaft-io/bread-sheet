@@ -423,29 +423,491 @@ User History
 
 ## Phase 6: Social
 
-### [TICKET-P6-001]  Add Allergen Information
-Add allergenic information to products.
+**Build order (2026-07-30).** Ticket numbers are historical; the dependency order is
+**P6-006 → P6-001 → P6-003 → P6-002 → (P6-007 + P6-008 slice A) → P6-004 → P6-008 slice B → P6-005**.
+
+Worth knowing before implementation starts:
+
+- P6-002 removes GET /api/ratings/product/:barcode, which today hands every rater's id, username and avatar to any authenticated caller. Nothing in the app calls it, so it's a free deletion — and independent of whether groups ever ship. That one doesn't need
+  to wait.
+- The seed category list is the thing I'd most expect to be wrong, and P6-003 is now built so being wrong is cheap: custom names are queryable across users, so seed promotion is a report rather than a guess. My suggestion stands — don't tune the list before
+  there's real usage.
+
+- **P6-006 first** because it is small and fixes a live dead end: the only route into the Add Product flow
+  today is the 404 branch of a *successfully scanned* barcode, so a damaged label or an unsupported symbology
+  leaves the user with nowhere to go.
+- **P6-003 before P6-002** because the per-group "share only these categories" policy selects over the
+  user's own category rows, which do not exist until then. Categories are also the phase's cheapest source
+  of product feedback — see the learning loop in P6-003.
+- **P6-007 and P6-008 slice A ship together.** Barcode-less items with no way to search for them by name
+  are close to write-only once they fall off the recents list; a barcoded product can always be re-found by
+  scanning, an item cannot.
+- **P6-007 after P6-002** because an item only becomes visible to anyone but its creator through
+  `RatingShare`.
+- P6-004 is a presentation layer over the aggregate endpoint that P6-002 introduces.
+- P6-008 slice B (global name search) and P6-005 (OFF sync) are independent of everything else and can slip.
+
+**Cross-cutting decisions for this phase:**
+- **Social features are registered-only.** Every group route sits behind `requireRegistered`, matching
+  every other contribution gate. Anonymous users see a sign-up prompt where the group UI would be.
+  Allergens (P6-001) and categories (P6-003) are *read* features and stay visible to anonymous users;
+  only the write paths (submitting/editing a product, setting a personal allergen list) are gated.
+- **Identity becomes visible for the first time.** `User.username` exists in the schema but is never
+  written by the client today. Groups display member names, so P6-002 introduces the display-name flow.
+  Names are visible to fellow group members only — never in a global context.
+- **Aggregates outside a group are anonymous.** A product's global average is a number and a count,
+  never a list of who rated what. `GET /api/ratings/product/:barcode` currently returns every rating
+  row with the author's `id`/`username`/`avatar` to any authenticated caller; nothing in the app calls
+  it. P6-002 removes it and replaces it with a scoped summary endpoint.
+- **Offline posture.** Group reads (my groups, group detail, product rating summary) join the Phase 8
+  stale-while-revalidate caches. Group *writes* — create, join, leave, share toggles — are online-only,
+  same reasoning as P8-004: they depend on server state that is invisible offline (code validity,
+  member caps, membership).
+
+### [TICKET-P6-001] Allergen Information
+**Goal:** Record allergen information on products, and warn a user when a product contains something on
+their personal allergen list. This is the first feature where wrong data has a physical consequence, so
+the ticket is deliberately conservative: it distinguishes "no allergens declared" from "nobody has said",
+never claims authority, and always tells the user to check the packaging.
+
+**Canonical list:** the EU 14 major allergens, as a Prisma enum so the DB rejects anything else:
+`GLUTEN`, `CRUSTACEANS`, `EGGS`, `FISH`, `PEANUTS`, `SOYBEANS`, `MILK`, `NUTS`, `CELERY`, `MUSTARD`,
+`SESAME`, `SULPHITES`, `LUPIN`, `MOLLUSCS`. Labels and per-locale synonyms live in one shared constant
+(`server/src/constants/allergens.ts`, mirrored in `bread-sheet-app/features/products/allergens.ts`).
+No free-text allergens — an open vocabulary cannot be matched against a watchlist reliably.
+
+**Schema additions to `Product`:**
+- `allergens Allergen[]` — declared contents ("Contains: milk, gluten").
+- `traces Allergen[]` — "may contain" / cross-contamination warnings.
+- `allergensDeclared Boolean @default(false)` — flips to `true` the moment a human (submitter or editor)
+  or a trusted OFF import has explicitly stated the list, *including* stating that there are none.
+  Without this flag an empty array is ambiguous, and the ambiguity would be resolved on screen as the
+  reassuring reading ("no allergens") — exactly the wrong default for this data.
+
+**Where the data comes from:**
+1. **Open Food Facts import** — map `allergens_tags` / `traces_tags` (`en:milk`, `en:gluten`) onto the
+   enum; unmapped tags are dropped, not guessed. A non-empty OFF `allergens_tags` sets
+   `allergensDeclared: true`.
+2. **Label extraction** (`labelExtractionService.ts`) — detect allergens by matching the EN+DE synonym
+   dictionary against the parsed ingredients text, and traces from the "may contain" / "kann Spuren von
+   … enthalten" tail. Results are **suggestions only**: they pre-fill chips in the form and do not set
+   `allergensDeclared` on their own. Extraction runs on client-supplied text, so it is bound by the
+   project's regex convention — dictionary alternation with no ambiguous quantifiers, and the existing
+   controller-level input cap.
+3. **The user**, in the Add Product and Edit Product forms — the only path that can set
+   `allergensDeclared: true` from within the app.
+- No provenance field. Allergens are ordinary product fields and inherit the P5-005 peer-review
+  machinery: a correction to a `VERIFIED` product's allergen list needs two approvals like any other.
+
+**Backfill for already-cached products.** The OFF payload is not persisted and cached products are never
+re-fetched, so existing rows cannot be filled from local data. Add a maintenance script
+`server/scripts/backfill-off-metadata.ts` that walks OFF-sourced products, re-fetches each barcode
+(rate-limited to OFF's budget, resumable via a cursor, idempotent) and fills `allergens`, `traces`,
+`allergensDeclared` — and, once P6-003 lands, `Product.suggestedCategory` in the same pass. It never
+overwrites a user-supplied value.
+
+**Frontend — product detail (`app/(app)/product/[barcode].tsx`):**
+- An **Allergens** section below nutrition: `allergens` as solid chips, `traces` as muted chips prefixed
+  "May contain". When `allergensDeclared` is false, render "No allergen information yet" plus the edit
+  affordance — never "contains no allergens".
+- A **watchlist warning card above the fold** (above the rating control, below the product header) when
+  the user's watchlist intersects `allergens`: high-contrast, icon + "Contains milk — on your allergen
+  list". A softer variant for a `traces`-only hit ("May contain nuts"). The card is informational; it
+  never blocks rating.
+- A standing disclaimer line in the allergens section: allergen data is community- and OFF-sourced and
+  may be wrong or out of date — always check the packaging.
+
+**Frontend — personal watchlist:**
+- Profile tab → "My allergens", a multi-select over the 14. Stored server-side on
+  `User.allergenWatchlist Allergen[]` so it follows the account across devices, and mirrored into the
+  Phase 8 cache so the warning card renders offline.
+- Endpoints: `GET /api/users/me/allergens`, `PUT /api/users/me/allergens { allergens: Allergen[] }`
+  (`requireRegistered` — an anonymous session has nowhere durable to keep this).
+
+**Forms:** the Add Product and Edit Product screens get an allergen chip picker (contains / may-contain /
+neither, per allergen) and a "no allergens in this product" explicit affirmation that sets
+`allergensDeclared` without listing anything. The P5-005 diff screen renders array fields as
+added/removed chips rather than old-value/new-value text.
+
+**Acceptance Criteria:**
+- [ ] `Product` carries `allergens`, `traces`, and `allergensDeclared`; the enum is the EU 14.
+- [ ] OFF-sourced products import `allergens_tags`/`traces_tags`; unmapped tags are dropped, not guessed.
+- [ ] Label extraction returns allergen and trace suggestions from ingredients text (EN + DE) and does
+      not set `allergensDeclared`.
+- [ ] The extraction regexes have no adjacent quantifiers matching the same character, and a timing
+      regression test covers the allergen dictionary path.
+- [ ] A product with no allergen information shows "No allergen information yet" — never "no allergens".
+- [ ] A user can affirm "no allergens in this product", which sets `allergensDeclared` with empty arrays
+      and renders as "No allergens declared".
+- [ ] The product screen lists allergens and traces distinctly, with the check-the-packaging disclaimer.
+- [ ] A user can set a personal allergen watchlist from the profile tab; it persists across devices.
+- [ ] A product whose allergens intersect the watchlist shows a warning card above the rating control;
+      a traces-only intersection shows the softer variant.
+- [ ] The warning card renders offline from cached product + cached watchlist data.
+- [ ] Allergen changes to a `VERIFIED` product go through the P5-005 edit flow, and the diff screen shows
+      them as added/removed chips.
+- [ ] Anonymous users can read allergen data; setting a watchlist returns `403`.
+- [ ] The OFF backfill script is idempotent, resumable, rate-limited, and never overwrites a user-supplied
+      value.
 
 ### [TICKET-P6-002] Group Management
-**Goal:** Enable private sharing contexts. E.g., a household shares ratings for basic foods while enabling different opinios.
-**Logic:**
-- Users create a group -> generate shareable code.
-- Other users join via code.
-- Feed filtering: "My Groups" vs "Global".
-- Group votes: Show highest vote with member and average (if the same, don't show highest vote)
-- If you are part in a group and vote for a product - set default if always for group or private
-- If you join a group, select if you want to share no votes, all votes, some votes, select categories
-- If you are a member, in detail tab of group, share votes afterwards
+**Goal:** Enable private sharing contexts — a household compares its ratings of everyday food while each
+member keeps their own opinion, and nothing is shared outside the group unless the owner shares it.
+**Depends on:** P6-003 (the category-scoped share policy needs the taxonomy).
+
+**Group identity & lifecycle:**
+- Name 1–40 chars. Creator becomes `ADMIN`; `Group.createdByUserId` and `createdAt` are recorded.
+- **Invite code:** 8 characters from a 32-symbol unambiguous alphabet (Crockford-style: no `I`, `L`, `O`,
+  `U`, `0`, `1`), uppercase, `@unique`, generated with a collision retry. Regenerating invalidates the
+  previous code immediately. Codes do not expire. Join attempts are rate-limited per user.
+- Only `ADMIN`s can see the invite code, rename the group, kick members, change roles, regenerate the
+  code, or delete the group. Deleting a group cascades memberships and shares; the ratings themselves are
+  untouched — they were always the member's own rows.
+- **Limits:** 20 groups per user, 100 members per group. Both are configurable constants; exceeding them
+  returns `409` with copy naming the limit.
+- **Display name:** creating or joining requires `User.username` (2–30 chars). If it is unset, the flow
+  prompts for it first and `PATCH /api/users/me` stores it. Names are only ever returned to fellow
+  members of a group the caller belongs to.
+- The last `ADMIN` of a group with other members cannot leave until they promote someone (`409`); the
+  last member leaving deletes the group.
+
+**Sharing model — one source of truth.** A group can see a rating **iff** a `RatingShare(ratingId,
+groupId)` row exists. Everything else is a way of creating or removing those rows.
+- `GroupMember.autoShare` (`NONE | ALL | CATEGORIES`) + `GroupMember.autoShareCategories String[]`
+  is a rule for **future** ratings only, evaluated when a rating is created or updated. It is chosen at
+  join time (and at create time by the founder) and editable later. The category list holds the *member's
+  own* `UserCategory` ids (P6-003) — the policy is a statement about the sharer's labels, not a shared
+  vocabulary. A category the member later deletes drops out of the policy silently.
+- **Changing `autoShare` never retroactively adds or removes shares.** Keeping "what happens next" and
+  "what is already shared" separate is what makes the model explainable in one sentence; a live rule would
+  mean a policy edit silently retracting a rating a member deliberately shared, or resurrecting one they
+  deliberately pulled.
+- Retroactive sharing is explicit: the group detail screen has a **"My shared ratings"** tab listing the
+  caller's ratings with per-rating toggles, plus bulk actions ("share all", "share all wine").
+- Rating-time affordance: the rating control shows a compact "Shared with: Household, Office" line with
+  the auto-share outcome pre-applied and a tap target to change it for this rating only. This is the
+  "always for group or private" default from the original note, expressed per group.
+- Updating a rating keeps its shares (the group sees the new score). Deleting a rating cascades its shares.
+- **Leaving a group deletes the caller's `RatingShare` rows for it.** Rejoining starts from nothing shared.
+
+**Aggregation & display rules:**
+- New endpoint `GET /api/products/:barcode/ratings/summary` — the single read path for "how is this product
+  rated", consumed by the product screen and by P6-004:
+  ```json
+  {
+    "mine": { "taste": 7.5, "comment": "string | null", "updatedAt": "iso" } ,
+    "global": { "average": 6.5, "count": 42 },
+    "groups": [
+      { "id": "uuid", "name": "Household", "average": 7.0, "count": 3,
+        "top": { "taste": 9, "userId": "uuid", "username": "Jano" } }
+    ]
+  }
+  ```
+- `groups` contains only groups the caller belongs to, and each aggregate counts only ratings shared into
+  that group. The caller's own rating counts toward a group's aggregate only if they shared it there.
+- **`top` is omitted when it would tell the reader nothing** — when `count < 2`, or when the top score
+  equals the group average (every member rated the same). This is the "if the same, don't show highest
+  vote" rule from the original note.
+- `global` is an anonymous average over **all** ratings of the product, with no names and no per-user rows
+  (**confirmed 2026-07-30**). It is not filtered by sharing: sharing controls attribution, and an average
+  over 42 people attributes nothing. `count` is suppressed below 3 ratings so a small `global` can't be
+  differenced against a group aggregate to re-identify someone. Names appear inside a group or nowhere —
+  treat that as an invariant of the phase, not a per-endpoint choice.
+- **Removed in this ticket:** `GET /api/ratings/product/:barcode`, which returns every rating with the
+  author's id, username and avatar to any authenticated caller. Nothing in the app calls it; its Bruno
+  request is replaced by the summary request.
+
+**Endpoints** (all `requireAuth` + `requireRegistered`):
+
+| Method | Path | Guard | Notes |
+|---|---|---|---|
+| `POST` | `/api/groups` | — | `{ name, autoShare?, autoShareCategories? }` → `201 { group, code }` |
+| `GET` | `/api/groups` | — | my groups + `memberCount`, `myRole`, my share settings |
+| `GET` | `/api/groups/:id` | member | members, my share settings; `code` only for `ADMIN` |
+| `PATCH` | `/api/groups/:id` | admin | rename |
+| `DELETE` | `/api/groups/:id` | admin | cascades memberships + shares |
+| `POST` | `/api/groups/join` | — | `{ code }`; `404` unknown, `409` already a member, `409` group full |
+| `DELETE` | `/api/groups/:id/members/me` | member | leave; `409` if last admin with members remaining |
+| `DELETE` | `/api/groups/:id/members/:userId` | admin | kick; cannot target self |
+| `PATCH` | `/api/groups/:id/members/:userId` | admin | role change |
+| `POST` | `/api/groups/:id/code/regenerate` | admin | old code dies immediately |
+| `PATCH` | `/api/groups/:id/share-settings` | member | `autoShare` + `autoShareCategories` |
+| `PUT` | `/api/groups/:id/shares` | member | bulk: `{ mode: 'ALL' \| 'CATEGORIES' \| 'SELECTED', categories?, ratingIds? }` |
+| `DELETE` | `/api/groups/:id/shares/:ratingId` | member | unshare one of my ratings |
+| `GET` | `/api/groups/:id/activity` | member | ratings shared into the group, newest first, cursor-paginated |
+| `GET` | `/api/products/:barcode/ratings/summary` | — | see above |
+
+- **Middleware pulled forward from P7-002:** `requireGroupMember` and `requireGroupAdmin` are built here,
+  as composable router-level guards, because groups are unusable without them. P7-002 keeps the
+  user-resource and rating-ownership scope (`requireSelf`) and inherits these two.
+
+**Frontend:**
+- The placeholder **Explore** tab (still the Expo starter template) becomes **Groups**:
+  - *Group list* — my groups with member count and role, "Create group" and "Join with code" actions.
+  - *Group detail* (`app/(app)/group/[id].tsx`) with three tabs: **Activity** (recent ratings shared into
+    the group: product thumbnail, member name, score), **Members** (list, role, admin actions, invite code
+    + share sheet for admins), **My sharing** (auto-share policy + per-rating toggles and bulk actions).
+  - Anonymous users see the sign-up prompt in place of the list, reusing the P5-001 `returnTo` pattern.
+- Product screen: a **group summary card** — one row per group with average, count, and the top rating
+  with the member's name when the rule above says to show it; a global row underneath. Full presentation
+  treatment is P6-004.
+- Offline: group list, group detail and the per-barcode summary are `useCachedResource` reads with the
+  standard offline banner. Create/join/leave/share are online-only — they surface `OFFLINE_MESSAGE` via
+  `formatApiError` rather than queueing.
+
+**Schema additions:**
+- `Group`: `createdByUserId String?`, `createdAt DateTime @default(now())`.
+- `GroupMember`: `joinedAt DateTime @default(now())`, `autoShare GroupAutoShare @default(NONE)`,
+  `autoShareCategories String[]`. Also promote `role String` to an enum `GroupRole { ADMIN MEMBER }` —
+  it is documented as an enum in a comment today and validated nowhere.
+- New model `RatingShare`: `id`, `ratingId` (FK → Rating, cascade), `groupId` (FK → Group, cascade),
+  `createdAt`, `@@unique([ratingId, groupId])`, `@@index([groupId])`.
+- New enum `GroupAutoShare { NONE ALL CATEGORIES }`.
+- `User.username` gains a length constraint at the API layer (2–30) — not `@unique`; two households may
+  legitimately contain a "Mum".
+
 **Acceptance Criteria:**
-- [ ] User can create a group.
-- [ ] User can join a group with a code.
-- [ ] Ratings can be filtered by group context.
+- [ ] A registered user can create a group and gets an 8-character invite code from the unambiguous
+      alphabet; the creator is `ADMIN`.
+- [ ] Another user can join with the code. An unknown code returns `404`, a second join `409`, and a full
+      group `409` naming the limit.
+- [ ] Creating or joining without a display name prompts for one first and stores it on `User.username`.
+- [ ] Regenerating the code invalidates the previous one immediately.
+- [ ] Only admins see the invite code, rename, kick, change roles, regenerate, or delete.
+- [ ] The last admin of a group with other members cannot leave until they promote someone (`409`); the
+      last member leaving deletes the group.
+- [ ] Anonymous tokens receive `403` from every group endpoint.
+- [ ] A non-member receives `403` (not `404`) from every endpoint of a group they do not belong to.
+- [ ] `autoShare = ALL` shares each new rating with that group; `NONE` shares none; `CATEGORIES` shares
+      only ratings of products in the selected categories.
+- [ ] Changing `autoShare` leaves existing shares untouched — nothing is retroactively added or removed.
+- [ ] A member can retroactively share and unshare individual ratings, and bulk-share all ratings or all
+      ratings in chosen categories.
+- [ ] Updating a shared rating keeps it shared and the group aggregate reflects the new score.
+- [ ] Leaving a group removes that group's shares for the leaving member; rejoining starts with nothing
+      shared.
+- [ ] A group aggregate counts only ratings shared into that group — an unshared rating is invisible to it.
+- [ ] `top` is present only when the group has ≥ 2 ratings and the top score differs from the average.
+- [ ] `global` returns an average with no names or per-user rows, and suppresses `count` below 3 ratings.
+- [ ] `GET /api/ratings/product/:barcode` no longer exists; no endpoint returns another user's identity
+      alongside their rating outside a shared group context.
+- [ ] `requireGroupMember` and `requireGroupAdmin` are composable router-level middleware, not inline
+      controller checks, and are covered by integration tests.
+- [ ] Group reads render from cache offline with the offline indicator; group writes report being offline
+      and are not queued.
 
-### [TICKET-P6-003]  Add Product Categories
-Allow easy selection to see own votes in categories (e.g. what wine I liked, what cigars, what cocktails)
+### [TICKET-P6-003] Categories — User-Owned Labels for Organising Ratings
+**Goal:** Let a user organise *their own* ratings by kind of thing — "which wine was good", "which cigars",
+"which cocktails did we like" — so the rating screens are navigable once the history grows past a screenful.
 
-### [TICKET-P6-004] User Scenario - Supermarket Lookup
-- If rating (personal or group) is already given, show not a rating screen but a rating overview (personal, groups (same logic, highest with user, and median))
+**Design stance (revised 2026-07-30): a category is a label the user owns, not a fact about the product.**
+The earlier draft of this ticket made `Product.category` the canonical field, peer-reviewed through the
+P5-005 edit flow. That is the wrong shape for this problem:
+- **The purpose is personal organisation.** The user's question is "what did *I* like", so the axis they
+  browse by should be theirs. A household that files rosé under "wine" and a user who files it under
+  "summer drinks" are both right about their own history.
+- **The taxonomy is unknown and will move.** We do not yet know which categories people want; that only
+  emerges from use. A user-owned label can be created, renamed and merged at will. A canonical product
+  field cannot: every change to a `VERIFIED` product needs two approvals, so a disputed category would
+  consume peer-review capacity that exists to protect nutrition and allergen data, and each taxonomy
+  revision would need a migration.
+- **It keeps categories out of the review machinery entirely.** Nobody should have to get two strangers to
+  agree before they can find their wine.
+- **It survives the barcode-less case.** People want to track things with no barcode (cocktails being the
+  concrete example that prompted this). A label hanging off the *rating* keeps working when there is no
+  product row to hang it off; a canonical product field would need the barcode-less item model to exist
+  first. Building that model is still out of scope here (see *Non-barcode items* below) — this ticket only
+  commits to not blocking it.
+
+**Two distinct concepts, deliberately not merged:**
+
+| | `UserCategory` + `Rating.categoryId` | `Product.suggestedCategory` |
+|---|---|---|
+| Owner | The user | Machine-derived |
+| Answers | "How do *I* file this?" | "What is this, probably?" |
+| Authority | Authoritative for that user's own views | A suggestion; never shown as fact |
+| Peer review | None | None — it is not a claim, so there is nothing to review |
+| Used by | Home-tab filter, per-user counts, the P6-002 share policy | Pre-selecting the picker; cross-user views (group activity filter, future search facets) where members must share a vocabulary |
+| Changing it | Free, instant, no migration | Recomputable at any time; no user-visible history |
+
+The rule: **anything one user sees about their own ratings uses their label; anything several users see at
+once uses the suggestion.** That avoids a group activity list where the same bottle appears under three
+different names, without forcing anyone onto a shared vocabulary for their own history.
+
+**Suggestions (this is where the "give suggestions" requirement lands):**
+- `Product.suggestedCategory String?`, filled from, in priority order:
+  1. the Open Food Facts `categories_tags` mapping (an ordered rule list, first match wins);
+  2. the product-photo plausibility call (`imagePlausibilityService.ts`), which already returns
+     `name`/`brand`/`genericName` for `kind=product` and gains a `category` field in the same request —
+     no extra call, no extra cost;
+  3. otherwise `null`. Never guessed from the product name alone.
+- The picker pre-selects the suggestion **mapped onto the user's own categories**: if the suggestion is
+  `wine` and the user already has a "Wine" category, that is pre-selected; if they do not, the seed label
+  is offered as a one-tap create.
+- Ranking below the pre-selection is the user's own most-used categories first — after a few weeks the
+  picker is mostly a one-tap confirmation.
+- The suggestion is never displayed as the product's category on the detail screen. It exists to save taps.
+
+**Seed labels — a starting point, explicitly expected to churn.** A curated list ships in a shared constant
+(`server/src/constants/categorySeeds.ts`, mirrored client-side) purely as the initial contents of the
+picker. Nothing is written per user until they pick one (find-or-create on the user's own list), so a user
+who only rates chocolate never carries 24 unused rows or 24 filter chips.
+
+Initial seeds (food and non-food, since rating cigars, wine and cocktails is an explicit goal): `wine`,
+`beer`, `spirits`, `cocktails`, `cigars`, `coffee`, `tea`, `soft-drinks`, `water`, `bread-bakery`, `dairy`,
+`cheese`, `chocolate`, `sweets`, `snacks`, `cereals`, `meat`, `fish-seafood`, `fruit-vegetables`,
+`ready-meals`, `sauces-condiments`, `supplements`, `baby-food`.
+There is no `other` seed — "uncategorised" is the absence of a category, and a second way to say the same
+thing would split the same ratings across two chips.
+
+**Custom categories are in scope from day one.** They are the mechanism that answers "which categories
+actually make sense": we cannot design the taxonomy up front, so we ship a cheap way for users to name
+what they need and then observe it.
+- Created inline from the picker ("+ New category"), name 1–24 chars, max 40 per user.
+- **Fragmentation guards**, or the data becomes unusable for learning: slugify + case-fold before storing,
+  and before creating, near-match the input against the user's existing categories and the seed list
+  (normalised edit distance) and offer "Did you mean *Wine*?" as the first option. Rejecting the suggestion
+  still creates the new one — this is a nudge, not a gate.
+- Rename is free and retroactive (the label lives in one row).
+- Merge (`POST /api/users/me/categories/:id/merge { intoId }`) reassigns the source category's ratings and
+  deletes the source — the escape hatch for a user who has fragmented their own list.
+- Delete leaves the ratings intact and uncategorised; it never deletes ratings. Confirmation copy says so.
+
+**The learning loop (why this shape was chosen):** custom category names are queryable across users, so
+"what do people actually create" is a report, not a guess. A name that shows up repeatedly gets promoted
+into the seed list; existing user rows keep working because a seed and a custom category are the same kind
+of row, distinguished only by `isSeed`. A seed that nobody picks gets dropped from the constant with no
+migration and no effect on users who already materialised it. Revisit the seed list once there is real
+usage; do not tune it before then.
+
+**Frontend:**
+- **Rating screen** — a category row beneath the taste control: the pre-selected suggestion as a chip, tap
+  to open the picker (own categories, most-used first; then unused seeds; then "+ New category"). Skipping
+  is always allowed; a rating with no category is normal, not an error state.
+- **Home tab** — a horizontal chip row above "My Ratings": "All", then one chip per category the user
+  actually has ratings in with its count, then "Uncategorised" when any exist. Filtering is client-side
+  over the already-cached ratings list, so it costs no request and works offline. The selected chip
+  persists across restarts in the offline store (it is a view preference).
+- **Product detail** — no category chip. The user's own label for a product is visible where their rating
+  is; the machine suggestion is not worth screen space and would read as authoritative.
+- **Manage categories** — a profile-tab screen listing the user's categories with rating counts, supporting
+  rename, merge and delete.
+- **Optional follow-up slice (do not block this ticket):** a "tidy up" affordance on the Home tab that
+  walks uncategorised ratings with the suggestion pre-selected, one tap each. Worth building only once
+  there are enough uncategorised ratings to make it feel necessary.
+
+**Backend:**
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/users/me/categories` | my categories + rating counts; seeds I have not used are not included |
+| `POST` | `/api/users/me/categories` | `{ name }` or `{ seedSlug }` — find-or-create, returns the existing row if the slug already exists |
+| `PATCH` | `/api/users/me/categories/:id` | rename |
+| `DELETE` | `/api/users/me/categories/:id` | ratings survive, uncategorised |
+| `POST` | `/api/users/me/categories/:id/merge` | `{ intoId }` — reassign then delete the source |
+
+- `POST /api/ratings` and the rating update path accept an optional `categoryId` (the caller's own
+  category; `403` if it belongs to another user) or `seedSlug` (find-or-create in one round trip, so
+  rating and categorising is a single request).
+- `GET /api/users/me/ratings` includes `category: { id, name } | null` on each entry — this is what feeds
+  the offline chip filter and its counts.
+- All category routes are `requireAuth` only, **not** `requireRegistered` (**confirmed 2026-07-30**): an
+  anonymous user's ratings are already durable and visible (P8-003), so their organisation of them should
+  be too. This is a deliberate exception to the phase's registered-only stance, and the reason it is safe
+  is that a category is private by construction — it touches only the caller's own ratings and is never
+  visible to another user, so none of the accountability arguments behind `requireRegistered` apply.
+
+**Schema additions:**
+- New model `UserCategory`: `id`, `userId` (FK → User, cascade), `name String`, `slug String`,
+  `isSeed Boolean @default(false)`, `createdAt`, `@@unique([userId, slug])`.
+- `Rating.categoryId String?` → `UserCategory`, `onDelete: SetNull` (deleting a category must never delete
+  a rating), `@@index([categoryId])`.
+- `Product.suggestedCategory String?` — machine-derived, holds a seed slug, no FK, freely recomputable.
+  Deliberately **not** part of the P5-005 editable field set.
+- No backfill of `Rating.categoryId`: existing ratings start uncategorised and the user labels them as they
+  go (or via the optional tidy-up slice). `Product.suggestedCategory` for already-cached OFF products is
+  filled by the `backfill-off-metadata.ts` script introduced in P6-001, which re-fetches OFF anyway for
+  allergens.
+
+**Amendment to P6-002:** `GroupMember.autoShareCategories` references the member's **own** `UserCategory`
+ids, not a global vocabulary. "Share my wine ratings with the household" is a statement about the sharer's
+labels, so this is both simpler and more correct. Cross-user filtering of a group's activity list, if it is
+built, uses `Product.suggestedCategory`.
+
+**Non-barcode items — specified in P6-007, not here.** Tracking things with no barcode (cocktails, a
+restaurant dish, loose-leaf tea) is **[TICKET-P6-007]**. Note the ordering consequence: *categories alone
+do not deliver the cocktail use case*. A category organises ratings, a rating needs a product row, and
+until P6-007 a product row needs a scannable barcode — so shipping P6-003 first gives barcoded goods a
+filter, not cocktail tracking. This ticket only guarantees the category model does not stand in P6-007's
+way: the label hangs off the `Rating`, so it works identically for an item with no barcode. Do not add a
+"category-only item" path here.
+
+**Acceptance Criteria:**
+- [ ] A user can assign a category to a rating, and change or remove it later.
+- [ ] A rating with no category is a supported state, filterable as "Uncategorised".
+- [ ] The picker pre-selects the machine suggestion, mapped to the user's existing category when one
+      matches; otherwise it offers the seed label as a one-tap create.
+- [ ] Picking a seed label materialises exactly one `UserCategory` row for that user; nothing is written
+      per user before that.
+- [ ] `Product.suggestedCategory` is filled from the OFF tag mapping and from the product-photo
+      plausibility response, and is never rendered as the product's category.
+- [ ] Categories are never peer-reviewed and are absent from the P5-005 edit flow and diff screen.
+- [ ] A user can create a custom category from the picker (1–24 chars, max 40 per user).
+- [ ] Creating a name that near-matches an existing category or seed offers "Did you mean …?" first, but
+      still allows the new category to be created.
+- [ ] Renaming a category updates it everywhere it appears, with no per-rating writes.
+- [ ] Merging a category reassigns its ratings and deletes the source.
+- [ ] Deleting a category leaves its ratings intact and uncategorised, and the confirmation copy says so.
+- [ ] One user cannot read, assign or modify another user's categories (`403`).
+- [ ] The Home tab shows a chip only for categories the user has ratings in, each with a count, plus
+      "Uncategorised" when applicable.
+- [ ] Chip filtering issues no network request and works offline; the selected chip survives a restart.
+- [ ] `GET /api/users/me/ratings` includes each entry's category.
+- [ ] Rating and categorising in one step is possible in a single request (`categoryId` or `seedSlug` on
+      the rating write).
+- [ ] Anonymous users can create and use categories (`requireAuth`, not `requireRegistered`).
+- [ ] Custom category names are queryable across users for the seed-promotion review.
+
+### [TICKET-P6-004] Supermarket Lookup — Rating Overview Before Editor
+**Goal:** The dominant in-store question is "have we already decided about this?", not "let me rate this".
+When a product already carries the caller's rating or any rating in one of their groups, opening it must
+answer that question first and offer the editor second.
+**Depends on:** P6-002 (`GET /api/products/:barcode/ratings/summary`).
+
+**Behaviour:**
+- **Overview state** (`mine` exists, or any group has `count > 0`): the rating control is replaced by an
+  **overview card**:
+  - *Your rating* — score badge, comment if any, and when it was last updated.
+  - *Per group* — one row per group: average (to 0.5), count, and the top rating with the member's name
+    when the P6-002 rule says to show it.
+  - *Everyone* — the anonymous global average and count, visually subordinate to the group rows.
+  - A primary **"Update my rating"** button (or **"Rate this product"** when only group data exists) that
+    expands the existing `TasteSlider` inline. No navigation — the overview stays visible above it, so the
+    user can see what the group thought while choosing their own score.
+- **Empty state** (no rating anywhere): unchanged from today — the editor renders immediately.
+- Group rows are ordered by group name for stability; a group the caller belongs to but which has no
+  shared ratings for this product is omitted rather than shown as "no ratings".
+- Offline: the overview renders from the cached summary alongside the cached rating, under the standard
+  offline banner. A rating submitted offline shows its queued marker inside the overview card
+  (P8-004 semantics unchanged).
+- Aggregates are displayed as **means** rounded to the nearest 0.5, matching the rating granularity.
+  (The original note said "median" in one place and "average" in another; mean is what P6-002 computes,
+  and with group sizes in single digits the two rarely differ by more than the rounding step.)
+
+**Acceptance Criteria:**
+- [ ] Opening a product the caller has rated shows the overview card, not the editor, with their score,
+      comment and last-updated time.
+- [ ] Opening a product the caller has not rated but a group has shows the overview with group rows and a
+      "Rate this product" button.
+- [ ] Opening a product with no ratings anywhere shows today's editor-first screen unchanged.
+- [ ] "Update my rating" expands the slider in place without navigating, leaving the overview visible.
+- [ ] Group rows show average and count, and the top rating with the member's name only when P6-002's
+      rule applies.
+- [ ] The global row shows an anonymous average with no names.
+- [ ] A group with no ratings shared for this product is omitted from the overview.
+- [ ] The overview renders offline from cache; a rating queued offline is marked as not yet synced within
+      the card.
+- [ ] Averages are means rounded to 0.5.
 
 ### [TICKET-P6-005] Open Food Facts Contribution Sync
 **Goal:** Automatically contribute user-verified product data back to the Open Food Facts (OFF) project using their write API, closing the loop between local submissions and the upstream open dataset.
@@ -482,6 +944,282 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 - [ ] After 5 failed attempts, the product is marked `REJECTED` and the submitter is notified.
 - [ ] Sync is idempotent — re-submitting the same barcode to OFF does not create a duplicate entry.
 - [ ] `OFF_USERNAME` and `OFF_PASSWORD` are stored in env vars, never hard-coded.
+
+### [TICKET-P6-006] Manual Barcode Entry & a Real "Add" Entry Point
+**Goal:** Make adding a product reachable without a successful camera scan. Today the *only* navigation
+into `app/(app)/add-product.tsx` is `app/(app)/product/[barcode].tsx:572` — the 404 branch of a barcode
+the camera already read. If the label is damaged, the code is a format the scanner is not configured for
+(`ean13`, `ean8`, `upc_a`, `upc_e` only), the lighting is bad, or the user is on web without a camera,
+there is no way in at all.
+
+**Scope:** barcoded products only. Items with no barcode are P6-007.
+
+**Frontend:**
+- **Scan screen** (`app/(tabs)/scan.tsx`) gains a persistent secondary action below the viewfinder:
+  **"Enter code manually"**. It opens a small numeric-entry sheet (8–13 digits, live validation matching
+  the server's `^\d{8,13}$`, digits-only keypad) and on submit navigates to `/(app)/product/<code>`,
+  landing in exactly the flow a scan produces — found, pending, or the 404 "Add this product" state.
+- **Home tab** gains a **"+"** action in the header opening the same sheet, so adding is discoverable
+  without going through the camera tab at all. (P6-007 turns this into a two-choice sheet; ship the
+  single-purpose version now.)
+- Validation copy is specific: too short/too long and non-digit input are distinguishable errors, not one
+  generic "invalid".
+- No new backend surface. Manual entry reuses `GET /api/products/:barcode` and every downstream flow.
+
+**Worth doing at the same time (cheap, same area):** widen the scanner's `barcodeTypes` to include
+`ean13`, `ean8`, `upc_a`, `upc_e`, `code128` and `itf14` — case-packs and some non-grocery goods carry
+ITF-14, and `code128` covers a lot of non-food. A code that scans but fails `^\d{8,13}$` must surface the
+manual-entry sheet pre-filled rather than a bare "Invalid barcode format".
+
+**Acceptance Criteria:**
+- [ ] The scan screen offers manual code entry, reachable without granting camera permission.
+- [ ] The Home tab offers an add entry point that does not route through the camera.
+- [ ] A manually entered code lands in the same product screen a scan produces, including the 404
+      "Add this product" state for unknown codes.
+- [ ] Entry validates against `^\d{8,13}$` client-side with distinguishable errors for length vs.
+      non-digit input.
+- [ ] The scanner recognises `itf14` and `code128` in addition to today's four types.
+- [ ] A scanned code that fails server validation opens the manual-entry sheet pre-filled instead of
+      showing a raw error.
+- [ ] Anonymous users reaching the 404 state through manual entry still see the P5-001 sign-up gate, not
+      the Add Product form.
+
+### [TICKET-P6-007] Barcode-Less Items — Rate Things With No Code
+**Goal:** Let a user rate something that has no barcode — a cocktail, a restaurant dish, loose-leaf tea,
+a cigar from an unlabelled humidor. This is the use case that motivated P6-003's user-owned categories,
+and it is currently impossible: `Product.barcode` is required, `@unique`, validated `^\d{8,13}$`
+(`productController.ts:37`), and is the routing key for every product endpoint, the FK target for
+`ProductEdit.barcode`, and the key of the Phase 8 `products` cache and the rating outbox.
+**Depends on:** P6-002 (`RatingShare` is what makes an item visible to anyone but its creator),
+P6-003 (a category is the only way to organise items, which have no brand or label to sort by).
+**User-facing name:** "custom item". Internally these are `Product` rows — see below.
+
+**Decision 1 — synthetic identifier, not a nullable barcode.** Barcode-less items get a server-generated
+id in the same column: `x-` + a 26-char ULID (`x-01j9z8...`). `Product.barcode` stays required and
+unique; `Product.identifierType GTIN | INTERNAL` records which kind it is; `BARCODE_RE` becomes "GTIN
+`^\d{8,13}$` **or** internal `^x-[0-9a-hjkmnp-tv-z]{26}$`", and the `x-` prefix cannot collide with a
+digits-only GTIN. The client never types or displays it.
+*Why not `barcode String?`:* it would re-key `/api/products/:barcode` and every nested route, the
+`ProductEdit.barcode` FK, the `products` offline cache, the outbox payload, and `use-my-rating`'s
+barcode index — a wide, purely mechanical refactor with no user-visible benefit. One validator change
+buys the same thing.
+
+**Decision 2 — items are owner-scoped, and become visible only through sharing.** *(Confirmed 2026-07-30.
+The alternative — a public barcode-less catalogue where one "Negroni" row is rated by everyone — was
+considered and **declined**; see the note at the end of this ticket. The motivating cases are a household
+and a couple sharing a wine tasting, i.e. groups of two to five people who already know each other.)*
+- An item belongs to its creator (`Product.ownerUserId`, set only for `INTERNAL` items).
+- Nobody else can see it until a **rating** of it is shared into a group via P6-002's `RatingShare`.
+  Group members who can see that rating can open the item and **rate it themselves against the same row**
+  — which is exactly the "we went out and tried four cocktails" case, and produces a real group aggregate.
+- **There is therefore no global namespace and no dedup problem.** Two households each having their own
+  "Negroni" row is correct, not duplication: a Negroni is not a manufactured article with one identity,
+  and each household's row can carry their own photo and notes.
+- Visibility is **derived**, not a new enum. An `INTERNAL` item is readable by:
+  1. its owner;
+  2. anyone holding a `RatingShare` on a rating of it;
+  3. **anyone who has their own rating on it** — even if the share that introduced them to it is gone.
+  `GET /api/products/:barcode` gains that authorization branch for `INTERNAL` rows only — the first place
+  P7-002's ownership guards are load-bearing rather than defensive.
+- **Why rule 3 exists.** Take the couple: A creates the item, rates it, shares it into their group; B taps
+  "Rate this too". If A later unshares that rating, leaves the group, or the group is deleted, rules 1–2
+  alone would strip B's read access to an item **B has personally rated** — B's own history would contain a
+  row that fails to load, and the outbox could not replay a queued rating against it. Access follows one's
+  own rating; it does not evaporate when someone else changes their mind about sharing. Note the deliberate
+  asymmetry: this grants read access to the item, never to A's rating of it, which stays governed by
+  `RatingShare` alone.
+- **Public promotion is deliberately out of scope.** A public barcode-less catalogue needs fuzzy-name
+  dedup, a duplicate-merge review flow, and search-by-name (none of which exist). Revisit only if users
+  ask for it.
+
+**What does *not* apply to `INTERNAL` items:**
+- **Peer verification / `PENDING_REVIEW`.** There is no public audience to protect, so an item is
+  owner-authoritative on creation: `status: VERIFIED`, no `ProductVerification` rows, no "Needs review"
+  banner. The verify endpoints reject `INTERNAL` barcodes with `409`.
+- **The P5-005 edit-proposal flow.** The owner edits their own item directly through `PATCH`; there are
+  no strangers to ask. `POST /products/:barcode/edits` rejects `INTERNAL` with `409`. A group member who
+  spots a wrong name tells the owner — out of band, deliberately.
+- **OFF sync (P6-005).** Nothing to sync: there is no upstream entry and no barcode to key it on. The
+  sync query filters on `identifierType: GTIN`.
+- **Nutrition as a required shape.** Nutrition fields stay available but collapsed behind "Add nutrition
+  info"; a cocktail has no label to read them off.
+
+**What still very much does apply — the abuse gate.** Barcode-less items are the obvious hole: no
+barcode, no peer review, an image upload, and (through sharing) an audience. The
+`imagePlausibilityService` gate stays mandatory on every upload. It needs one addition: today's
+`kind=product` prompt asks "is this a photo of a packaged product", which would reject a cocktail in a
+glass as `not_a_product`. Add `kind=item` with a prompt tuned to "is this a real thing a person could
+have consumed, photographed in good faith" — the `abuse` verdict, the `UserAbuseFlag` record, and the
+never-return-the-reason rule are unchanged. `mock` mode still accepts everything.
+
+**Frontend:**
+- The P6-006 Home-tab "+" becomes a two-choice sheet: **"Scan or enter a barcode"** /
+  **"Something with no barcode"**.
+- New screen `app/(app)/add-item.tsx` — deliberately short: **name** (required, 1–80 chars), optional
+  photo, optional category (P6-003 picker), optional free-text "where/brand" line (bar, restaurant,
+  producer), optional collapsed nutrition. Submit creates the item and goes **straight to the rating
+  screen** — the reason someone adds a cocktail is to rate it, so making them navigate again is friction
+  for nothing.
+- The product screen renders an `INTERNAL` item with the barcode row hidden, an "Added by you" (or
+  "Added by <member>" within a group) attribution line, and no "Needs review" banner.
+- Group members viewing a shared item see a **"Rate this too"** action that creates their own rating
+  against the same row.
+- Offline: item *creation* is online-only (it needs the plausibility gate and an id from the server),
+  consistent with every other contribution flow. Once created, an item reads from the `products` cache
+  like any other product, and rating it offline goes through the existing outbox unchanged.
+- Anonymous users: items are `requireRegistered`, matching every other creation path. A guest sees the
+  P5-001 sign-up gate.
+
+**Backend:**
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/items` | `{ name, category?, brand?, imageKey?, nutrition? }` → `201` with the generated `x-…` id; `requireRegistered` |
+| `PATCH` | `/api/products/:barcode` | extended: owner may edit their own `INTERNAL` item in place, at any status, with no verification reset |
+| `DELETE` | `/api/items/:barcode` | owner only; refuses (`409`) while another user has a rating on it, so a shared item cannot be pulled out from under a group |
+
+- `GET /api/products/:barcode` for an `INTERNAL` id: `200` for the owner or a user with a `RatingShare`;
+  `404` (not `403`) otherwise — an item id is unguessable and its existence is not public information.
+- `POST /api/ratings` is unchanged in shape but must reject an `INTERNAL` barcode the caller cannot see.
+- `POST /api/products/upload-image` accepts `kind=item`.
+
+**Schema additions:**
+- `Product.identifierType ProductIdentifierType @default(GTIN)` — enum `{ GTIN, INTERNAL }`; existing
+  rows are all `GTIN`.
+- `Product.ownerUserId String?` → `User`, set only for `INTERNAL` items. Distinct from
+  `submittedByUserId`, which is an attribution field on public products; this one is an authorization
+  field.
+- `@@index([ownerUserId])`.
+
+**Acceptance Criteria:**
+- [ ] A registered user can create an item with only a name and rate it, without any barcode.
+- [ ] Creation returns an `x-`-prefixed internal id; the client never displays it.
+- [ ] `BARCODE_RE` accepts GTINs and internal ids and rejects everything else; a GTIN can never collide
+      with an internal id.
+- [ ] Creating an item lands the user on the rating screen for it.
+- [ ] An item is invisible to every other user until a rating of it is shared into a group.
+- [ ] A group member who can see a shared item can rate it against the same row, and both ratings feed
+      that group's aggregate.
+- [ ] A user with no share, no rating and no ownership receives `404` from `GET /api/products/:barcode`.
+- [ ] A user who has rated an item keeps read access to it after the owner unshares, after either party
+      leaves the group, and after the group is deleted — their history still loads and a queued rating
+      still replays.
+- [ ] Keeping that read access does **not** expose the owner's rating of the item; that stays governed by
+      `RatingShare`.
+- [ ] `INTERNAL` items are excluded from peer verification, the P5-005 edit-proposal flow, and OFF sync;
+      those endpoints return `409`.
+- [ ] The owner can edit their own item in place with no verification reset and no peer approval.
+- [ ] Deleting an item is refused while another user holds a rating on it.
+- [ ] The image plausibility gate runs on item photos via `kind=item`, accepts a plausible non-packaged
+      subject (a cocktail in a glass), and still flags abusive uploads with a `UserAbuseFlag`.
+- [ ] Item creation is online-only and reports being offline via `formatApiError`; rating an existing
+      item offline still queues in the outbox.
+- [ ] Anonymous users receive `403` from `POST /api/items` and see the sign-up gate on the add-item
+      screen.
+- [ ] The product screen hides the barcode row for items and shows no "Needs review" banner.
+
+**Declined alternative: a public barcode-less catalogue** (decided 2026-07-30). One "Negroni" row that
+everyone rates would give better aggregates and a "best cocktails" view, at the cost of name-based
+identity — fuzzy dedup, a merge-duplicates review flow, and moderation of a namespace anyone can write to,
+with search-by-name as a hard prerequisite. That is a phase of work rather than a ticket, and it is
+**not the direction this product is taking**: barcode-less things exist here to be shared between people
+who already know each other, not to build a crowd-sourced catalogue of un-identified items. Do not
+re-propose it as a slice of P6-007. If it is ever wanted, it is additive — promoting an owned item to a
+public row does not invalidate this design.
+
+### [TICKET-P6-008] Search by Name — Personal Scope, then Global
+**Goal:** Find a product or item by typing its name. **There is no search bar today** — nothing in
+`bread-sheet-app/app/` renders a search input and no `/api` endpoint accepts a name query (every "search"
+symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket builds it.
+
+**Why it is coupled to P6-007.** A barcoded product always has a physical handle: you can re-find it by
+scanning the thing in your hand. A barcode-less item has none — once it falls off "Recently Opened", the
+only route back is scrolling "My Ratings" or filtering by category (P6-003). That works for the first
+weeks and stops working as history grows. So **Slice A below is a co-requirement of P6-007**, not a later
+nicety; Slice B is independent and can wait.
+
+**One bar, two scopes.** The same input serves both, with a scope toggle that defaults to **Mine**:
+- **Mine** — my ratings and my items. Instant, client-side, works offline.
+- **All products** — the shared catalogue. Server-backed, needs network.
+
+---
+
+#### Slice A — Personal search (ships with P6-007)
+- A search input in the Home tab header, above the P6-003 category chips. Typing filters the already-
+  cached `/api/users/me/ratings` list in memory — **no endpoint, no request, works offline**, which is
+  also what makes it feel instant.
+- Matches on product/item `name` and `brand`, case- and diacritic-insensitive, substring (not prefix-only:
+  "cola" must find "Coca-Cola"). Plain `String.includes` over normalised strings — no regex over user
+  input, per the project's regex convention.
+- Composes with the category chips (`category = cocktails` AND `query = "negroni"`), and with nothing else.
+- Empty result copy distinguishes "no match in your ratings" from "nothing rated yet", and offers
+  "Search all products" as the next step (Slice B when present, otherwise the scan/manual-entry path).
+- The query is not persisted across restarts; the category chip selection is (P6-003). A stale search box
+  on cold start is confusing in a way a stale filter chip is not.
+
+**Slice A acceptance criteria:**
+- [ ] A search input on the Home tab filters my ratings as I type, with no network request.
+- [ ] Matching covers name and brand, case- and diacritic-insensitively, on substrings.
+- [ ] It works offline against cached ratings.
+- [ ] It composes with the category chips.
+- [ ] A barcode-less item created in P6-007 is findable by name.
+- [ ] Matching uses plain string containment, not a regex built from user input.
+- [ ] The empty state distinguishes "no match" from "nothing rated yet".
+- [ ] The query does not survive an app restart.
+
+---
+
+#### Slice B — Global product search
+**New endpoint** `GET /api/products/search?q=<query>&cursor=<cursor>` (`requireAuth`):
+- Returns `{ results: [{ barcode, name, brand, image, unverified }], nextCursor }`, images resolved
+  through `resolveImageUrl` like every other product serialisation.
+- **Visibility rules — the part to get right:**
+  - `REJECTED` products are excluded entirely (matches P5-007's invariant).
+  - `PENDING_REVIEW` products are included for every caller, anonymous included, flagged `unverified`
+    (P5-007 already made them individually visible; hiding them from search would be inconsistent).
+  - **`INTERNAL` items (P6-007) are excluded unless the caller owns them, holds a `RatingShare` on a
+    rating of them, or has rated them personally** — the same three-rule visibility test as
+    `GET /api/products/:barcode`, and it must be the same helper, not a second copy of the predicate.
+    This is the easiest place in the system to accidentally leak a private item: an unfiltered `ILIKE`
+    over `Product.name` returns every household's custom items to everyone. It needs its own test.
+- **Index:** `pg_trgm` with a GIN index on `name` (and `brand`), ranked by `similarity()`, tie-broken by
+  rating count so well-known products surface first. Chosen over Postgres full-text (`tsvector`) because
+  it tolerates typos and partial words on brand names — "nutela" finds "Nutella", which `tsvector` will
+  not. The trade-off is worse multi-word phrase handling; acceptable, product names are short.
+- **Input hygiene** (project convention): cap `q` at 100 raw characters measured **before** trimming,
+  require ≥ 2 characters after trimming, no user input interpolated into a regex or raw SQL fragment,
+  and the endpoint sits behind `userLimiter`.
+- **Cursor pagination**, page size 20. Not offset — the ranking is unstable under concurrent writes.
+- **Open Food Facts name search is out of scope.** OFF's `/cgi/search.pl` is slow and aggressively
+  rate-limited; calling it inline would make our search feel broken and could get the bot account
+  throttled. Local-first is the decision. If a "not finding it? search Open Food Facts" affordance is
+  wanted later, it belongs behind an explicit second tap with its own loading state — never in the
+  as-you-type path.
+
+**Frontend:**
+- The scope toggle switches to **All products**; results render as a list of product cards, `unverified`
+  ones carrying the existing "Needs review" treatment. Tapping opens the product screen.
+- Debounced at 300 ms; in-flight requests are cancelled on the next keystroke.
+- Offline in the **All products** scope shows `OFFLINE_MESSAGE` via `formatApiError` and suggests
+  switching back to **Mine**, which still works. Global results are not cached — a cached search result
+  list ages badly and is not what the Phase 8 caches are for.
+- A "can't scan this?" affordance on the scan screen (added in P6-006) offers search as well as manual
+  code entry, so an unreadable label has two ways out.
+
+**Slice B acceptance criteria:**
+- [ ] `GET /api/products/search` returns name/brand matches ranked by similarity, cursor-paginated at 20.
+- [ ] `REJECTED` products never appear.
+- [ ] `PENDING_REVIEW` products appear flagged `unverified`, for anonymous callers too.
+- [ ] Another user's `INTERNAL` item never appears; my own items, items shared with me, and items I have
+      rated do — using the same visibility helper as `GET /api/products/:barcode`, with a dedicated test
+      for the leak case.
+- [ ] Queries are capped at 100 raw characters (measured before trimming) and rejected below 2 trimmed
+      characters; no user input reaches a regex or a raw SQL fragment.
+- [ ] A `pg_trgm` GIN index backs the query; the migration creates the extension and the index.
+- [ ] Typo tolerance works: "nutela" returns "Nutella".
+- [ ] The endpoint is rate-limited and covered by integration tests including the visibility matrix.
+- [ ] Input is debounced and superseded requests are cancelled.
+- [ ] The global scope reports being offline and points the user back to the working personal scope.
 
 ## Phase 7: Auth Enhancements
 
@@ -622,6 +1360,15 @@ Allow easy selection to see own votes in categories (e.g. what wine I liked, wha
 
 # Future Plans and Ideas
 
+## E2E Testing Flow - Agents can run and control emulators
+Setup works on a local mac mini and on cachyos desktop pc
+
+## Taskfiles for local setup on any OS
+Create taskfiles for local setup and fixture example data set. Adapt readme (and shorten it - move info in apropriate docs and just link there)
+
+## Please Release - Google Workflow
+Add the please release workflow from google
+
 ## Suspicious-but-plausible submissions for nutrition info
 Flagged (`plausibilityFlag: true`) but accepted. *(nutritional-value flagging not yet implemented)*
 
@@ -649,10 +1396,15 @@ in Pipeline and Security of the Pipeline (Static Code analysis SAST, Dynamic DAS
 - Create User Role "Moderator" which (together with ADMIN) can review multiple products in a row and their vote (or that of an admin) finalizes review (so a single vote is enough to accept/decline)
 
 ## Non-ISBN Products
-- Enable user to rate more general products without a explicit code (e.g. not food)
+- *Promoted to **[TICKET-P6-007]** (2026-07-30)* as owner-scoped custom items, visible to a group through
+  sharing. The **public** barcode-less catalogue variant (one "Negroni" row everyone rates) was considered
+  and **declined** the same day — it is not the direction of the product. Nothing is left open here.
 
 ## Search by name
-- Enable users to search for products by name instead of isbn code
+- *Promoted to **[TICKET-P6-008]** (2026-07-30).* Still an idea here: querying Open Food Facts by name for
+  products we do not hold locally. Deliberately excluded from P6-008 — OFF's `/cgi/search.pl` is slow and
+  aggressively rate-limited, so it can only ever sit behind an explicit second tap, never in the
+  as-you-type path.
 
 ## Pro Users can set own pictures
 - Low Prio, enable users to replace picture with a better one (at least for themselfs)
