@@ -972,17 +972,23 @@ ITF-14, and `code128` covers a lot of non-food. A code that scans but fails `^\d
 manual-entry sheet pre-filled rather than a bare "Invalid barcode format".
 
 **Acceptance Criteria:**
-- [ ] The scan screen offers manual code entry, reachable without granting camera permission.
-- [ ] The Home tab offers an add entry point that does not route through the camera.
-- [ ] A manually entered code lands in the same product screen a scan produces, including the 404
+- [x] The scan screen offers manual code entry, reachable without granting camera permission.
+- [x] The Home tab offers an add entry point that does not route through the camera.
+- [x] A manually entered code lands in the same product screen a scan produces, including the 404
       "Add this product" state for unknown codes.
-- [ ] Entry validates against `^\d{8,13}$` client-side with distinguishable errors for length vs.
+- [x] Entry validates against `^\d{8,13}$` client-side with distinguishable errors for length vs.
       non-digit input.
-- [ ] The scanner recognises `itf14` and `code128` in addition to today's four types.
-- [ ] A scanned code that fails server validation opens the manual-entry sheet pre-filled instead of
+- [x] The scanner recognises `itf14` and `code128` in addition to today's four types.
+- [x] A scanned code that fails server validation opens the manual-entry sheet pre-filled instead of
       showing a raw error.
-- [ ] Anonymous users reaching the 404 state through manual entry still see the P5-001 sign-up gate, not
+- [x] Anonymous users reaching the 404 state through manual entry still see the P5-001 sign-up gate, not
       the Add Product form.
+
+**Implemented 2026-07-30.** `components/manual-barcode-sheet.tsx` + `features/products/barcode.ts`;
+mounted from `app/(tabs)/scan.tsx`, `app/(tabs)/index.tsx` and the `400` branch of
+`app/(app)/product/[barcode].tsx`. No backend change — the sheet routes to `/(app)/product/<code>`, so
+the sign-up gate criterion is satisfied by the existing P5-001 branch rather than by new code. See
+`docs/architecture/frontend.md#manual-barcode-entry-ticket-p6-006`.
 
 ### [TICKET-P6-007] Barcode-Less Items — Rate Things With No Code
 **Goal:** Let a user rate something that has no barcode — a cocktail, a restaurant dish, loose-leaf tea,

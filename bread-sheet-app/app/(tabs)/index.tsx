@@ -12,6 +12,7 @@ import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 
+import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
 import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import type { RatingEntry } from '@/features/ratings/types';
@@ -274,6 +275,8 @@ export default function HomeScreen() {
   });
 
   const [refreshing, setRefreshing] = useState(false);
+  // Manual barcode entry (P6-006) — an add path that never touches the camera.
+  const [manualVisible, setManualVisible] = useState(false);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -313,9 +316,22 @@ export default function HomeScreen() {
         ]}
       >
         <Text style={[styles.greeting, { color: colors.icon }]}>{greeting}</Text>
-        <Text style={[styles.headline, { color: colors.text }]}>
-          {isAnonymous ? 'Welcome, Guest 👋' : `Welcome back 👋`}
-        </Text>
+        <View style={styles.headlineRow}>
+          <Text style={[styles.headline, { color: colors.text }]}>
+            {isAnonymous ? 'Welcome, Guest 👋' : `Welcome back 👋`}
+          </Text>
+          {/* Adding a product without going through the camera tab (P6-006).
+              P6-007 turns this into a two-choice sheet; this is the
+              single-purpose version. */}
+          <TouchableOpacity
+            testID="home-add-product"
+            accessibilityLabel="Add a product by barcode"
+            style={[styles.addButton, { backgroundColor: colors.tint + '18' }]}
+            onPress={() => setManualVisible(true)}
+          >
+            <Text style={[styles.addButtonText, { color: colors.tint }]}>＋</Text>
+          </TouchableOpacity>
+        </View>
         {isAnonymous && (
           <TouchableOpacity
             testID="guest-upgrade-banner"
@@ -415,6 +431,8 @@ export default function HomeScreen() {
       )}
 
       <View style={[styles.bottomPad, compact && compactStyles.bottomPad]} />
+
+      <ManualBarcodeSheet visible={manualVisible} onClose={() => setManualVisible(false)} />
     </ScrollView>
   );
 }
@@ -433,9 +451,28 @@ const styles = StyleSheet.create({
   greeting: {
     fontSize: 14,
   },
+  headlineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
   headline: {
+    flex: 1,
     fontSize: 22,
     fontWeight: '700',
+  },
+  addButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addButtonText: {
+    fontSize: 24,
+    fontWeight: '600',
+    lineHeight: 28,
   },
   guestBanner: {
     marginTop: 10,

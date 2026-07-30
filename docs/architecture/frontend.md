@@ -227,6 +227,7 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 | File | Responsibility |
 |------|---------------|
 | `constants.ts` | `MIN_OCR_LENGTH`, image size caps, JPEG quality targets — must match the backend contract defined in P5-003 |
+| `barcode.ts` | P6-006 manual-entry validation: `BARCODE_RE` (mirrors the server), `validateBarcode` (typed `reason`: `empty` / `non-digit` / `too-short` / `too-long`), `sanitizeBarcodeInput` (digits-only, for seeding from a scan), `stripBarcodeSeparators` (typing normalisation) |
 | `types.ts` | `ProductSubmission`, `ExtractedLabel`, `ProductDetail` — shared wire types |
 | `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct`, plus the P5-006 edit calls: `correctProduct`, `proposeProductEdit`, `getPendingEdit`, `voteOnProductEdit`, `retractProductEditVote`, `dismissProductEdit` |
 | `edit-form.ts` | P5-006 edit-form logic: `productToFormValues` (pre-population), `buildEditChanges` (changed-fields diff for the proposal payload), `buildCorrectionPayload` (full PATCH payload), `formHasChanges` / `validateFormValues`, `FIELD_LABELS` (shared with the diff screen) |
@@ -253,6 +254,42 @@ The reviewer screen renders every submitted field — including `null` values, s
 
 ---
 
+## Manual Barcode Entry (TICKET-P6-006)
+
+Before P6-006 the only navigation into `app/(app)/add-product.tsx` was the 404 branch of a barcode the
+camera had **already read successfully**. A damaged label, an unsupported symbology, bad lighting or a
+device with no camera left the user with no way in at all.
+
+`components/manual-barcode-sheet.tsx` is the fix: a modal numeric-entry sheet that navigates to
+`/(app)/product/<code>` — deliberately the *same* destination a scan produces, so every downstream state
+(found, `PENDING_REVIEW`, the 404 "Add this product" screen, the P5-001 anonymous sign-up gate) is reached
+identically and nothing new was added to the backend.
+
+Three entry points, all rendering the same component:
+
+| Where | Trigger | Notes |
+|---|---|---|
+| Scan tab (`app/(tabs)/scan.tsx`) | "Enter code manually" below the viewfinder | Rendered in **every** permission state — undetermined, denied, granted. Requiring the camera to reach the camera-free path would defeat the ticket. |
+| Home tab (`app/(tabs)/index.tsx`) | "＋" in the header | Adding without going through the camera tab at all. P6-007 turns this into a two-choice sheet; this is the single-purpose version. |
+| Product screen | Automatic, on a `400` from `GET /api/products/:barcode` | Opens pre-filled with the salvageable digits and submits via `router.replace`, so the corrected code takes the place of the broken screen instead of stacking behind it. |
+
+**Validation is client-side and mirrors the server** (`BARCODE_RE` ≡ `productController.ts`'s
+`^\d{8,13}$`). The reasons are typed and the copy is distinguishable — "too short, this has 7" is a
+different mistake from "digits only, remove any letters", and a single "invalid barcode" tells the user
+which of them they made: neither. Separators (space, dash, slash, dot) are stripped as the user types
+because that is how codes are *written*; letters are deliberately **kept**, since silently deleting the
+`X` out of a misread `4006381X33931` looks like acceptance and then fails somewhere further away.
+
+The sheet's field state is seeded at mount (`key={initialValue}`, mounted only while open) rather than
+re-synced by an effect — a pre-filled bad scan is per-opening state.
+
+**Scanner symbologies** were widened in the same change: `ean13`, `ean8`, `upc_a`, `upc_e` plus
+`code128` (much non-grocery stock) and `itf14` (case packs). A code that now reads but fails
+`^\d{8,13}$` opens the sheet pre-filled with its digits instead of dead-ending; scanning is suspended
+while the sheet is open.
+
+---
+
 ## Product Detail & Rating (`app/(app)/product/[barcode].tsx`)
 
 The product itself is read through `useCachedResource` (see *Offline & Performance* below): painted from the on-disk cache first, then revalidated with `GET /api/products/:barcode` in the background. Three terminal states, and keeping them distinct is the point:
@@ -261,6 +298,7 @@ The product itself is read through `useCachedResource` (see *Offline & Performan
 |---------|-------|
 | `ApiError` 404 and nothing cached | "Product not found" + add/sign-up CTA (P5-001) |
 | `NetworkError` and nothing cached | "You're offline" + retry (P8-002) — **never** the add CTA |
+| `ApiError` 400 (bad code) and nothing cached | "That code doesn't look right" + the manual-entry sheet, pre-filled (P6-006) |
 | Anything cached | The product renders; an offline strip appears if revalidation failed |
 
 **"My rating" comes from the cached ratings list, not a second request.** `hooks/use-my-rating.ts` reads the cached `/api/users/me/ratings` payload and looks the barcode up in it. Only when this device has never cached that list (fresh install, or a deep link straight into a product) does it fetch the list once — still one request, and it primes the Home tab at the same time. The old per-product `GET /api/ratings/me/:barcode` call is gone.

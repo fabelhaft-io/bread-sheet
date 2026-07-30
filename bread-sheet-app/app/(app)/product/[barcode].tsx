@@ -20,6 +20,7 @@ import Animated, {
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
+import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { SPACING_COMPACT } from '@/constants/spacing';
@@ -34,6 +35,7 @@ import { useOutbox } from '@/hooks/use-outbox';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
 import { getPendingEdit } from '@/features/products/api';
+import { sanitizeBarcodeInput } from '@/features/products/barcode';
 import type { PendingEdit, ProductDetail } from '@/features/products/types';
 import type { RatingEntry } from '@/features/ratings/types';
 
@@ -365,6 +367,12 @@ export default function ProductScreen() {
 
   const notFound = loadError instanceof ApiError && loadError.status === 404;
 
+  // The server rejected the code itself (`^\d{8,13}$`). Reachable from a deep
+  // link or a scan of an unsupported symbology; P6-006 answers it with the
+  // manual-entry sheet pre-filled rather than a raw "Invalid barcode format".
+  const invalidBarcode = loadError instanceof ApiError && loadError.status === 400;
+  const [manualDismissed, setManualDismissed] = useState(false);
+
   // Pending edit on a VERIFIED product (P5-006). Drives both the "review this
   // change" banner and the hide-edit-button-with-notice state.
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
@@ -517,6 +525,36 @@ export default function ProductScreen() {
         >
           <Text style={[styles.buttonText, { color: colors.background }]}>Try again</Text>
         </TouchableOpacity>
+      </ThemedView>
+    );
+  }
+
+  if (invalidBarcode && !product) {
+    return (
+      <ThemedView style={styles.center} testID="product-invalid-barcode">
+        <Text style={styles.successIcon}>🔢</Text>
+        <ThemedText type="title" style={styles.successTitle}>
+          That code doesn&apos;t look right
+        </ThemedText>
+        <ThemedText style={styles.notFoundBody}>
+          Product barcodes are 8–13 digits. Check the number printed under the barcode.
+        </ThemedText>
+        <TouchableOpacity
+          testID="product-invalid-barcode-retry"
+          style={[styles.button, { backgroundColor: colors.tint }]}
+          onPress={() => setManualDismissed(false)}
+        >
+          <Text style={[styles.buttonText, { color: colors.background }]}>Enter code manually</Text>
+        </TouchableOpacity>
+        <ManualBarcodeSheet
+          visible={!manualDismissed}
+          onClose={() => setManualDismissed(true)}
+          initialValue={sanitizeBarcodeInput(barcode)}
+          subtitle="Product barcodes are 8–13 digits. Correct the number below."
+          // `replace`, not `push`: the corrected code takes the place of the
+          // broken screen instead of stacking a second one behind it.
+          onSubmit={(code) => router.replace(`/(app)/product/${code}`)}
+        />
       </ThemedView>
     );
   }
