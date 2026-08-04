@@ -76,6 +76,17 @@ variable "db_deletion_protection" {
   default     = false
 }
 
+variable "db_snapshot_identifier" {
+  type        = string
+  description = <<-EOT
+    Manual RDS snapshot to restore the instance from at CREATE time. Empty string
+    (the default) creates a fresh empty instance. Used to resume the dev stack after a
+    long pause — see docs/architecture/infrastructure.md § Pausing / Resuming the Dev Stack.
+    Pass it only on the resuming apply: `-var db_snapshot_identifier=breadsheet-dev-pause-YYYY-MM-DD`.
+  EOT
+  default     = ""
+}
+
 variable "db_iam_user" {
   type        = string
   description = "PostgreSQL username granted rds_iam for IAM database authentication."

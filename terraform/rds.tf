@@ -45,9 +45,16 @@ resource "aws_db_instance" "main" {
 
   manage_master_user_password = false
 
+  # Restore-from-snapshot path (resuming a long pause). Consumed at CREATE only; on a
+  # restore, `db_name`, `username` and the master password come from the snapshot and the
+  # arguments above are ignored by RDS. The provider marks this ForceNew, so it is also in
+  # ignore_changes — otherwise clearing the variable after the resume would plan to replace
+  # (i.e. wipe) the live instance.
+  snapshot_identifier = var.db_snapshot_identifier != "" ? var.db_snapshot_identifier : null
+
   tags = merge(local.tags, { Name = "breadsheet-dev-database-1" })
 
   lifecycle {
-    ignore_changes = [password]
+    ignore_changes = [password, snapshot_identifier]
   }
 }
