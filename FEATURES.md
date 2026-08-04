@@ -1366,6 +1366,9 @@ nicety; Slice B is independent and can wait.
 
 # Future Plans and Ideas
 
+## Improve operations cost!!!
+50$ a month is to much for a hobby project with small load. How can we improve scalability and operations cost? e.g. move to GO?
+
 ## E2E Testing Flow - Agents can run and control emulators
 Setup works on a local mac mini and on cachyos desktop pc
 
@@ -1374,6 +1377,17 @@ Create taskfiles for local setup and fixture example data set. Adapt readme (and
 
 ## Please Release - Google Workflow
 Add the please release workflow from google
+
+## Review and improve APIs
+https://opensource.zalando.com/restful-api-guidelines -- are we following
+APIs should be based on the API as a Product principle: Treat your API as product and act like a product owner.
+Put yourself into the place of your customers; be an advocate for their needs
+Emphasize simplicity, comprehensibility, and usability of APIs to make them irresistible for client engineers
+Actively improve and maintain API consistency over the long term
+Make use of customer feedback and provide service level support
+Embracing 'API as a Product' facilitates a service ecosystem, which can be evolved more easily and used to experiment quickly with new business ideas by recombining core capabilities. It makes the difference between agile, innovative product service business built on a platform of APIs and ordinary enterprise integration business where APIs are provided as "appendix" of existing products to support system integration and optimised for local server-side realization.
+Understand the concrete use cases of your customers and carefully check the trade-offs of your API design variants with a product mindset. Avoid short-term implementation optimizations at the expense of unnecessary client side obligations, and have a high attention on API quality and client developer experience.
+API as a Product is closely related to our API First principle (see next chapter) which is more focused on how we engineer high quality APIs.
 
 ## Suspicious-but-plausible submissions for nutrition info
 Flagged (`plausibilityFlag: true`) but accepted. *(nutritional-value flagging not yet implemented)*
