@@ -284,6 +284,7 @@ Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.us
 Architecture decisions are tracked in `docs/architecture-decision-records/`. Current ADRs:
 - `0001-auth-provider.md` — Why Supabase Auth was chosen over alternatives
 - `0002-rds-database-credentials.md` — RDS auth: SSM password now, keyless IAM auth (Prisma driver adapter + `pg` password callback) deferred as a post-build adaptation
+- `0003-always-on-production-cost-architecture.md` — *Proposed, gated.* Always-on prod ingress: drop the ALB for API Gateway HTTP API → VPC Link → Cloud Map (keeps Fargate warm; Lambda rejected on cold starts, App Runner on GHCR support). `dev` becomes ephemeral rather than scheduled. **Blocked on step 0**: HTTP APIs cap the integration timeout at a non-increasable 30 s (the ALB allows 60 s+), which the synchronous Gemini plausibility/label-extraction paths must be measured against; Cloudflare Tunnel is the named fallback
 
 ## Mandatory Post-Implementation Steps
 

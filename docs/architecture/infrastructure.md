@@ -184,9 +184,13 @@ s3://breadsheet-dev-s3-…/
 ### Pausing / Resuming the Dev Stack
 
 Dev has no NAT gateway (~$33/mo already avoided). The remaining always-on costs are the Fargate
-task (~$9/mo), RDS `db.t4g.micro` (~$12/mo), and the ALB (~$16–18/mo **flat**, regardless of
+task (~$9/mo), RDS `db.t4g.micro` (~$12/mo), and the ALB (~$18/mo **flat**, regardless of
 traffic — an ALB has no "stopped" state, only exists-or-doesn't). Two tiers, by how much of that
 you want to shed.
+
+> [ADR 0003](../architecture-decision-records/0003-always-on-production-cost-architecture.md)
+> (*Proposed*) argues for retiring these tiers in favour of destroying `dev` between sessions, and
+> for building `prod` without an ALB at all. The tiers below describe the stack as it stands today.
 
 **Tier 1 — CLI only, no Terraform changes (sheds the Fargate task + RDS compute):**
 

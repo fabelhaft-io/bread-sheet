@@ -1366,7 +1366,7 @@ nicety; Slice B is independent and can wait.
 
 # Future Plans and Ideas
 
-## Improve operations cost!!!
+## ADR 003 - Improve operations cost!!!
 50$ a month is to much for a hobby project with small load. How can we improve scalability and operations cost? e.g. move to GO?
 
 ## E2E Testing Flow - Agents can run and control emulators
