@@ -270,12 +270,18 @@ aws rds describe-db-snapshots --region eu-west-1 \
   --db-instance-identifier breadsheet-dev-database-1 --snapshot-type manual \
   --query 'sort_by(DBSnapshots,&SnapshotCreateTime)[-1].DBSnapshotIdentifier' --output text
 
-# 4. Recreate everything from it. Restores the DB, then the ALB and the three cascade
-#    resources below — one apply, no manual reconnection.
+# 4. BEFORE applying: check the image pin in ecs.tf against the revision that was live when
+#    you paused. Terraform's task definition is created from ecs.tf, not from CI's latest
+#    revision — see "the image pin drifts" below. Note the tag from the pre-pause service:
+aws ecs describe-task-definition --region eu-west-1 --task-definition breadsheet-dev-server \
+  --query 'taskDefinition.containerDefinitions[0].image' --output text
+
+# 5. Recreate everything from the snapshot. Restores the DB, then the ALB and the three
+#    cascade resources below — one apply, no manual reconnection.
 terraform -chdir=terraform apply -var-file=environments/dev.tfvars \
   -var db_snapshot_identifier=breadsheet-dev-pause-YYYY-MM-DD
 
-# 5. Verify, then delete the snapshot to stop paying for it.
+# 6. Verify, then delete the snapshot to stop paying for it.
 aws rds describe-db-instances --region eu-west-1 --db-instance-identifier breadsheet-dev-database-1 \
   --query 'DBInstances[0].{status:DBInstanceStatus,endpoint:Endpoint.Address}' --output table
 terraform -chdir=terraform plan -var-file=environments/dev.tfvars    # "No changes" once fully resumed
@@ -291,10 +297,28 @@ silently restore month-old data.
 What the destroy cascades to, and why that is the point:
 
 | Resource | Why it's dragged in | On resume |
-|----------|--------------------|-----------|
+| --- | --- | --- |
 | `aws_ecs_service.server` | depends on the task definition | recreated at `desired_count = 1` |
 | `aws_ecs_task_definition.server` | `ecs.tf` interpolates `aws_db_instance.main.address` into `DB_HOST` / `DATABASE_URL` | re-rendered against the restored endpoint |
 | `aws_iam_role_policy.ecs_task_rds_iam` | `iam.tf` scopes `rds-db:connect` to `aws_db_instance.main.resource_id` | re-scoped to the new resource ID |
+
+**The image pin drifts — check it before every resume.** `aws_ecs_task_definition.server` has
+`lifecycle.ignore_changes = [container_definitions]`, so the revisions CI push-deploys are never
+reconciled into state: Terraform's copy stays frozen at whatever it last created, while the live
+service moves on. That is harmless during normal operation (Terraform never touches the running
+task definition) but decisive here, because the resume *creates* a task definition — from
+`ecs.tf`, not from the live revision. Whatever `ecs.tf:42` pins is what the stack comes back on.
+This was already wrong once: the pin was a SHA that is neither a commit in the repo nor a tag in
+GHCR, so a resume would have failed on `CannotPullContainerError` and tripped the deployment
+circuit breaker — *after* the DB restore, making a healthy snapshot look like the culprit. Confirm
+the tag resolves before applying:
+
+```sh
+TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:fabelhaft-io/bread-sheet-server:pull&service=ghcr.io" | jq -r .token)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  https://ghcr.io/v2/fabelhaft-io/bread-sheet-server/manifests/<sha>   # want 200, not 404
+```
 
 A restored instance gets a **new `resource_id`** (`db-XXXX…`) even when the identifier and endpoint
 hostname are unchanged. Since the IAM policy interpolates it, `apply` fixes it for free — but a

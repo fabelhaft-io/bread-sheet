@@ -39,7 +39,11 @@ resource "aws_ecs_task_definition" "server" {
 
   container_definitions = jsonencode([{
     name      = "server"
-    image     = "ghcr.io/fabelhaft-io/bread-sheet-server:c58810518c3b2e91fa3e5ab2f19a4b95260dc8c1"
+    # Consumed at CREATE only — `ignore_changes = [container_definitions]` below means CI's
+    # push-deployed revisions are invisible to Terraform, so this pin drifts behind the live
+    # service. It is the image the stack comes back on after a Tier 3 pause; re-point it at the
+    # running revision before resuming (see infrastructure.md § Pausing / Resuming the Dev Stack).
+    image     = "ghcr.io/fabelhaft-io/bread-sheet-server:d659c132283f5cb6f8661df053d1c3f59e94d37f"
     essential = true
 
     portMappings = [{
