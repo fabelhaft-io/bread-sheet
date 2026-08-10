@@ -1,0 +1,21 @@
+{
+  "name": "bread-sheet-agent-team",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone Mastra orchestrator for BreadSheet's agentic dev team (Harness B) — see docs/architecture/agent-dev-team.md.",
+  "type": "module",
+  "scripts": {
+    "dev-team": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.57.0",
+    "dotenv": "^17.4.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3"
+  }
+}

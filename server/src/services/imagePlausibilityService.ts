@@ -3,7 +3,7 @@ import logger from '../logger.js';
 import { getGeminiClient } from '../geminiClient.js';
 import type { ImageKind } from './imageService.js';
 
-const MODEL = 'gemini-2.5-flash';
+const MODEL = 'gemini-3.5-flash';
 
 export const VALID_PLAUSIBILITY_MODES = ['mock', 'gemini'] as const;
 export type PlausibilityMode = (typeof VALID_PLAUSIBILITY_MODES)[number];

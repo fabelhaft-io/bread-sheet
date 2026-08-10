@@ -56,7 +56,7 @@ describe('extractLabelWithLlm', () => {
     expect(result).toEqual(FAKE_RESPONSE);
     expect(mockGenerateContent).toHaveBeenCalledTimes(1);
     const call = mockGenerateContent.mock.calls[0][0];
-    expect(call.model).toBe('gemini-2.5-flash');
+    expect(call.model).toBe('gemini-3.5-flash');
     expect(call.config.responseMimeType).toBe('application/json');
     expect(call.config.responseSchema.required).toContain('confidence');
     expect(call.config.responseSchema.required).toContain('sugars');

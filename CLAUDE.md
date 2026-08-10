@@ -8,7 +8,7 @@ BreadSheet is a food rating/social app. Users scan barcodes, discover products, 
 
 - `bread-sheet-app/` — React Native/Expo mobile frontend
 - `server/` — Node.js/Express REST API backend
-- `terraform/` — AWS infrastructure (EKS, RDS, S3, Lambda) + LocalStack for local dev
+- `terraform/` — AWS infrastructure (ECS Fargate, RDS, S3, Lambda) + LocalStack for local dev
 
 ## Commands
 
@@ -132,9 +132,9 @@ Local dev uses Docker Compose:
 - PostgreSQL 18-Alpine on port 5432 (`admin:password@localhost:5432/breadsheet`)
 - LocalStack on port 4566 (emulates S3, Lambda, IAM, STS)
 
-Cloud environments (`dev`, `production`) run on EKS (Terraform-provisioned: VPC + EKS + RDS + S3 + image-resizer Lambda) with ArgoCD for GitOps. Database migrations run as an initContainer (`npm run db:deploy`) before the server pod starts. The server **container image** is published to **GitHub Container Registry** (`ghcr.io/fabelhaft-io/bread-sheet-server`, free public package) by `.github/workflows/build-image.yml` — not ECR.
+The dev cloud environment runs on **ECS Fargate** (Terraform-provisioned: VPC + ALB + ECS + RDS + S3 + image-resizer Lambda), deployed by push-based CD from GitHub Actions — no ArgoCD, no pull-reconcile loop. Database migrations run as a container-command step (`scripts/start.sh` → `npm run db:deploy`) before the server process starts. The server **container image** is published to **GitHub Container Registry** (`ghcr.io/fabelhaft-io/bread-sheet-server`, free public package) by `.github/workflows/build-image.yml` — not ECR. The earlier EKS design was never applied to this account and its Terraform (`eks.tf`, `irsa.tf`, `terraform/k8s/`) has been deleted from the repo (recoverable from git history) — see `docs/architecture/fargate-handbuild.md` for the migration record.
 
-**Terraform layout (`terraform/`):** one root, three environments selected by `-var-file` (`environments/{local,dev,production}.tfvars`). Cloud resources (VPC/EKS/RDS/IRSA in `network.tf`/`eks.tf`/`rds.tf`/`irsa.tf`, plus GCP WIF in `gcp-wif.tf`) are gated on `local.cloud_count` — created only when `localstack_endpoint == ""`, so the `local` environment provisions S3 + Lambda only. State is an S3 remote backend with per-env keys (`backend.tf` + `environments/<env>.s3.tfbackend`). The server pod accesses S3 via IRSA, and Google Cloud (Vision/Vertex) via **Workload Identity Federation** — both keyless (no static keys). k8s manifests live in `terraform/k8s/`. See `docs/architecture/infrastructure.md` for the bootstrap + apply runbook.
+**Terraform layout (`terraform/`):** one root, one environment today (`environments/dev.tfvars` + `dev.s3.tfbackend`) — VPC/ALB/ECS/RDS in `network.tf`/`alb.tf`/`ecs.tf`/`rds.tf`, IAM (execution/task/deployer roles + GitHub OIDC) in `iam.tf`, GCP WIF in `gcp-wif.tf`. State is an S3 remote backend with per-env keys (`backend.tf` + `environments/<env>.s3.tfbackend`). The ECS task role accesses S3 via IAM, and Google Cloud (Vision/Vertex) via **Workload Identity Federation** — both keyless (no static keys). Local dev does **not** use Terraform at all — `scripts/localstack-init.sh` provisions the S3 bucket + Lambda directly against LocalStack on `docker compose up`. See `docs/architecture/infrastructure.md` for the bootstrap + apply runbook.
 
 ## Coding Conventions
 
@@ -272,10 +272,10 @@ Architecture and data documentation lives in `docs/architecture/`:
 | `overview.md` | System-wide component map, data flow, external services |
 | `frontend.md` | Expo/React Native app — routing, auth layers, state management, key patterns |
 | `backend.md` | Express API — middleware stack, endpoints, data model, image pipeline, background jobs |
-| `infrastructure.md` | Terraform/AWS resources, Docker Compose local dev, GitOps deployment pipeline |
-| `cheap-prod-fargate.md` | Plan: low-cost always-on prod on ECS Fargate (replaces EKS); EKS kept as a sandbox |
-| `fargate-handbuild.md` | Living runbook: build the Fargate stack by hand (learn-by-doing) then import to Terraform; tracks per-step status |
+| `infrastructure.md` | Terraform/AWS resources, Docker Compose local dev, push-CD deployment pipeline |
+| `fargate-handbuild.md` | Living runbook: build the Fargate stack by hand (learn-by-doing) then import to Terraform, including the EKS→Fargate migration record; tracks per-step status |
 | `data.md` | Data inventory, third-party flows, user content rights, GDPR obligations |
+| `agent-dev-team.md` | The agentic dev team that works `FEATURES.md` tickets: shared contract, the Claude Code (`/dev-team`) and standalone Mastra (`agent-team/`) harnesses, E2E testing setup |
 
 Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.usebruno.com/). Copy `docs/bruno/environments/.env.example` to `docs/bruno/environments/.env` and fill in your Supabase credentials. Run **Auth › Sign in with password** (or **Sign in anonymously**) once — the post-response script stores the JWT in `accessToken` automatically. All other requests use it via their bearer auth.
 
@@ -285,6 +285,17 @@ Architecture decisions are tracked in `docs/architecture-decision-records/`. Cur
 - `0001-auth-provider.md` — Why Supabase Auth was chosen over alternatives
 - `0002-rds-database-credentials.md` — RDS auth: SSM password now, keyless IAM auth (Prisma driver adapter + `pg` password callback) deferred as a post-build adaptation
 - `0003-always-on-production-cost-architecture.md` — *Proposed, gated.* Always-on prod ingress: drop the ALB for API Gateway HTTP API → VPC Link → Cloud Map (keeps Fargate warm; Lambda rejected on cold starts, App Runner on GHCR support). `dev` becomes ephemeral rather than scheduled. **Blocked on step 0**: HTTP APIs cap the integration timeout at a non-increasable 30 s (the ALB allows 60 s+), which the synchronous Gemini plausibility/label-extraction paths must be measured against; Cloudflare Tunnel is the named fallback
+- `0004-agentic-dev-workflow.md` — Why the `FEATURES.md` backlog is worked by an agentic dev team behind one shared contract, implemented by two swappable harnesses (Claude Code, standalone Mastra)
+
+## Agentic Dev Team
+
+`FEATURES.md` tickets are implemented by a small team of coding agents (frontend / backend /
+reviewer roles) rather than by hand. Trigger a ticket with `/dev-team <TICKET-ID>` in a Claude
+Code session, or `npm run dev-team -- <TICKET-ID>` from `agent-team/` for the standalone
+Mastra-based harness — both implement the same contract (git-worktree isolation, a
+`docs/<TICKET-ID>-findings.md` doc, a PR against `main`) and the same guardrails. Model/provider
+choice (Claude, and structurally GPT/DeepSeek) is a single env-var switch on the Mastra harness.
+See `docs/architecture/agent-dev-team.md`.
 
 ## Mandatory Post-Implementation Steps
 

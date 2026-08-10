@@ -1,6 +1,9 @@
 /** @type {import('jest').Config} */
 module.exports = {
   preset: 'jest-expo',
+  // e2e/ holds Playwright specs (npm run test:e2e), not Jest ones — Playwright's `test`
+  // refuses to run inside a Jest process, so they must stay out of Jest's test match.
+  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/e2e/'],
   moduleNameMapper: {
     // Resolve @/* path alias defined in tsconfig.json
     '^@/(.*)$': '<rootDir>/$1',
