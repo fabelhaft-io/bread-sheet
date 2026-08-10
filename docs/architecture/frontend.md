@@ -430,3 +430,41 @@ What was broken was durability (fixed by P8-001) and visibility. The gates that 
 Upgrading to an email that already has an account fails at `updateUser` and leaves the ratings on the anonymous id; the upgrade screen surfaces `EMAIL_ALREADY_REGISTERED_MESSAGE` inline rather than Supabase's raw copy. Merging two existing accounts is explicitly out of scope.
 
 > Testing note: `lib/__mocks__/api.ts` is the manual mock behind a bare `jest.mock('@/lib/api')`. It keeps `ApiError` and `NetworkError` as real classes, because screens and `formatApiError` branch on `instanceof`. Tests that exercise the caches mock `expo-file-system/legacy` with an in-memory `Map` and call `setActiveCacheUser` / `__resetOfflineStoreForTests` in `beforeEach`.
+
+## Native E2E: Android emulator + Maestro (TICKET-P9-003)
+
+Playwright covers everything reachable through Expo web; the flows it structurally
+cannot reach — camera, barcode scan, on-device OCR — are covered by Maestro against a
+debug build on a headless Android emulator. `npm run test:maestro` is the single
+entry point (`scripts/test-maestro.js`); the reviewer's test matrix runs it
+conditionally for tickets whose diff touches camera/scan code, and the script is
+self-provisioning so no per-run manual setup is needed: it resolves the Android SDK
+(`ANDROID_HOME`, else common install paths) and a JDK 17+ (`JAVA_HOME`, else the
+Android Studio JBR), creates a `breadsheet-e2e` AVD if none exists (installing a
+system image via `sdkmanager` when needed, falling back to an existing AVD when
+cmdline-tools are missing), boots the emulator headless
+(`-no-window -gpu swiftshader_indirect -camera-back virtualscene`), runs
+`expo prebuild` + `gradlew :app:installDebug`, starts Metro on :8081 (with
+`adb reverse` so the device reaches it), wipes app data + pre-grants the CAMERA
+permission, and runs `maestro test e2e/maestro`. Flows:
+
+- `e2e/maestro/barcode-scan.yaml` — guest sign-in → Scan tab → camera UI live →
+  scan → product screen.
+- `e2e/maestro/manual-entry.yaml` — the camera-free manual-entry path (P6-006).
+
+**Why the camera flow drives the scan with a deep link.** Maestro cannot control
+what the emulator camera sees, so the pixel-decode step (CameraX → ML Kit) is the
+one link in the chain an on-device test cannot drive. `scan.tsx` therefore has a
+`__DEV__`-only seam: opening `breadsheet://scan?inject=<barcode>` feeds the exact
+same `processScan` path the camera's `onBarcodeScanned` callback uses (validation →
+navigation → product screen), so everything downstream of the decode is exercised
+for real. The seam is dead in release builds and consumed the moment it fires.
+`scripts/test-maestro-wiring.test.js` guards the wiring (npm script present, flows
+target the app, runner parses) so it cannot silently rot.
+
+**Prerequisites** are the same as `npm run test:e2e`: a reachable Supabase project
+via `bread-sheet-app/.env` (guest sign-in + product lookup). Plus JDK 17+ and an
+Android SDK for the Gradle build; the first Gradle run downloads dependencies and
+can take 10–40 minutes. On a machine without the SDK/AVD, the runner reports the
+exact missing prerequisite instead of failing confusingly (environment-prerequisite
+gaps are recorded in the findings doc, not treated as code failures).

@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
@@ -48,6 +48,57 @@ export default function ScanScreen() {
     scanLock.current = false;
   }, []);
 
+  // What happens when a barcode is read, whether the camera decoded it or a
+  // dev-only test seam injected it (TICKET-P9-003). Both callers go through
+  // here so the two paths can never drift apart.
+  const processScan = useCallback(
+    (data: string) => {
+      if (scanLock.current) return;
+      scanLock.current = true;
+
+      // A code the server would reject with `400 Invalid barcode format` — an
+      // ITF-14 case code, a CODE-128 label, a partial read. Hand the user the
+      // digits we did get in an editable field instead of a raw error (P6-006).
+      if (!isValidBarcode(data)) {
+        setManualSeed(sanitizeBarcodeInput(data));
+        setManualSubtitle(
+          "That code isn't a product barcode we can look up. Check the number under the barcode and correct it below."
+        );
+        setManualVisible(true);
+        return;
+      }
+
+      router.push(`/(app)/product/${data}`);
+      // Reset lock after navigation so back-press can scan again.
+      setTimeout(() => { scanLock.current = false; }, 2000);
+    },
+    [router]
+  );
+
+  // TICKET-P9-003 — dev-only scan injection seam for the Maestro E2E suite.
+  //
+  // Maestro cannot control what the emulator camera sees, so the pixel-decode
+  // step (CameraX → ML Kit) is the one link in the scan chain an on-device E2E
+  // test cannot drive. Opening `breadsheet://scan?inject=<barcode>` in a __DEV__
+  // build feeds the exact same `processScan` path the camera's onBarcodeScanned
+  // callback uses — validation, navigation to `/(app)/product/<barcode>`, and
+  // every downstream product-screen state are exercised for real. The seam is
+  // dead in release builds (`__DEV__` is false there), and the param is
+  // consumed immediately so a later re-focus cannot re-fire the same scan.
+  const { inject } = useLocalSearchParams<{ inject?: string }>();
+  useEffect(() => {
+    if (!__DEV__) return;
+    if (typeof inject !== 'string' || inject.length === 0) return;
+    router.setParams({ inject: undefined });
+    // Defer past the router's own deep-link state update, and out of the effect
+    // body so processScan's state updates aren't a synchronous cascading render.
+    const id = setTimeout(() => processScan(inject), 0);
+    return () => clearTimeout(id);
+    // processScan and router are stable useCallback refs — `inject` is the only
+    // input that can change between renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inject]);
+
   // Rendered in every permission state — manual entry must not require the
   // camera, which is the point of the ticket (web, denied permission, no
   // hardware at all).
@@ -92,24 +143,7 @@ export default function ScanScreen() {
   }
 
   function handleBarcodeScanned({ data }: { data: string }) {
-    if (scanLock.current) return;
-    scanLock.current = true;
-
-    // A code the server would reject with `400 Invalid barcode format` — an
-    // ITF-14 case code, a CODE-128 label, a partial read. Hand the user the
-    // digits we did get in an editable field instead of a raw error (P6-006).
-    if (!isValidBarcode(data)) {
-      setManualSeed(sanitizeBarcodeInput(data));
-      setManualSubtitle(
-        "That code isn't a product barcode we can look up. Check the number under the barcode and correct it below."
-      );
-      setManualVisible(true);
-      return;
-    }
-
-    router.push(`/(app)/product/${data}`);
-    // Reset lock after navigation so back-press can scan again.
-    setTimeout(() => { scanLock.current = false; }, 2000);
+    processScan(data);
   }
 
   return (
@@ -141,6 +175,7 @@ export default function ScanScreen() {
       <Text style={styles.hint}>Align barcode within the frame</Text>
 
       <TouchableOpacity
+        testID="scan-torch"
         style={styles.torchButton}
         onPress={() => setTorchOn(v => !v)}
       >

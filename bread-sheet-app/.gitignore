@@ -42,6 +42,9 @@ yarn-error.*
 /playwright-report/
 /blob-report/
 
+# Maestro native E2E (TICKET-P9-003) — screenshots + emulator/metro logs
+/e2e/maestro/artifacts/
+
 app-example
 
 # generated native folders

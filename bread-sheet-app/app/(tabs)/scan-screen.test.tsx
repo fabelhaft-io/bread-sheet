@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import ScanScreen from './scan';
 
@@ -9,9 +9,12 @@ import ScanScreen from './scan';
  * become an editable field rather than an error.
  */
 
-const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn() };
+const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), setParams: jest.fn() };
 const mockPermission = jest.fn();
 const requestPermission = jest.fn();
+// Search params the mock router hands back — lets the P9-003 injection tests
+// drive the dev-only `?inject=` deep-link seam.
+const mockParams = jest.fn();
 
 // Captured so the test can drive the scan callback and assert on the
 // symbologies the camera was configured with.
@@ -25,6 +28,7 @@ jest.mock('expo-router', () => {
     // The screen only uses the focus effect to reset its scan lock.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run-once mock, deps intentionally empty
     useFocusEffect: (cb: () => unknown) => React.useEffect(() => cb(), []),
+    useLocalSearchParams: () => mockParams(),
   };
 });
 
@@ -46,6 +50,7 @@ beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
   cameraProps = {};
+  mockParams.mockReturnValue({});
   mockPermission.mockReturnValue([{ granted: true }, requestPermission]);
 });
 
@@ -113,5 +118,33 @@ describe('ScanScreen', () => {
     fireEvent.press(screen.getByTestId('scan-manual-entry'));
 
     expect(cameraProps.onBarcodeScanned).toBeUndefined();
+  });
+
+  // TICKET-P9-003 — the dev-only injection seam the Maestro E2E flow drives via
+  // `breadsheet://scan?inject=<barcode>`: it must go through the same routing as
+  // a real camera scan, not a separate test-only code path.
+  it('injects a scanned barcode from the dev ?inject= param straight to the product screen', () => {
+    mockParams.mockReturnValue({ inject: '4006381333931' });
+    render(<ScanScreen />);
+
+    // The seam defers past the router's deep-link update via setTimeout(0).
+    act(() => {
+      jest.runAllTimers();
+    });
+
+    expect(mockRouter.setParams).toHaveBeenCalledWith({ inject: undefined });
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+  });
+
+  it('routes a dev-injected non-lookupable code to the manual sheet, like a real scan', () => {
+    mockParams.mockReturnValue({ inject: '14006381333931' });
+    render(<ScanScreen />);
+
+    act(() => {
+      jest.runAllTimers();
+    });
+
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    expect(screen.getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
   });
 });

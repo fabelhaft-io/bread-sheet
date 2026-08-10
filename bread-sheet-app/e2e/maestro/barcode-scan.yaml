@@ -1,0 +1,47 @@
+# TICKET-P9-003 — camera barcode scan flow (debug build, Android emulator).
+#
+# Why a deep link instead of a camera frame: Maestro cannot control what the
+# emulator camera sees, so the pixel-decode step (CameraX → ML Kit) is the one
+# link in the scan chain an on-device E2E test cannot drive. The scan tab's
+# dev-only injection seam (app/(tabs)/scan.tsx, __DEV__-gated) feeds the exact
+# same processScan path the camera's onBarcodeScanned callback uses, so
+# validation, navigation to /(app)/product/<barcode>, and every downstream
+# product-screen state are exercised for real against the debug build.
+#
+# Prereqs (enforced by scripts/test-maestro.js): a booted emulator with the
+# debug APK installed and CAMERA pre-granted, Metro on :8081 (adb-reversed),
+# and a reachable Supabase project via bread-sheet-app/.env — guest sign-in
+# plus product lookup, the same requirement as the Playwright specs.
+appId: com.breadsheetexpo.breadsheet
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Continue as Guest"
+    timeout: 60000
+- tapOn: "Continue as Guest"
+- extendedWaitUntil:
+    visible:
+      id: "home-screen"
+    timeout: 20000
+- tapOn: "Scan"
+# Defensive: if the runtime permission dialog is up (e.g. pm grant was cleared
+# by an app-data reset), accept it. optional: true makes a pre-granted run pass
+# without it. Tapped before the camera-UI assertion below because the dialog
+# would otherwise cover the camera view and stall that wait.
+- tapOn:
+    text: "While using the app"
+    optional: true
+# The torch button only renders once the camera permission is granted and the
+# camera view is mounted — it is the flow's "camera UI is live" checkpoint.
+- extendedWaitUntil:
+    visible:
+      id: "scan-torch"
+    timeout: 20000
+- openLink: "breadsheet://scan?inject=4006381333931"
+# The product screen renders the barcode chip in every state (found, 404
+# "add this product", offline), so this one assertion proves the scan fired
+# and navigation landed on the product screen.
+- extendedWaitUntil:
+    visible: "4006381333931"
+    timeout: 30000
+- takeScreenshot: e2e/maestro/artifacts/barcode-scan

@@ -1,0 +1,39 @@
+# TICKET-P9-003 — manual barcode entry flow (debug build, Android emulator).
+#
+# The camera-free path (CLAUDE.md's camera-free principle): the scan tab's
+# "Enter code manually" sheet must work without the camera at all, and it lands
+# on the same /(app)/product/<barcode> destination a scan produces. This flow
+# exercises that path end-to-end on a debug build.
+#
+# Prereqs: same as barcode-scan.yaml — see scripts/test-maestro.js.
+appId: com.breadsheetexpo.breadsheet
+---
+- launchApp
+- extendedWaitUntil:
+    visible: "Continue as Guest"
+    timeout: 60000
+- tapOn: "Continue as Guest"
+- extendedWaitUntil:
+    visible:
+      id: "home-screen"
+    timeout: 20000
+- tapOn: "Scan"
+- extendedWaitUntil:
+    visible:
+      id: "scan-manual-entry"
+    timeout: 20000
+- tapOn:
+    id: "scan-manual-entry"
+- extendedWaitUntil:
+    visible:
+      id: "manual-barcode-input"
+    timeout: 10000
+- inputText: "4006381333931"
+- tapOn:
+    id: "manual-barcode-submit"
+# Same barcode-chip assertion as the scan flow: proves the code was accepted
+# and the product screen (any state) rendered it.
+- extendedWaitUntil:
+    visible: "4006381333931"
+    timeout: 30000
+- takeScreenshot: e2e/maestro/artifacts/manual-entry
