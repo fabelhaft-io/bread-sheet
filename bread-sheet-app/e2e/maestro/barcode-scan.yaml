@@ -1,0 +1,24 @@
+# Native Android smoke flow for the camera/barcode path.
+# Run with: npm run test:maestro
+# The emulator camera must be pointed at a screen or card showing an EAN-13
+# barcode. Maestro cannot synthesize a camera frame; the runner script starts
+# the configured emulator and leaves the camera available for this flow.
+appId: com.breadsheetexpo.breadsheet
+---
+- launchApp:
+    clearState: true
+- tapOn: "Continue as Guest"
+- extendedWaitUntil:
+    visible: "Scan"
+    timeout: 15000
+- tapOn: "Scan"
+- tapOn: "Allow Camera"
+- extendedWaitUntil:
+    visible: "Align barcode within the frame"
+    timeout: 10000
+# Keep this assertion after the real camera callback. It proves that a valid
+# barcode was decoded and that the scan handler navigated to the product route.
+# The product screen is rendered for the scanned EAN-13 by the debug server.
+- extendedWaitUntil:
+    visible: "Product"
+    timeout: 30000

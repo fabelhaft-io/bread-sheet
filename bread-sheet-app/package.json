@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:maestro": "bash ./scripts/run-maestro-android.sh"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
