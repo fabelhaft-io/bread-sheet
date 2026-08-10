@@ -276,6 +276,7 @@ Architecture and data documentation lives in `docs/architecture/`:
 | `cheap-prod-fargate.md` | Plan: low-cost always-on prod on ECS Fargate (replaces EKS); EKS kept as a sandbox |
 | `fargate-handbuild.md` | Living runbook: build the Fargate stack by hand (learn-by-doing) then import to Terraform; tracks per-step status |
 | `data.md` | Data inventory, third-party flows, user content rights, GDPR obligations |
+| `agent-dev-team.md` | The agentic dev team that works `FEATURES.md` tickets: shared contract, the Claude Code (`/dev-team`) and standalone Mastra (`agent-team/`) harnesses, E2E testing setup |
 
 Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.usebruno.com/). Copy `docs/bruno/environments/.env.example` to `docs/bruno/environments/.env` and fill in your Supabase credentials. Run **Auth › Sign in with password** (or **Sign in anonymously**) once — the post-response script stores the JWT in `accessToken` automatically. All other requests use it via their bearer auth.
 
@@ -285,6 +286,17 @@ Architecture decisions are tracked in `docs/architecture-decision-records/`. Cur
 - `0001-auth-provider.md` — Why Supabase Auth was chosen over alternatives
 - `0002-rds-database-credentials.md` — RDS auth: SSM password now, keyless IAM auth (Prisma driver adapter + `pg` password callback) deferred as a post-build adaptation
 - `0003-always-on-production-cost-architecture.md` — *Proposed, gated.* Always-on prod ingress: drop the ALB for API Gateway HTTP API → VPC Link → Cloud Map (keeps Fargate warm; Lambda rejected on cold starts, App Runner on GHCR support). `dev` becomes ephemeral rather than scheduled. **Blocked on step 0**: HTTP APIs cap the integration timeout at a non-increasable 30 s (the ALB allows 60 s+), which the synchronous Gemini plausibility/label-extraction paths must be measured against; Cloudflare Tunnel is the named fallback
+- `0004-agentic-dev-workflow.md` — Why the `FEATURES.md` backlog is worked by an agentic dev team behind one shared contract, implemented by two swappable harnesses (Claude Code, standalone Mastra)
+
+## Agentic Dev Team
+
+`FEATURES.md` tickets are implemented by a small team of coding agents (frontend / backend /
+reviewer roles) rather than by hand. Trigger a ticket with `/dev-team <TICKET-ID>` in a Claude
+Code session, or `npm run dev-team -- <TICKET-ID>` from `agent-team/` for the standalone
+Mastra-based harness — both implement the same contract (git-worktree isolation, a
+`docs/<TICKET-ID>-findings.md` doc, a PR against `main`) and the same guardrails. Model/provider
+choice (Claude, and structurally GPT/DeepSeek) is a single env-var switch on the Mastra harness.
+See `docs/architecture/agent-dev-team.md`.
 
 ## Mandatory Post-Implementation Steps
 

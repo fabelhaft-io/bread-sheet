@@ -141,6 +141,13 @@ cd bread-sheet-app && npx expo start
 
 Scan the QR code with Expo Go (or press `a`/`i` for an emulator).
 
+Run the app's E2E tests (Playwright, against Expo web — see [Agentic Dev Team](#agentic-dev-team)):
+
+```sh
+cd bread-sheet-app && npx playwright install chromium   # one-time
+npm run test:e2e
+```
+
 ## Configuration Reference
 
 ### `server/.env` — backend API
@@ -182,6 +189,25 @@ Scan the QR code with Expo Go (or press `a`/`i` for an emulator).
 | `GCLOUD_ADC_PATH` | Host path to your Google ADC file, bind-mounted into the `app-dev` server container. Linux/macOS: `${HOME}/.config/gcloud/application_default_credentials.json`; Windows: `${APPDATA}/gcloud/application_default_credentials.json` |
 
 ## Optional / Advanced Setup
+
+### Agentic Dev Team
+
+`FEATURES.md` tickets are implemented by a small team of coding agents (frontend / backend /
+reviewer) rather than by hand. Two interchangeable ways to trigger a ticket:
+
+```sh
+# Claude Code harness — run inside a Claude Code session
+/dev-team <TICKET-ID>
+
+# Standalone Mastra harness — any model provider, run from a plain shell
+cd agent-team && cp .env.example .env   # fill in AGENT_MODEL + a matching API key
+npm install
+npm run dev-team -- <TICKET-ID>
+```
+
+Both produce the same thing: a `docs/<TICKET-ID>-findings.md` doc and a PR against `main` (or,
+if blocked, just the findings doc with open questions). See
+`docs/architecture/agent-dev-team.md` for the full contract and guardrails.
 
 ### Building an Android APK
 

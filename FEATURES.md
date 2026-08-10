@@ -1364,6 +1364,44 @@ nicety; Slice B is independent and can wait.
 - **Session storage adapter (P8-001).** AsyncStorage — the path Supabase documents and tests. `@react-native-async-storage/async-storage` is a hard dependency now (a native rebuild is required); `jest.config.js` maps it to the package's in-memory jest mock.
 - **Cache substrate.** JSON documents via `expo-file-system` (`lib/offline/store.ts`), with AsyncStorage as the fallback where there is no document directory (web, tests). Not SQLite — see the substrate decision above.
 
+## Phase 9: Agentic Dev Team Infrastructure
+
+Follow-ups from setting up the agentic dev team (`docs/architecture/agent-dev-team.md`,
+`docs/architecture-decision-records/0004-agentic-dev-workflow.md`) that were deliberately
+documented rather than built as part of that change.
+
+### [TICKET-P9-001] Implement ADR03 - Cheaper DEV/PROD
+implement adr 0003, but make changes for dev - target is identical setup for dev and prod
+
+### [TICKET-P9-002] Wire Supabase Test Secrets for E2E CI
+**Goal:** Make the `e2e` job in `.github/workflows/test.yml` actually pass in CI instead of failing loudly for lack of config.
+**Context:** `bread-sheet-app/e2e/*.spec.ts` exercises real Supabase auth (guest sign-in), same as manual testing — there is no mocked-auth path. The job already reads `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` from repo secrets but they aren't set yet.
+**Implementation:**
+- Decide whether CI points at a dedicated test Supabase project or the existing dev one; a dedicated project avoids E2E runs polluting real dev data (guest users, ratings).
+- Add the two secrets in GitHub repo settings (Settings → Secrets and variables → Actions) — a deliberate, human action, not something a dev-team run should do itself per its guardrails.
+**Acceptance Criteria:**
+- [ ] `e2e` job in `.github/workflows/test.yml` passes on a PR.
+- [ ] The Supabase project used for CI is documented (which one, and why) in `docs/architecture/agent-dev-team.md`.
+
+### [TICKET-P9-003] Android Emulator + Maestro E2E Coverage
+**Goal:** Cover the native-only flows (camera, barcode scan, on-device OCR) that Playwright/Expo-web structurally can't reach, per the "Follow-up: Android emulator + Maestro (not built)" section of `docs/architecture/agent-dev-team.md`.
+**Implementation:**
+- Install Android SDK + create an AVD (locally and/or as a CI-hosted emulator action).
+- Install [Maestro](https://maestro.mobile.dev) and author its declarative YAML flows for the camera/scan paths.
+- Add a reviewer test-matrix step (both harnesses — Claude Code and `agent-team/`) that runs the Maestro flows once the above exist, per the shared contract in `agent-team/src/prompts/guardrails.md`.
+**Acceptance Criteria:**
+- [ ] Android emulator runs locally (or in CI) without manual per-run setup.
+- [ ] At least one Maestro flow exercises barcode scanning end-to-end against a debug build.
+- [ ] The reviewer role's test matrix (in both `.claude/agents/dev-reviewer.md` and `agent-team/src/agents/reviewer-agent.ts`) runs it for tickets that touch camera/scan code.
+
+### [TICKET-P9-004] Live Dry-Run of the Agentic Dev Team
+**Goal:** Verify the `/dev-team` (Claude Code) and `agent-team` (Mastra) harnesses end-to-end against a real ticket and a real model, not just the config/ticket-parsing checks done while building them.
+**Context:** The Mastra harness's config fail-fast behavior and ticket parsing were verified directly, but no full run happened — the environment it was built in has no outbound network to any LLM provider.
+**Acceptance Criteria:**
+- [ ] `npm run dev-team -- <TICKET-ID>` (from `agent-team/`, with a real `ANTHROPIC_API_KEY`) runs a small open ticket to a PR or a documented `BLOCKED` doc.
+- [ ] `/dev-team <TICKET-ID>` does the same from a Claude Code session.
+- [ ] Both runs' findings docs and guardrail behavior (worktree isolation, reviewer-only PR, bounded retry) are compared and any drift between the two harnesses is fixed or documented.
+
 # Future Plans and Ideas
 
 ## ADR 003 - Improve operations cost!!!
