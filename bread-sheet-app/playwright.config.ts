@@ -1,10 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * E2E specs run against Expo web (`npm run web`, i.e. `expo start --web`), not a native
- * emulator — see docs/architecture/agent-dev-team.md for why (no Android SDK on this
- * machine yet; Maestro/Android is a documented follow-up, not built). Needs the same
- * `bread-sheet-app/.env` Supabase config the app normally needs to run — see README.md.
+ * E2E specs run against Expo web (`npm run web`, i.e. `expo start --web`). Native-only
+ * camera/barcode coverage lives in `e2e/maestro` and runs through `npm run test:maestro`.
+ * Web auth specs use the same Supabase config as the app; they skip locally when those
+ * credentials are absent and execute in configured CI/reviewer environments.
  */
 export default defineConfig({
   testDir: './e2e',
