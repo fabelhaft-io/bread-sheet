@@ -44,43 +44,74 @@ implemented, test results (pass/fail summary, not full logs), open questions.
 
 ### Typed handoff (Harness B)
 
-The findings doc above is for humans. The *coordinator*-facing handoff — what decides whether a
-run passes, retries, or gives up — is a schema-validated object, not prose the coordinator has
-to re-parse. `agent-team/src/lib/handoff.ts` defines two Zod schemas:
+The findings doc above is for humans. The *coordinator*-facing handoff is a schema-validated
+object, not prose the coordinator has to re-parse. `agent-team/src/lib/handoff.ts` defines two
+Zod schemas:
 
 - `implementerHandoffSchema` — `status` (`DONE`/`BLOCKED`), `filesChanged`, `testResults`
-  (`typecheck`/`lint`/`unitTests`, each `pass`/`fail`/`not_run` — `not_run` is a legitimate,
-  honest answer for a check the ticket didn't need), a one-paragraph `summary`, and
-  `openQuestions`.
-- `reviewerHandoffSchema` — `status` (`PASS`/`BLOCKED`), `findingsDocPath`, `prUrl` (only when
-  `PASS`), a six-field `testMatrix`, and `openQuestions` (required, concrete, non-empty when
-  `BLOCKED` — that's exactly what gets handed to the next fix cycle).
+  (`typecheck`/`lint`/`unitTests`, each `pass`/`fail`/`not_run`), a one-paragraph `summary`
+  (used as the coordinator's commit message), and `openQuestions`.
+- `reviewerHandoffSchema` — `status` (`PASS`/`BLOCKED`), `findingsDocPath`, `prTitle`/`prBody`
+  (the coordinator opens the PR itself — see "Coordinator-owned git" below), a six-field
+  `testMatrix`, and `openQuestions` (required, concrete, non-empty when `BLOCKED`).
 
-Each implementer/reviewer call is `agent.stream(prompt, { structuredOutput: { schema } })`, not
-`.generate()` — the coordinator drains `output.fullStream` (via `src/lib/progress.ts`'s
-`logAgentProgress`, printing one terse `[frontend]`/`[backend]`/`[reviewer]`-prefixed line per
-tool call/result as it happens, nothing for text deltas) and only then awaits `output.object`,
-which resolves to the schema-validated structured handoff once the stream finishes. The
-coordinator reads that `.object`, not `.text`. This replaced an earlier version that used
-`.generate()` (silent until the entire multi-minute tool-calling turn finished — genuinely
-useless for watching a live run) and regex-matched the reviewer's prose for the word
-`"BLOCKED"` — fragile by construction (it also had to avoid false-triggering on the word
-appearing near a PR URL mention).
+Each implementer/reviewer call is `agent.stream(prompt, { structuredOutput: { schema } })`. The
+coordinator drains `output.fullStream` (`src/lib/progress.ts`'s `logAgentProgress`, one terse
+`[frontend]`/`[backend]`/`[reviewer]`-prefixed line per tool call/result) and then awaits
+`output.object` for the schema-validated result.
 
-**`findOutOfPillarFiles`** (same file) is a second, independent check the coordinator runs
-itself after the implementer(s) finish, *before* even asking the reviewer to look: it diffs the
-worktree (`git diff`/`git status`, not the model's self-reported `filesChanged`) against the
-pillar(s) actually invoked for the ticket, and flags anything outside all of them. Physical
-filesystem containment (`LocalFilesystem`'s `basePath`, see Harness B below) already stops a
-file *tool* call from writing outside a pillar; this catches the one thing containment can't — a
-shell command reaching outside it (`echo x > ../server/foo.ts`) — and surfaces it to the
-reviewer as a `COORDINATOR SCOPE CHECK` line in its prompt, to confirm rather than auto-reject
-(a legitimate ticket occasionally does need both pillars).
+`findOutOfPillarFiles` (same file) is a second check: after the implementer(s) finish, the
+coordinator diffs the worktree for real (`git diff`/`git status`, not the model's self-reported
+`filesChanged`) against the pillar(s) actually invoked, and surfaces anything outside all of
+them to the reviewer as a `COORDINATOR SCOPE CHECK` line — a flag to confirm, not an
+auto-reject, since a legitimate ticket occasionally needs both pillars. The actual enforcement
+that stops an out-of-scope change from ever being committed is "Coordinator-owned git" below.
 
 Harness A (Claude Code) has no equivalent schema enforcement — a subagent's report back to the
-coordinator skill is still prose, checked by instruction only. That asymmetry is intentional for
-now (Claude Code's Agent tool doesn't expose a structured-output contract the same way), not
-something both harnesses need to match line-for-line.
+coordinator skill is still prose, checked by instruction only. Intentional asymmetry: Claude
+Code's Agent tool doesn't expose a structured-output contract the same way.
+
+### OS-level shell sandboxing (Harness B)
+
+`LocalFilesystem`'s `basePath` containment only restricts file *tools*
+(`read_file`/`write_file`/`edit_file`/...) — it does not restrict `execute_command`. A shell
+command can `cd ..` and write anywhere. `agent-team/src/lib/sandbox.ts`'s `hardenedSandbox()`
+closes this on Linux via bubblewrap (`isolation: 'bwrap'`): writes outside the allowed paths
+never reach the real filesystem, even though the shell command itself reports success (bwrap
+gives the process its own ephemeral view).
+
+Two fixes on top of `@mastra/core`'s own bwrap builder, since its default omits both:
+- No `/dev` is bound by default, which breaks anything touching `/dev/null` (most tools,
+  git included) — fixed via `--dev-bind /dev /dev`.
+- `allowSystemBinaries` only binds `process.execPath`'s own `bin/` directory. Under a version
+  manager (nvm here), `npm` is a symlink into a sibling `lib/node_modules/npm/`, invisible
+  unless the whole version directory is bound.
+
+Passing `bwrapArgs` to `LocalSandbox` **replaces** Mastra's default argument construction
+rather than extending it, so `hardenedSandbox()` duplicates that default rather than layering
+on top — a coupling risk if `@mastra/core`'s builder changes later. Non-Linux (or bwrap
+unavailable) falls back to no isolation with a one-time warning rather than silently claiming
+an unverified guarantee — seatbelt (macOS) hasn't been tested against this repo.
+
+### Coordinator-owned git (Harness B)
+
+OS-level sandboxing alone doesn't fully close the scope gap: a single shell invocation that
+writes a file and then runs `git add && git commit` in the same sandboxed session can still get
+that ephemeral content into the real git object database, since the object store has to stay
+writable for commits to work at all.
+
+So agents have no git write access, period — `readOnlyPaths` in each agent's sandbox covers
+only `status`/`diff`/`log`; `add`/`commit`/`push` fail with "Read-only file system". The
+coordinator (`coordinator.ts`, unsandboxed, trusted Node code) is the only thing that ever runs
+`git add`/`commit`/`push`/`gh pr create`, working from real, post-agent-turn disk state — an
+out-of-scope write that never persisted has nothing for the coordinator to accidentally stage.
+After each implementer turn it commits only `filterCommittableImplementerFiles`'s result
+(pillar prefixes plus each pillar's documented doc exceptions — `FRONTEND_EXTRA_PATHS`/
+`BACKEND_EXTRA_PATHS`/`BACKEND_EXTRA_PREFIXES` in `handoff.ts`, the same source of truth each
+agent's `LocalFilesystem.allowedPaths` reads from), using the implementer's `summary` as the
+message. After the reviewer, it commits `filterCommittableReviewerFiles`'s result (`docs/` +
+`FEATURES.md`). On `PASS` it pushes the branch and runs `gh pr create` itself using the
+reviewer's `prTitle`/`prBody`, returning the real URL `gh` prints — not a model-reported one.
 
 ## Harness A — Claude Code
 
@@ -114,35 +145,37 @@ npm install
 npm run dev-team -- <TICKET-ID>
 ```
 
-It's built on [Mastra](https://mastra.ai)'s `@mastra/core`, which turned out to ship most of
-what a coding-agent toolbelt needs out of the box, so nothing here is hand-rolled beyond wiring:
+Built on [Mastra](https://mastra.ai)'s `@mastra/core`, which ships most of a coding-agent
+toolbelt out of the box:
 
-- `src/agents/frontend-agent.ts` / `backend-agent.ts` use `createCodingAgent()` (from
-  `@mastra/core/coding-agent`), each with its `basePath` rooted at the pillar's subdirectory
-  inside the ticket's worktree (`bread-sheet-app/` / `server/`). That gives them a
-  `LocalFilesystem` that's **physically contained** to that subtree by default — reading or
-  writing outside it isn't just discouraged, it fails. The shell tool's working directory
-  defaults to the same root, but shell commands *can* still `cd ..`; that boundary is
-  instruction-enforced, same as Harness A.
-- `src/agents/reviewer-agent.ts` builds its own `Workspace` rooted at the worktree root (it
-  needs to run tests across both pillars and drive `git`/`gh`), but registers a
-  `beforeToolCall` hook on every write/edit/mkdir/delete workspace tool that rejects any path
-  outside `docs/` or `FEATURES.md`. This is a real enforcement mechanism, not just a prompt —
-  see `isAllowedReviewerWritePath` in that file.
-- `src/config.ts` resolves each role's model from `AGENT_MODEL_FRONTEND` /
-  `_BACKEND` / `_REVIEWER`, falling back to `AGENT_MODEL`. It fails fast (no default model, no
-  default provider) if unset, and rejects any provider prefix outside an explicit allow-list —
-  same "fail fast, no inline env defaults" convention as `server/src/configs/config.ts`.
-- `src/coordinator.ts` is a plain async function (not Mastra's `Workflow` DSL) so the
-  bounded-retry/`BLOCKED`-handling control flow stays easy to read: create the worktree, decide
-  which pillar(s) the ticket touches, run the implementer(s) in parallel, run the reviewer,
-  retry up to twice on `BLOCKED`.
+- `src/agents/frontend-agent.ts` / `backend-agent.ts` use `createCodingAgent()` with `basePath`
+  rooted at the pillar's subdirectory in the worktree (`bread-sheet-app/` / `server/`) — a
+  `LocalFilesystem` physically contained to that subtree, plus a few least-privilege exceptions
+  (`CLAUDE.md` read-only, each pillar's own architecture doc + relevant extras read-write,
+  driven from `handoff.ts`'s shared path constants). Sandboxed shell, no git write access (see
+  the two sections above).
+- `src/agents/reviewer-agent.ts` builds its own `Workspace` rooted at the worktree root (needs
+  to run tests across both pillars) and registers a `beforeToolCall` hook rejecting any
+  write/edit/mkdir/delete outside `docs/`/`FEATURES.md` (`isAllowedReviewerWritePath`). Same
+  sandboxed shell, same no-git-write-access — it no longer opens the PR itself either.
+- `src/config.ts` resolves each role's model from `AGENT_MODEL_FRONTEND`/`_BACKEND`/`_REVIEWER`,
+  falling back to `AGENT_MODEL`. Fails fast (no default model, no default provider) if unset,
+  rejects any provider prefix outside an explicit allow-list — same "fail fast, no inline env
+  defaults" convention as `server/src/configs/config.ts`.
+- `src/coordinator.ts`: plain async function (not Mastra's `Workflow` DSL). Creates the
+  worktree, decides pillars, runs implementer(s) in parallel, commits their real changes, runs
+  the reviewer, commits its docs/FEATURES.md changes, pushes + opens the PR on `PASS`, retries
+  up to twice on `BLOCKED`. Every coordinator-side action logs with a `[coordinator]` prefix,
+  distinct from the agents' own `[frontend]`/`[backend]`/`[reviewer]` lines.
 
-**Model/provider swapping is the point of this harness.** Mastra's model field is a
-`"<provider>/<model-id>"` string routed through 90+ providers — moving the whole team from
-Claude to GPT or DeepSeek is changing `AGENT_MODEL` (or the three per-role variables) and adding
-the matching API key, no code change. **Today only Anthropic is exercised for real** — the
-OpenAI/DeepSeek rows in `.env.example` are there so adding a key is the only step needed later.
+**Model/provider swapping is the point of this harness** — verified for real, not just
+designed: `P9-003` has reached a genuine `PASS` on DeepSeek, and separately confirmed working
+end-to-end on Anthropic. Moving the whole team to a different provider is changing
+`AGENT_MODEL` (or the three per-role variables) and adding the matching API key, no code
+change — but mind the exact model-ID string each provider expects (e.g. DeepSeek wants
+lowercase hyphenated names like `deepseek-v4-flash`, not `DeepSeek-V4-Flash`); `config.ts`'s
+fail-fast only catches a bad provider *prefix*, a bad model name within a valid provider
+surfaces as a live API error instead.
 
 ## E2E testing (`bread-sheet-app/e2e/`)
 
@@ -166,20 +199,17 @@ new file for every small addition):
   elsewhere in the frontend.
 
 Both specs need a working `bread-sheet-app/.env` (a reachable Supabase project) — they exercise
-real auth, same prerequisite as manual testing. CI's new `e2e` job in
-`.github/workflows/test.yml` needs `EXPO_PUBLIC_SUPABASE_URL` /
-`EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` added as repository **variables** (Settings →
-Secrets and variables → Actions → Variables — not Secrets: both are `EXPO_PUBLIC_*` values Expo
-bakes into the client bundle, so they're already public) before it will pass — until then it
-fails loudly rather than silently skipping.
+real auth, same prerequisite as manual testing. CI's `e2e` job in `.github/workflows/test.yml`
+needs `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` added as
+repository **variables** (not Secrets — both are `EXPO_PUBLIC_*` values Expo bakes into the
+client bundle, so they're already public) before it will pass.
 
-**Fixed along the way:** `app.json`'s `web.output` was `"static"`, which makes `expo start
---web` server-render each route in a Node process before serving it. The Supabase client's
-`AsyncStorage`-web fallback touches `window.localStorage` during that render pass, and Node has
-no `window` — so `npm run web` crashed on every request, unrelated to anything in this feature.
-Nothing in the repo depends on static prerendering (this app has no web production target), so
-`web.output` was changed to `"single"` (a plain client-rendered SPA shell), which is also the
-correct mode for a web target that only exists for dev/E2E use.
+`app.json`'s `web.output` is `"single"`, not Expo's default `"static"` — static mode
+server-renders each route in Node before serving it, and the Supabase client's
+`AsyncStorage`-web fallback touches `window.localStorage` during that render pass, which
+crashes with no `window` in Node. Nothing in the repo depends on static prerendering, so
+`"single"` (a plain client-rendered SPA shell) is also the correct mode for a web target that
+only exists for dev/E2E use.
 
 ### Follow-up: Android emulator + Maestro (not built)
 

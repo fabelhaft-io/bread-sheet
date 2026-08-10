@@ -5,11 +5,11 @@ import { Agent } from '@mastra/core/agent';
 import {
   Workspace,
   LocalFilesystem,
-  LocalSandbox,
   WORKSPACE_TOOLS,
   type WorkspaceToolHookContext,
   type WorkspaceToolBeforeHookResult,
 } from '@mastra/core/workspace';
+import { hardenedSandbox } from '../lib/sandbox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const guardrails = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'guardrails.md'), 'utf8');
@@ -52,17 +52,26 @@ function beforeToolCall(
 export function createReviewerAgent({
   model,
   worktreePath,
+  repoRoot,
   baseBranch,
   environmentFacts,
 }: {
   model: string;
   worktreePath: string;
+  repoRoot: string;
   baseBranch: string;
   environmentFacts: string;
 }) {
   const workspace = new Workspace({
     filesystem: new LocalFilesystem({ basePath: worktreePath }),
-    sandbox: new LocalSandbox({ workingDirectory: worktreePath }),
+    // repoRoot/.git read-only: git status/diff/log against the real object database still
+    // work, but the reviewer can't commit either — same reasoning as the implementers (see
+    // frontend-agent.ts). The worktree's own .git pointer file stays read-write as part of
+    // the workspacePath bind, which is harmless (it's never a git write target itself).
+    sandbox: hardenedSandbox({
+      workspacePath: worktreePath,
+      readOnlyPaths: [path.join(repoRoot, '.git')],
+    }),
     tools: {
       hooks: { beforeToolCall },
     },
@@ -79,9 +88,11 @@ export function createReviewerAgent({
 
 You are the **reviewer** role — the merge gate. Your workspace is rooted at the ticket's
 worktree root, so you can read and run commands anywhere in the repo, but a hook rejects every
-write/edit/mkdir/delete call whose path isn't under \`docs/\` or exactly \`FEATURES.md\`. If you
-find a bug in the implementation, write it into the findings doc — you cannot fix it yourself,
-by design.
+write/edit/mkdir/delete call whose path isn't under \`docs/\` or exactly \`FEATURES.md\`, and
+your shell's \`git\` is read-only (OS-level, not just instruction) — \`status\`/\`diff\`/\`log\`
+work, \`commit\`/\`add\` will fail. If you find a bug in the implementation, write it into the
+findings doc — you cannot fix it yourself, by design, and you don't commit or open the PR
+yourself either — see step 6/7 below.
 
 This run's base branch is \`${baseBranch}\` — use it wherever these instructions say "main"
 below (diffing, and the PR base).
@@ -109,20 +120,25 @@ Working procedure:
 4. Verify \`CLAUDE.md\`'s "Mandatory Post-Implementation Steps" were honored: relevant
    \`docs/architecture/*.md\` updated, an ADR added if architecturally significant,
    \`docs/bruno/*.bru\` updated for endpoint changes.
-5. Write \`docs/<TICKET-ID>-findings.md\`, matching the shape of
+5. Write \`docs/<TICKET-ID>-findings.md\` via your file tools, matching the shape of
    \`docs/P5-003-implementation-plan.md\`: current state, what was implemented, test results
    (key pass/fail summary, not full logs), open questions.
-6. **On pass:** check the ticket's boxes in \`FEATURES.md\`, commit, then run
-   \`gh pr create --base ${baseBranch} --head agent/<TICKET-ID> --title "..." --body "..."\`
-   referencing the ticket and the findings doc. Never merge it.
-7. **On fail:** do not open a PR. Mark the findings doc \`BLOCKED\` with concrete, specific open
-   questions. Commit the doc.
+6. **On pass:** check the ticket's boxes in \`FEATURES.md\` yourself, via your file tools (this
+   still works — the hook allows it). Do **not** run \`git add\`/\`git commit\`/\`git push\`/
+   \`gh pr create\` — they're not your job and the git ones will fail anyway (read-only).
+   Instead, fill \`prTitle\`/\`prBody\` in your structured handoff below with what you'd want
+   the PR to say; the coordinator stages your docs/FEATURES.md changes, commits them, pushes
+   the branch, and opens the PR using exactly those two fields.
+7. **On fail:** do not fill in a real \`prTitle\`/\`prBody\` (leave them empty or minimal — they
+   won't be used). Mark the findings doc \`BLOCKED\` with concrete, specific open questions.
+   The coordinator still commits your findings doc either way.
 8. Your final turn is validated against a structured schema (the coordinator reads it
    programmatically, not by re-parsing your prose, so get \`status\` right — it's the only
-   thing that decides whether a fix cycle happens): \`status\` is \`PASS\` only when you
-   actually opened the PR, \`prUrl\` is set only then, \`findingsDocPath\` is always the doc you
-   wrote, \`testMatrix\` reflects what you actually ran (\`not_run\` for anything skipped because
-   the ticket didn't touch that pillar), and \`openQuestions\` must be concrete and non-empty
-   whenever \`status\` is \`BLOCKED\` — that's what the next fix cycle is handed.`,
+   thing that decides whether a fix cycle happens, and \`prTitle\`/\`prBody\` are the only
+   things that decide what the PR the coordinator opens actually says): \`findingsDocPath\` is
+   always the doc you wrote, \`testMatrix\` reflects what you actually ran (\`not_run\` for
+   anything skipped because the ticket didn't touch that pillar), and \`openQuestions\` must be
+   concrete and non-empty whenever \`status\` is \`BLOCKED\` — that's what the next fix cycle is
+   handed.`,
   });
 }

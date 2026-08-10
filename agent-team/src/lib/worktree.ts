@@ -64,3 +64,37 @@ export function getChangedFiles(worktreePath: string, baseBranch: string): strin
     .map((line) => line.slice(3).trim());
   return [...new Set([...committed, ...uncommitted])];
 }
+
+/**
+ * Stages and commits exactly `files` — nothing else, regardless of what else is sitting
+ * uncommitted in the worktree. This is the enforcement point: agents no longer have git write
+ * access at all (see sandbox.ts), so the coordinator is the only thing that can ever turn a
+ * real, on-disk change into a real commit, and it only does so for files a caller has already
+ * filtered through handoff.ts's filterCommittableImplementerFiles/filterCommittableReviewerFiles.
+ * No-ops (returns false) if `files` is empty or nothing in it actually has a diff to stage.
+ */
+export function commitFiles(worktreePath: string, files: string[], message: string): boolean {
+  if (files.length === 0) return false;
+  git(['add', '--', ...files], worktreePath);
+  const staged = git(['diff', '--cached', '--name-only'], worktreePath).trim();
+  if (!staged) return false;
+  git(['commit', '-m', message], worktreePath);
+  return true;
+}
+
+export function pushBranch(worktreePath: string, branch: string): void {
+  git(['push', '-u', 'origin', branch], worktreePath);
+}
+
+/** Runs `gh pr create` and returns the PR URL gh prints to stdout on success. */
+export function createPullRequest(
+  worktreePath: string,
+  opts: { base: string; head: string; title: string; body: string },
+): string {
+  const output = execFileSync(
+    'gh',
+    ['pr', 'create', '--base', opts.base, '--head', opts.head, '--title', opts.title, '--body', opts.body],
+    { cwd: worktreePath, encoding: 'utf8' },
+  );
+  return output.trim().split('\n').pop() ?? '';
+}

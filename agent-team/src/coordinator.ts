@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config.js';
 import { findTicket, type Ticket } from './lib/tickets.js';
-import { ensureWorktree, getChangedFiles } from './lib/worktree.js';
+import { ensureWorktree, getChangedFiles, commitFiles, pushBranch, createPullRequest } from './lib/worktree.js';
 import { logAgentProgress } from './lib/progress.js';
 import { probeEnvironment, formatEnvironmentFacts } from './lib/environment.js';
 import { createFrontendAgent } from './agents/frontend-agent.js';
@@ -12,6 +12,8 @@ import {
   implementerHandoffSchema,
   reviewerHandoffSchema,
   findOutOfPillarFiles,
+  filterCommittableImplementerFiles,
+  filterCommittableReviewerFiles,
   type ImplementerHandoff,
   type ReviewerHandoff,
   type InvokedPillars,
@@ -24,6 +26,10 @@ const MAX_PRIOR_FINDINGS_CHARS = 6000;
 export interface CoordinatorResult {
   ok: boolean;
   summary: string;
+}
+
+function log(message: string): void {
+  console.log(`[coordinator] ${message}`);
 }
 
 /**
@@ -62,6 +68,11 @@ function readPriorFindings(worktreePath: string, ticketId: string): string | nul
   }
 }
 
+function commitMessageFromHandoffs(ticketId: string, handoffs: ImplementerHandoff[]): string {
+  const summaries = handoffs.map((h) => h.summary.trim()).filter(Boolean);
+  return `${ticketId}: ${summaries.join(' ')}`.slice(0, 2000);
+}
+
 export async function runCoordinator(ticketId: string): Promise<CoordinatorResult> {
   const config = loadConfig();
   const ticket = findTicket(config.repoRoot, ticketId);
@@ -69,8 +80,11 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
   const environmentFacts = formatEnvironmentFacts(probeEnvironment());
 
   const pillars = detectPillars(ticket);
+  log(`ticket ${ticket.id}, pillars=${JSON.stringify(pillars)}, worktree=${worktree.path}`);
+
   const ticketPrompt = `Ticket: ${ticket.heading}\n\n${ticket.body}`;
   const priorFindings = readPriorFindings(worktree.path, ticketId);
+  if (priorFindings) log('found a findings doc from a prior run — seeding it into the first prompt');
 
   let fixCycles = 0;
   let lastOpenQuestions = '';
@@ -92,6 +106,7 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
       const frontend = createFrontendAgent({
         model: config.frontendModel,
         worktreePath: worktree.path,
+        repoRoot: config.repoRoot,
         environmentFacts,
       });
       implementerRuns.push(
@@ -107,6 +122,7 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
       const backend = createBackendAgent({
         model: config.backendModel,
         worktreePath: worktree.path,
+        repoRoot: config.repoRoot,
         environmentFacts,
       });
       implementerRuns.push(
@@ -123,17 +139,26 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
 
     // Objective cross-check against the model's own self-reported filesChanged — see
     // findOutOfPillarFiles's doc comment for why this doesn't just trust the handoff.
-    const actualChangedFiles = getChangedFiles(worktree.path, config.baseBranch);
-    const outOfPillar = findOutOfPillarFiles(actualChangedFiles, pillars);
+    const changedAfterImplementers = getChangedFiles(worktree.path, config.baseBranch);
+    const outOfPillar = findOutOfPillarFiles(changedAfterImplementers, pillars);
+    if (outOfPillar.length) log(`scope check flagged out-of-pillar files (will not be committed): ${outOfPillar.join(', ')}`);
     const scopeWarning = outOfPillar.length
       ? `\n\nCOORDINATOR SCOPE CHECK: these changed files fall outside every pillar invoked for ` +
         `this ticket (${JSON.stringify(pillars)}) — confirm they're actually in scope before ` +
         `passing this review: ${outOfPillar.join(', ')}`
       : '';
 
+    // The coordinator, not the agent, owns every commit — see filterCommittableImplementerFiles's
+    // doc comment for why this (not just OS sandboxing) is what actually closes the
+    // out-of-scope-write gap. Agents have no git write access at all now (see sandbox.ts).
+    const committable = filterCommittableImplementerFiles(changedAfterImplementers, pillars);
+    const committed = commitFiles(worktree.path, committable, commitMessageFromHandoffs(ticket.id, implementerHandoffs));
+    log(committed ? `committed implementer changes: ${committable.join(', ')}` : 'no committable implementer changes this cycle');
+
     const reviewer = createReviewerAgent({
       model: config.reviewerModel,
       worktreePath: worktree.path,
+      repoRoot: config.repoRoot,
       baseBranch: config.baseBranch,
       environmentFacts,
     });
@@ -145,12 +170,28 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
     await logAgentProgress('reviewer', reviewOutput);
     const review: ReviewerHandoff = await reviewOutput.object;
 
+    // Same principle for the reviewer's own writes (findings doc, FEATURES.md checkboxes) —
+    // it can produce them via its file tools (still hook-restricted to docs/+FEATURES.md), but
+    // the coordinator is what turns them into a real commit.
+    const changedAfterReview = getChangedFiles(worktree.path, config.baseBranch);
+    const reviewCommittable = filterCommittableReviewerFiles(changedAfterReview);
+    const reviewMessage = `${ticket.id}: record review findings (${review.status})`;
+    const reviewCommitted = commitFiles(worktree.path, reviewCommittable, reviewMessage);
+    log(reviewCommitted ? `committed reviewer changes: ${reviewCommittable.join(', ')}` : 'no committable reviewer changes this cycle');
+
     if (review.status === 'PASS') {
+      log(`review passed — pushing ${worktree.branch} and opening a PR against ${config.baseBranch}`);
+      pushBranch(worktree.path, worktree.branch);
+      const prUrl = createPullRequest(worktree.path, {
+        base: config.baseBranch,
+        head: worktree.branch,
+        title: review.prTitle,
+        body: review.prBody,
+      });
+      log(`PR opened: ${prUrl}`);
       return {
         ok: true,
-        summary:
-          `Ticket ${ticket.id}: reviewer passed.\nFindings: ${review.findingsDocPath}` +
-          (review.prUrl ? `\nPR: ${review.prUrl}` : ''),
+        summary: `Ticket ${ticket.id}: reviewer passed.\nFindings: ${review.findingsDocPath}\nPR: ${prUrl}`,
       };
     }
 
@@ -165,5 +206,6 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
           `place for manual pickup.\n\nOpen questions:\n${lastOpenQuestions}`,
       };
     }
+    log(`BLOCKED — starting fix cycle ${fixCycles}/${MAX_FIX_CYCLES}`);
   }
 }
