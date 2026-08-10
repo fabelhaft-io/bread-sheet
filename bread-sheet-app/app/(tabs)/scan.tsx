@@ -3,12 +3,29 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
+import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
+import { isValidBarcode, sanitizeBarcodeInput } from '@/features/products/barcode';
+
+/**
+ * Symbologies the scanner accepts. The four retail codes were always here;
+ * `itf14` (case packs) and `code128` (a lot of non-grocery goods) were added
+ * with P6-006 — a code the camera refuses to read at all is indistinguishable
+ * from a damaged label to the user, and both dead-ended before manual entry.
+ * Anything that reads but fails `^\d{8,13}$` opens the manual sheet pre-filled.
+ */
+const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'itf14'] as const;
+
 export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const router = useRouter();
   const scanLock = useRef(false);
   const [torchOn, setTorchOn] = useState(false);
   const [scanningActive, setScanningActive] = useState(true);
+  const [manualVisible, setManualVisible] = useState(false);
+  // Pre-fill for the sheet: the digits of a code that scanned but is not a
+  // barcode we can look up (P6-006).
+  const [manualSeed, setManualSeed] = useState('');
+  const [manualSubtitle, setManualSubtitle] = useState<string | undefined>(undefined);
 
   useFocusEffect(
     useCallback(() => {
@@ -20,7 +37,45 @@ export default function ScanScreen() {
     }, [])
   );
 
-  if (!permission) return <View style={styles.container} />;
+  const openManualEntry = useCallback(() => {
+    setManualSeed('');
+    setManualSubtitle(undefined);
+    setManualVisible(true);
+  }, []);
+
+  const closeManualEntry = useCallback(() => {
+    setManualVisible(false);
+    scanLock.current = false;
+  }, []);
+
+  // Rendered in every permission state — manual entry must not require the
+  // camera, which is the point of the ticket (web, denied permission, no
+  // hardware at all).
+  const manualEntry = (
+    <>
+      <TouchableOpacity
+        testID="scan-manual-entry"
+        style={styles.manualButton}
+        onPress={openManualEntry}
+      >
+        <Text style={styles.manualButtonText}>⌨️  Enter code manually</Text>
+      </TouchableOpacity>
+      <ManualBarcodeSheet
+        visible={manualVisible}
+        onClose={closeManualEntry}
+        initialValue={manualSeed}
+        subtitle={manualSubtitle}
+      />
+    </>
+  );
+
+  if (!permission) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.manualDock}>{manualEntry}</View>
+      </View>
+    );
+  }
 
   if (!permission.granted) {
     return (
@@ -31,6 +86,7 @@ export default function ScanScreen() {
         <TouchableOpacity style={styles.button} onPress={requestPermission}>
           <Text style={styles.buttonText}>Allow Camera</Text>
         </TouchableOpacity>
+        <View style={styles.manualDock}>{manualEntry}</View>
       </View>
     );
   }
@@ -38,6 +94,19 @@ export default function ScanScreen() {
   function handleBarcodeScanned({ data }: { data: string }) {
     if (scanLock.current) return;
     scanLock.current = true;
+
+    // A code the server would reject with `400 Invalid barcode format` — an
+    // ITF-14 case code, a CODE-128 label, a partial read. Hand the user the
+    // digits we did get in an editable field instead of a raw error (P6-006).
+    if (!isValidBarcode(data)) {
+      setManualSeed(sanitizeBarcodeInput(data));
+      setManualSubtitle(
+        "That code isn't a product barcode we can look up. Check the number under the barcode and correct it below."
+      );
+      setManualVisible(true);
+      return;
+    }
+
     router.push(`/(app)/product/${data}`);
     // Reset lock after navigation so back-press can scan again.
     setTimeout(() => { scanLock.current = false; }, 2000);
@@ -49,8 +118,8 @@ export default function ScanScreen() {
         style={StyleSheet.absoluteFill}
         facing="back"
         enableTorch={torchOn}
-        onBarcodeScanned={scanningActive ? handleBarcodeScanned : undefined}
-        barcodeScannerSettings={{ barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e'] }}
+        onBarcodeScanned={scanningActive && !manualVisible ? handleBarcodeScanned : undefined}
+        barcodeScannerSettings={{ barcodeTypes: [...BARCODE_TYPES] }}
       />
 
       {/* Dimmed overlay with viewfinder cutout */}
@@ -77,6 +146,8 @@ export default function ScanScreen() {
       >
         <Text style={styles.torchText}>{torchOn ? '🔦 Off' : '🔦 On'}</Text>
       </TouchableOpacity>
+
+      <View style={styles.manualDock}>{manualEntry}</View>
     </View>
   );
 }
@@ -191,5 +262,25 @@ const styles = StyleSheet.create({
   torchText: {
     color: '#fff',
     fontSize: 14,
+  },
+
+  // Manual entry (P6-006). Sits below the torch so it is present in every
+  // permission state, including the ones with no viewfinder at all.
+  manualDock: {
+    position: 'absolute',
+    bottom: 14,
+    alignSelf: 'center',
+  },
+  manualButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  manualButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

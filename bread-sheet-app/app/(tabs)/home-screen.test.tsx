@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import { NetworkError } from '@/lib/api';
 import { __resetOfflineStoreForTests, setActiveCacheUser } from '@/lib/offline/store';
@@ -191,5 +191,17 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     mockUseSession.mockReturnValue({ session: null, isAnonymous: false, isLoading: false });
     render(<HomeScreen />);
     await waitFor(() => expect(mockApiGet).not.toHaveBeenCalled());
+  });
+
+  // P6-006: adding a product must not require the camera tab.
+  it('offers a manual add entry point that routes to the product screen', async () => {
+    mockApiGet.mockResolvedValue([]);
+    const { findByTestId, getByTestId } = render(<HomeScreen />);
+
+    fireEvent.press(await findByTestId('home-add-product'));
+    fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
+    fireEvent.press(getByTestId('manual-barcode-submit'));
+
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });
 });

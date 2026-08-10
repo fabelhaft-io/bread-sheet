@@ -102,6 +102,12 @@ describe('ProductScreen — product-not-found state', () => {
     });
   });
 
+  // One test in this block routes an invalid code; every other test (here and
+  // in the blocks below) assumes the default barcode.
+  afterEach(() => {
+    mockUseLocalSearchParams.mockReturnValue({ barcode: '0000000000001' });
+  });
+
   it('renders the not-found screen on a 404 response', async () => {
     mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
     const { findByTestId, getByText } = render(<ProductScreen />);
@@ -150,6 +156,25 @@ describe('ProductScreen — product-not-found state', () => {
     await findByText(/Could not load this product/i);
     expect(queryByText(/Prisma|FK constraint|userId/i)).toBeNull();
     expect(queryByTestId('product-not-found')).toBeNull();
+  });
+
+  // P6-006: a code the server rejects outright is a correctable mistake, not
+  // an error to read. The manual-entry sheet opens pre-filled with the digits.
+  it('offers the manual-entry sheet pre-filled on a 400 invalid-barcode response', async () => {
+    mockUseLocalSearchParams.mockReturnValue({ barcode: '14006381333931' });
+    mockApiGet.mockRejectedValue(new ApiError(400, 'Invalid barcode format', {}));
+
+    const { findByTestId, getByTestId, queryByText } = render(<ProductScreen />);
+
+    await findByTestId('product-invalid-barcode');
+    expect(queryByText(/Invalid barcode format/i)).toBeNull();
+    expect(getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
+
+    fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
+    fireEvent.press(getByTestId('manual-barcode-submit'));
+
+    // `replace`: the corrected code takes the place of the broken screen.
+    expect(mockRouter.replace).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });
 
   it('renders the product normally on a 2xx response — no regression for known products', async () => {
