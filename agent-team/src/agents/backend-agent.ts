@@ -2,32 +2,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCodingAgent } from '@mastra/core/coding-agent';
+import { Workspace, LocalFilesystem, LocalSandbox } from '@mastra/core/workspace';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const guardrails = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'guardrails.md'), 'utf8');
 
+// Least-privilege exceptions to basePath containment — CLAUDE.md is reference-only reading,
+// docs/bruno + backend.md are exactly what the "Update ../docs/bruno/" step in this agent's
+// own instructions asks it to write. Everything else outside server/ stays unreachable.
+const ALLOWED_PATHS = ['../CLAUDE.md', '../docs/bruno', '../docs/architecture/backend.md'];
+
 export function createBackendAgent({ model, worktreePath }: { model: string; worktreePath: string }) {
+  const basePath = path.join(worktreePath, 'server');
+  const workspace = new Workspace({
+    filesystem: new LocalFilesystem({ basePath, allowedPaths: ALLOWED_PATHS }),
+    sandbox: new LocalSandbox({ workingDirectory: basePath }),
+  });
+
   return createCodingAgent({
     id: 'dev-backend',
     name: 'BreadSheet Backend Implementer',
     model,
-    basePath: path.join(worktreePath, 'server'),
+    workspace,
     instructions: `${guardrails}
 
 ---
 
 You are the **backend implementer** role. Your workspace is rooted at \`server/\` inside the
 ticket's worktree, and your file tools (read/write/edit/list/delete/grep) are physically
-confined there — they cannot reach \`bread-sheet-app/\` or \`terraform/\` even by mistake. Your
-shell tool's working directory defaults to the same root, but a shell command *can* still
-\`cd ..\` — that boundary is enforced by you following this instruction, not by the sandbox. Stay
-inside \`server/\` for every edit and only reach outside it (via \`git -C ..\`) for git plumbing
-that must run at the worktree root.
+confined there — they cannot reach \`bread-sheet-app/\` or \`terraform/\` even by mistake. Two
+narrow exceptions: \`../CLAUDE.md\` is reachable read-only for reference, and
+\`../docs/bruno/\`/\`../docs/architecture/backend.md\` are reachable read-write because step 6
+below asks you to update them. Your shell tool's working directory defaults to the same root,
+but a shell command *can* still \`cd ..\` — that boundary is enforced by you following this
+instruction, not by the sandbox. Stay inside \`server/\` for every edit (aside from the two doc
+exceptions) and only reach outside it (via \`git -C ..\`) for git plumbing that must run at the
+worktree root.
 
-Read the repo's \`CLAUDE.md\` (one level up, at \`../CLAUDE.md\`) for backend conventions —
-Routes → Controllers → Services → Prisma, the \`requireAuth\`/\`requireRegistered\` middleware
-layering, the \`errorHandler\` two-channel sanitization, the "fail fast on env vars" and
-"bounded regex" coding conventions — before writing code.
+Read \`../CLAUDE.md\` for backend conventions — Routes → Controllers → Services → Prisma, the
+\`requireAuth\`/\`requireRegistered\` middleware layering, the \`errorHandler\` two-channel
+sanitization, the "fail fast on env vars" and "bounded regex" coding conventions — before
+writing code.
 
 Working procedure:
 1. You will be given a ticket's full text and acceptance criteria in the task prompt. If

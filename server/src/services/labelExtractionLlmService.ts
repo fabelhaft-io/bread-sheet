@@ -3,7 +3,7 @@ import logger from '../logger.js';
 import { getGeminiClient } from '../geminiClient.js';
 import type { ExtractedLabel } from './labelExtractionService.js';
 
-const MODEL = 'gemini-2.5-flash';
+const MODEL = 'gemini-3.5-flash';
 
 const PROMPT = `You are extracting structured nutrition information from a photo of a packaged food product label.
 

@@ -43,6 +43,93 @@ docker compose up -d   # init hook deploys the Lambda; re-run after rebuilds via
 
 If the bundle is missing the init script logs a warning and skips the Lambda — uploads still work, but `processed/` objects are never written.
 
+### Live Google Vision & Gemini (local)
+
+By default `VISION_MODE=mock` and `PLAUSIBILITY_MODE=mock` return fixture data — no GCP credentials
+needed. To test against the real APIs:
+
+**Vision (`VISION_MODE=live`):**
+1. Install the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) and run
+   `gcloud auth application-default login` on the **host** (not inside a container). Credentials land
+   at `~/.config/gcloud/application_default_credentials.json` and are picked up automatically by a
+   server running on the host — no `GOOGLE_APPLICATION_CREDENTIALS` needed locally.
+2. Enable the API: `gcloud services enable vision.googleapis.com --project=YOUR_PROJECT_ID`
+3. Vision has no dedicated invoker role — Owner/Editor accounts can call it directly; otherwise grant
+   `roles/serviceusage.serviceUsageConsumer`:
+   ```sh
+   gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+     --member="user:your-email@example.com" \
+     --role="roles/serviceusage.serviceUsageConsumer"
+   ```
+4. Set `VISION_MODE=live` in `server/.env`.
+
+**Gemini plausibility gate (`PLAUSIBILITY_MODE=gemini`):** the Add Product flow runs an AI check on
+every uploaded image (rejects non-product/unusable photos, reads front-of-pack name/brand
+suggestions, flags abuse — see [`backend.md`](backend.md)). Pick **one** auth method (both are read
+by the shared `getGeminiClient()` factory — the app code is identical):
+
+- **Vertex AI + ADC (recommended, no key).** Reuses the same ADC login as Vision:
+  1. Enable the API: `gcloud services enable aiplatform.googleapis.com --project=YOUR_PROJECT_ID`
+  2. Grant the role (skip if Owner/Editor):
+     ```sh
+     gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+       --member="user:your-email@example.com" \
+       --role="roles/aiplatform.user"
+     ```
+  3. Point ADC quota at this project (Vertex requires billing enabled):
+     `gcloud auth application-default set-quota-project YOUR_PROJECT_ID`
+  4. Set in `server/.env` (leave `GEMINI_API_KEY` unset):
+     ```env
+     PLAUSIBILITY_MODE=gemini
+     GOOGLE_GENAI_USE_VERTEXAI=true
+     GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+     GOOGLE_CLOUD_LOCATION=global
+     ```
+- **Gemini Developer API key (simplest, but a long-lived secret).** Create a key at
+  [Google AI Studio](https://aistudio.google.com/apikey) (free tier, no GCP project/billing
+  required), then in `server/.env`:
+  ```env
+  PLAUSIBILITY_MODE=gemini
+  GEMINI_API_KEY=your-key            # leave GOOGLE_GENAI_USE_VERTEXAI unset
+  ```
+
+**Running the server in a container with Vertex/ADC:** on the host (`npm run dev`), ADC is discovered
+automatically. The `app-dev` **container** instead bind-mounts the host ADC file, controlled by
+`GCLOUD_ADC_PATH` in the root `.env`:
+```yaml
+# docker-compose.yml
+- ${GCLOUD_ADC_PATH}:/root/.config/gcloud/application_default_credentials.json:ro
+```
+Verify after `docker compose --profile app-dev up`:
+```sh
+docker compose exec server cat /root/.config/gcloud/application_default_credentials.json
+```
+Non-empty JSON means ADC is available inside the container.
+
+**Production credentials:** in production, Vertex AI is the only Gemini path
+(`GOOGLE_GENAI_USE_VERTEXAI=true`) and Vision uses `live`; both authenticate keylessly through
+Workload Identity Federation — see § Keyless Google Cloud (Vision/Vertex) — Fargate WIF below.
+
+### Running on Windows
+
+The project is developed on Linux/Podman, but it runs on Windows with Docker too. Use a **native
+Windows terminal (PowerShell or CMD)** — not WSL2 — and adapt as follows:
+
+- **Compose runtime:** use Docker Desktop (`docker compose`). The Compose stack interpolates Windows
+  host paths and environment variables that only resolve in a native Windows shell.
+- **Copying env files:** replace `cp` with `Copy-Item`, e.g. `Copy-Item server/.env.example server/.env`.
+- **ADC mount path:** set `GCLOUD_ADC_PATH` in the root `.env` to
+  `${APPDATA}/gcloud/application_default_credentials.json`. `${APPDATA}` only resolves in
+  PowerShell/CMD — from a WSL2 shell it is undefined and the mount silently fails, breaking
+  Gemini/Vision auth in the container.
+- **Multi-line `gcloud` commands:** use a backtick (`` ` ``) for line continuation instead of the `\`
+  shown above, or put each command on one line.
+
+> **Why not WSL2?** Expo needs to detect your host network interface to serve the dev bundle to
+> devices/emulators, and the Compose stack relies on Windows-path mounts (the ADC file). Both break
+> under WSL2. If you specifically want WSL2, run `gcloud` inside WSL and set `GCLOUD_ADC_PATH` to the
+> Linux ADC path instead.
+
 ---
 
 ## Cloud Infrastructure (AWS — ECS Fargate)
