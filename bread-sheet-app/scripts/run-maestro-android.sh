@@ -17,13 +17,46 @@ AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
 EMULATOR="$ANDROID_HOME/emulator/emulator"
 ADB="$ANDROID_HOME/platform-tools/adb"
 
+ensure_java() {
+  local java_major=0
+  if command -v java >/dev/null 2>&1; then
+    # `java -version` writes to stderr. This also handles vendors that report
+    # versions as `17.0.x` and the old `1.8.x` format without relying on a JDK
+    # manager being installed on the host.
+    java_major="$(java -version 2>&1 | sed -nE 's/.*version "([0-9]+).*/\\1/p' | head -n1)"
+    [[ "$java_major" =~ ^[0-9]+$ ]] || java_major=0
+  fi
+  if (( java_major < 17 )); then
+    command -v curl >/dev/null || { echo 'curl is required to provision Java 17' >&2; exit 1; }
+    command -v tar >/dev/null || { echo 'tar is required to provision Java 17' >&2; exit 1; }
+
+    local java_root="$HOME/.cache/bread-sheet/android-jdk-17"
+    local java_archive="/tmp/temurin-jdk17-linux-x64.tar.gz"
+    if [[ ! -x "$java_root/bin/java" ]]; then
+      mkdir -p "$HOME/.cache/bread-sheet"
+      if [[ ! -f "$java_archive" ]]; then
+        curl --fail --location --retry 3 --output "$java_archive" \
+          'https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse'
+      fi
+      rm -rf "$java_root.tmp"
+      mkdir -p "$java_root.tmp"
+      tar -xzf "$java_archive" -C "$java_root.tmp"
+      mv "$java_root.tmp"/* "$java_root"
+      rm -rf "$java_root.tmp"
+    fi
+    export JAVA_HOME="$java_root"
+    export PATH="$JAVA_HOME/bin:$PATH"
+    java_major="$(java -version 2>&1 | sed -nE 's/.*version "([0-9]+).*/\\1/p' | head -n1)"
+  fi
+  (( java_major >= 17 )) || { echo 'Java 17+ is required by Android SDK tools' >&2; exit 1; }
+}
+
 provision_android_sdk() {
   if [[ -x "$SDKMANAGER" && -x "$AVDMANAGER" && -x "$EMULATOR" && -x "$ADB" ]]; then
     return
   fi
   command -v curl >/dev/null || { echo 'curl is required to provision Android SDK' >&2; exit 1; }
   command -v unzip >/dev/null || { echo 'unzip is required to provision Android SDK' >&2; exit 1; }
-  command -v java >/dev/null || { echo 'Java 17+ is required by Android SDK tools' >&2; exit 1; }
 
   local archive="/tmp/commandlinetools-linux-11076708_latest.zip"
   mkdir -p "$ANDROID_HOME/cmdline-tools"
@@ -38,6 +71,7 @@ provision_android_sdk() {
   mv "$ANDROID_HOME/cmdline-tools/latest.tmp/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
 }
 
+ensure_java
 provision_android_sdk
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 

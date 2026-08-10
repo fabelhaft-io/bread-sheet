@@ -13,12 +13,12 @@ npm run test:maestro
 ```
 
 `run-maestro-android.sh` provisions the Android command-line tools (under
-`$ANDROID_HOME`, defaulting to `$HOME/Android/Sdk`) and Maestro if they are absent. It then
-accepts SDK licenses, installs the API 35 platform/system image, creates the
-`bread-sheet-api-35` AVD when needed, boots it headlessly, builds and installs the debug
-client, and runs the flow. Set `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) and
-`ANDROID_AVD_NAME` to override the defaults. Java 17+, `curl`, and `unzip` are the only
-host prerequisites.
+`$ANDROID_HOME`, defaulting to `$HOME/Android/Sdk`) and Maestro if they are absent. It also downloads a cached Temurin Java 17 runtime when the
+host has no suitable JDK. It then accepts SDK licenses, installs the API 35 platform/system
+image, creates the `bread-sheet-api-35` AVD when needed, boots it headlessly, builds and
+installs the debug client, and runs the flow. Set `ANDROID_HOME` (or `ANDROID_SDK_ROOT`)
+and `ANDROID_AVD_NAME` to override the defaults. `curl`, `unzip`, and `tar` are the only
+host prerequisites (the first run requires network access).
 
 Headless emulators cannot receive camera frames from Maestro. The debug build therefore
 exposes a fixture button only when `EXPO_PUBLIC_MAESTRO_BARCODE` is set; the runner supplies
