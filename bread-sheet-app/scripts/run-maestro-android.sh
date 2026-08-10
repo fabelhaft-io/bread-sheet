@@ -155,8 +155,91 @@ until [[ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" =
 # can override it with any valid EAN-13 value.
 export EXPO_PUBLIC_MAESTRO_BARCODE="${EXPO_PUBLIC_MAESTRO_BARCODE:-4006381333931}"
 
-# Expo's native build installs the debug APK on the running AVD.
+# --- Metro must stay alive for the whole run --------------------------------
+# Debug builds do not embed the JS bundle (eager bundling is release-only), so
+# the freshly installed app fetches it from Metro at launch. `expo run:android
+# --no-bundler` alone cannot serve it: the CLI starts a *headless* Metro, opens
+# the app, and immediately calls manager.stopAsync() (verified in the installed
+# @expo/cli run/android/runAndroidAsync.js and run/startBundler.js), so the
+# debug app lands on RN's "Unable to load script" screen before Maestro's first
+# tapOn. Fix: a real Metro owns the port for the whole run. The CLI reuses it —
+# with the port already serving this project, the run command resolves
+# shouldStartBundler=false and attaches a headless *mock* dev server whose
+# stopAsync only tears down the mock, never the process that owns the port. The
+# readiness and post-build checks below turn that reuse into an enforced
+# invariant: if a future CLI stops reusing the server, we fail fast instead of
+# letting Maestro tap against a dead bundle server.
+: "${EXPO_METRO_PORT:=8081}"
+EXPO_START_LOG="/tmp/bread-sheet-expo-start.log"
+EXPO_START_PID=""
+# Use the local binary directly (not `npx`): the background server is then a
+# single node process, so EXPO_START_PID is the real server PID and cleanup
+# cannot orphan an npx wrapper. The script already runs from bread-sheet-app/
+# (see `npm run test:maestro`), which is what `npx expo run:android` relies on
+# too.
+EXPO_BIN="./node_modules/.bin/expo"
+meteor_serving() { curl -fsS -m 2 "http://localhost:$EXPO_METRO_PORT/status" 2>/dev/null | grep -q 'packager-status:running'; }
+if meteor_serving; then
+  # A Metro is already answering on the port (e.g. the developer's `npm start`
+  # or a previously crashed run). Reuse it and leave it running on exit.
+  echo "Reusing running Metro on port $EXPO_METRO_PORT (not started by this run)."
+else
+  "$EXPO_BIN" start --port "$EXPO_METRO_PORT" >"$EXPO_START_LOG" 2>&1 &
+  EXPO_START_PID=$!
+  for _ in $(seq 1 90); do
+    if meteor_serving; then break; fi
+    if ! kill -0 "$EXPO_START_PID" 2>/dev/null; then
+      # expo start exited before becoming ready (e.g. a non-Metro process owns
+      # the port). Only continue if something answers /status now.
+      meteor_serving || {
+        echo "Metro failed to start — see $EXPO_START_LOG" >&2
+        tail -n 30 "$EXPO_START_LOG" >&2
+        exit 1
+      }
+      EXPO_START_PID=""
+      break
+    fi
+    sleep 2
+  done
+  meteor_serving || {
+    echo "Metro did not become ready on port $EXPO_METRO_PORT — see $EXPO_START_LOG" >&2
+    tail -n 30 "$EXPO_START_LOG" >&2
+    exit 1
+  }
+fi
+cleanup_metro() {
+  # Only stop the server this run started; a pre-existing one stays up.
+  if [[ -n "$EXPO_START_PID" ]]; then
+    kill "$EXPO_START_PID" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_metro EXIT
+
+# Pre-warm the android debug bundle from the running server so the app's first
+# launch after install does not stall on a cold Metro build inside the Maestro
+# flow. The manifest's launchAsset.url is the exact URL the debug app requests
+# (it carries the SDK 57 transform params); discovery is best-effort, and a
+# failed pre-warm only costs one HTTP round-trip — the app's own request would
+# trigger the same build anyway.
+bundle_url="$(curl -fsS -m 10 -H 'expo-platform: android' "http://localhost:$EXPO_METRO_PORT/" 2>/dev/null \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const m=JSON.parse(s);console.log(m.launchAsset?.url||"")}catch(e){}})' \
+  || true)"
+if [[ -n "$bundle_url" ]]; then
+  curl -fsS -m 180 -o /dev/null "$bundle_url" || true
+fi
+
+# Expo's native build installs the debug APK on the running AVD. `--no-bundler`
+# keeps the CLI from starting its own server; it attaches to the background one.
 npx expo run:android --variant debug --no-bundler --device "$AVD_NAME"
+
+# The debug app has no embedded bundle; if Metro died here the flow could only
+# ever see RN's "Unable to load script" screen. Fail fast instead.
+meteor_serving || {
+  echo "Metro is no longer serving on port $EXPO_METRO_PORT after 'expo run:android' — the debug app cannot fetch its bundle (see $EXPO_START_LOG)." >&2
+  tail -n 30 "$EXPO_START_LOG" >&2
+  exit 1
+}
+
 maestro test e2e/maestro/barcode-scan.yaml
 
 exit 0

@@ -458,6 +458,15 @@ host-local `EXPO_PUBLIC_API_URL` (`localhost`/`127.0.0.1`) to the emulator's `10
 host alias — so the API must be running (`cd server && npm run dev`) or `EXPO_PUBLIC_API_URL`
 must point at a reachable staging URL.
 
+**Metro lifecycle:** a debug build has no embedded JS bundle, so the runner keeps a Metro
+server alive on `8081` (override: `EXPO_METRO_PORT`) for the whole run — `expo start` in
+the background before the build, `/status` readiness check, bundle pre-warm from the
+manifest's `launchAsset.url`, and a post-build check that Metro is still serving (fail
+fast if a future CLI stops reusing it). `expo run:android --no-bundler` attaches to that
+server; the CLI's headless mock `stopAsync` does not kill the process owning the port. An
+already-running Metro is reused and left running. This is what keeps `barcode-scan.yaml`'s
+first tap from hitting RN's "Unable to load script" screen.
+
 ### The debug barcode fixture
 
 Headless emulators cannot receive camera frames from Maestro, so the debug build exposes a

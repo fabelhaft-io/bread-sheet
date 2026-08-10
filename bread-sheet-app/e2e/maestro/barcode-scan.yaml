@@ -7,6 +7,13 @@ appId: com.breadsheetexpo.breadsheet
 ---
 - launchApp:
     clearState: true
+# A debug build fetches its JS bundle from Metro on every cold start, so after a
+# fresh install the first frame can take a while (the runner pre-warms the bundle
+# and keeps Metro alive, but a slow CI box can still exceed a bare tapOn's wait).
+# Wait for the login screen before tapping into it.
+- extendedWaitUntil:
+    visible: "Continue as Guest"
+    timeout: 60000
 - tapOn: "Continue as Guest"
 - extendedWaitUntil:
     visible: "Scan"

@@ -22,6 +22,22 @@ installs the debug client, and runs the flow. Set `ANDROID_HOME` (or `ANDROID_SD
 and `ANDROID_AVD_NAME` to override the defaults. `curl`, `unzip`, and `tar` are the only
 host prerequisites (the first run requires network access).
 
+### Metro lifecycle
+
+A debug build has no embedded JS bundle, so the installed app fetches it from Metro at
+launch. The runner therefore keeps a Metro server alive on `8081` (override with
+`EXPO_METRO_PORT`) for the whole run: it starts `expo start` in the background before
+`expo run:android`, waits for the `/status` endpoint, and only tears it down after the
+Maestro flow finishes. `expo run:android --no-bundler` reuses that server — the CLI's
+headless dev server is a mock whose `stopAsync` does not touch the process owning the
+port — and the runner verifies Metro is still serving after the native build so a future
+CLI change that stops reusing it fails fast instead of producing an "Unable to load
+script" app. An already-running Metro (e.g. your own `npm start`) is detected via
+`/status` and reused without being stopped on exit. Before installing the app the runner
+also pre-warms the Android debug bundle (the manifest's `launchAsset.url`) so the app's
+first frame after install does not stall on a cold Metro build; `barcode-scan.yaml`
+additionally waits up to 60s for the login screen before its first tap.
+
 The runner fails fast (before any download or emulator boot) when a prerequisite would
 otherwise only surface as a crash or a mid-flow assertion:
 

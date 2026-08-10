@@ -154,7 +154,7 @@ Native Android E2E (Maestro) covers the camera/scan paths Expo web cannot reach:
 cd bread-sheet-app && npm run test:maestro
 ```
 
-`run-maestro-android.sh` self-provisions the Android SDK (API 35), an AVD, a JDK 17 and Maestro on first run, then boots a headless emulator, installs the debug build and runs `e2e/maestro/barcode-scan.yaml`. Requires Supabase credentials and a reachable API (a `localhost`/`127.0.0.1` `EXPO_PUBLIC_API_URL` is translated to the emulator alias automatically); the script fails fast otherwise. See `docs/architecture/frontend.md` § Native E2E for details and the headless-camera limitation.
+`run-maestro-android.sh` self-provisions the Android SDK (API 35), an AVD, a JDK 17 and Maestro on first run, then boots a headless emulator, installs the debug build and runs `e2e/maestro/barcode-scan.yaml`. It keeps a Metro server alive for the whole run (debug builds fetch their JS bundle from Metro; `EXPO_METRO_PORT` overrides the default `8081`). Requires Supabase credentials and a reachable API (a `localhost`/`127.0.0.1` `EXPO_PUBLIC_API_URL` is translated to the emulator alias automatically); the script fails fast otherwise. See `docs/architecture/frontend.md` § Native E2E for details and the headless-camera limitation.
 
 ## Configuration Reference
 
