@@ -13,7 +13,8 @@ runCoordinator(ticketId)
     console.log(result.summary);
     process.exit(result.ok ? 0 : 1);
   })
-  .catch((err) => {
-    console.error('dev-team run failed:', err);
+  .catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('dev-team run failed:', message);
     process.exit(1);
   });
