@@ -1390,9 +1390,9 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - Install Android SDK + create an AVD (locally and/or as a CI-hosted emulator action) and add the `test:maestro` script to `bread-sheet-app/package.json`.
 - Install [Maestro](https://maestro.mobile.dev) and author its declarative YAML flows for the camera/scan paths.
 **Acceptance Criteria:**
-- [ ] Android emulator runs locally (or in CI) without manual per-run setup.
-- [ ] At least one Maestro flow exercises barcode scanning end-to-end against a debug build.
-- [ ] The reviewer's already-wired conditional step actually runs (confirms `test:maestro` exists and the reviewer's test matrix picks it up — no reviewer-side code change needed).
+- [x] Android emulator runs locally (or in CI) without manual per-run setup.
+- [x] At least one Maestro flow exercises barcode scanning end-to-end against a debug build.
+- [x] The reviewer's already-wired conditional step actually runs (confirms `test:maestro` exists and the reviewer's test matrix picks it up — no reviewer-side code change needed).
 
 ### [TICKET-P9-004] Live Dry-Run of the Agentic Dev Team
 **Goal:** Verify the `/dev-team` (Claude Code) and `agent-team` (Mastra) harnesses end-to-end against a real ticket and a real model, not just the config/ticket-parsing checks done while building them.
