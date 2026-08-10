@@ -1,8 +1,10 @@
 # Maestro Android flows
 
 `barcode-scan.yaml` is the native-only camera smoke flow. It starts as an anonymous user,
-opens the Scan tab, grants camera access, waits for the camera view, and verifies that a
-real EAN-13 decode navigates to the product screen.
+opens the Scan tab, grants camera access, waits for the native camera view, and verifies that
+the debug barcode fixture drives the same scan callback and navigates to the product screen.
+The fixture is deliberately deterministic for headless emulators; it is not a claim that Maestro
+has supplied a camera frame or performed an optical decode.
 
 ## Run locally
 
