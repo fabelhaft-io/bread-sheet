@@ -31,8 +31,23 @@ prompt.
 - Never run `terraform apply` or any state-mutating cloud CLI command (`aws ...`, `gcloud ...`
   beyond read-only describe/list calls).
 - Only the `reviewer` role may open the pull request (`gh pr create`), and only once the full
-  test matrix (server unit/integration tests + typecheck, app unit tests + typecheck + lint, and
-  the Playwright `test:e2e` suite for any UI-reachable change) passes. Never merge a PR.
+  test matrix (server unit/integration tests + typecheck, app unit tests + typecheck + lint, the
+  Playwright `test:e2e` suite for any UI-reachable change, and — for any change touching
+  camera/scan code — the native Maestro suite `npm --prefix bread-sheet-app run test:maestro`)
+  passes. Never merge a PR.
+
+## Native E2E (Android + Maestro)
+
+- The reviewer runs `npm --prefix bread-sheet-app run test:maestro` **only** for tickets whose
+  diff touches camera/scan code (the scan tab, manual barcode entry/validation, on-device OCR,
+  or anything under `bread-sheet-app/e2e/maestro/`). The runner self-provisions the Android
+  SDK, an API 35 AVD, a JDK 17 and Maestro, then boots a headless emulator, installs the debug
+  build and runs the Maestro YAML flows — no per-run manual setup.
+- The runner fails fast (exit 1, before any download or emulator boot) when
+  `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` are unset or the
+  app API is unreachable. For a camera/scan ticket that is an environment prerequisite gap:
+  record it in the findings doc and do not treat it as a code failure — and never fabricate
+  credentials to bypass the gate.
 
 ## Documentation
 

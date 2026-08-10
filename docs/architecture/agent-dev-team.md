@@ -104,9 +104,11 @@ OpenAI/DeepSeek rows in `.env.example` are there so adding a key is the only ste
 ## E2E testing (`bread-sheet-app/e2e/`)
 
 The reviewer role — on either harness — runs Playwright specs against Expo web
-(`npm run web`) as part of its test matrix. This machine has no Android SDK/emulator, so native
-device testing (Maestro) isn't built yet; web was chosen as the first surface because it needs
-no extra install and covers everything except native-only code paths (camera, on-device OCR).
+(`npm run web`) as part of its test matrix; web covers everything except the native-only code
+paths (camera, on-device OCR), which are covered by the native Maestro suite against a headless
+Android emulator (`npm --prefix bread-sheet-app run test:maestro`, see § Native Android E2E
+below). The native runner is self-provisioning, so installing an Android SDK/AVD is not a
+per-run checklist item.
 
 ```sh
 cd bread-sheet-app
@@ -138,12 +140,35 @@ Nothing in the repo depends on static prerendering (this app has no web producti
 `web.output` was changed to `"single"` (a plain client-rendered SPA shell), which is also the
 correct mode for a web target that only exists for dev/E2E use.
 
-### Follow-up: Android emulator + Maestro (not built)
+### Native Android E2E (TICKET-P9-003)
 
-Documented here so it's a known next step, not a silent gap. Needs, in order:
+Built in [TICKET-P9-003] — this was the "Follow-up: Android emulator + Maestro (not built)"
+gap. `bread-sheet-app/scripts/run-maestro-android.sh` is idempotent and self-provisioning: it
+installs the Android command-line tools, the API 35 `google_apis;x86_64` system image and the
+`bread-sheet-api-35` AVD (under `$ANDROID_HOME`, default `~/Android/Sdk`), a cached Temurin
+JDK 17 when the host lacks one, and [Maestro](https://maestro.mobile.dev); then boots a
+headless emulator, builds/installs the debug client with `expo run:android --variant debug`,
+and runs the flows under `bread-sheet-app/e2e/maestro/`.
 
-1. Android SDK + an AVD on the dev machine (or a CI-hosted emulator action).
-2. [Maestro](https://maestro.mobile.dev) installed — its declarative YAML flows are a good fit
-   for agent-authored specs (screenshot assertions, no native build step beyond a debug APK).
-3. A `reviewer` test-matrix step added on both harnesses once (1) and (2) exist, covering the
-   camera/barcode-scan paths Playwright/web structurally can't reach.
+```sh
+cd bread-sheet-app
+npm run test:maestro
+```
+
+- **Prerequisites:** the runner fails fast (before any download or emulator boot) when
+  `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` are unset or the
+  app API is unreachable — start the local API (`cd server && npm run dev`) or set
+  `EXPO_PUBLIC_API_URL` to a reachable URL. A host-local `EXPO_PUBLIC_API_URL`
+  (`localhost`/`127.0.0.1`) is translated to the emulator's `10.0.2.2` host alias
+  automatically.
+- **Camera-input policy:** headless emulators cannot receive camera frames from Maestro, so the
+  debug build exposes a "Use test barcode" fixture button on the Scan tab (only when
+  `EXPO_PUBLIC_MAESTRO_BARCODE` is set; never in production) that drives the exact `expo-camera`
+  barcode callback. The flow proves permission grant, native `CameraView` mounting, the scan
+  callback, API lookup and product-route navigation — but not optical decoding, which is a
+  documented limitation (see `bread-sheet-app/e2e/maestro/README.md` and
+  `docs/architecture/frontend.md` § Native E2E).
+- **Reviewer test matrix:** both harnesses (`.claude/agents/dev-reviewer.md` and
+  `agent-team/src/agents/reviewer-agent.ts`) run the Maestro suite only for tickets whose diff
+  touches camera/scan code — the shared contract is in `agent-team/src/prompts/guardrails.md`
+  (§ Native E2E).
