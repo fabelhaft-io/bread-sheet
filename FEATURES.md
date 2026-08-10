@@ -1375,10 +1375,10 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 
 ### [TICKET-P9-002] Wire Supabase Test Secrets for E2E CI
 **Goal:** Make the `e2e` job in `.github/workflows/test.yml` actually pass in CI instead of failing loudly for lack of config.
-**Context:** `bread-sheet-app/e2e/*.spec.ts` exercises real Supabase auth (guest sign-in), same as manual testing — there is no mocked-auth path. The job already reads `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` from repo secrets but they aren't set yet.
+**Context:** `bread-sheet-app/e2e/*.spec.ts` exercises real Supabase auth (guest sign-in), same as manual testing — there is no mocked-auth path. The job reads `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` from repository *variables* (not secrets — both are `EXPO_PUBLIC_*` values Expo bakes into the client bundle, so they're already public, same as in `bread-sheet-app/.env`).
 **Implementation:**
 - Decide whether CI points at a dedicated test Supabase project or the existing dev one; a dedicated project avoids E2E runs polluting real dev data (guest users, ratings).
-- Add the two secrets in GitHub repo settings (Settings → Secrets and variables → Actions) — a deliberate, human action, not something a dev-team run should do itself per its guardrails.
+- Add the two values in GitHub repo settings under Settings → Secrets and variables → Actions → **Variables** — a deliberate, human action, not something a dev-team run should do itself per its guardrails.
 **Acceptance Criteria:**
 - [ ] `e2e` job in `.github/workflows/test.yml` passes on a PR.
 - [ ] The Supabase project used for CI is documented (which one, and why) in `docs/architecture/agent-dev-team.md`.
@@ -1406,6 +1406,9 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 
 ## ADR 003 - Improve operations cost!!!
 50$ a month is to much for a hobby project with small load. How can we improve scalability and operations cost? e.g. move to GO?
+
+## Evaluate if Gemma 4 is cheaper for image recognition (both api and self hosting)
+see title
 
 ## E2E Testing Flow - Agents can run and control emulators
 Setup works on a local mac mini and on cachyos desktop pc

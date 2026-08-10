@@ -125,8 +125,10 @@ new file for every small addition):
 Both specs need a working `bread-sheet-app/.env` (a reachable Supabase project) — they exercise
 real auth, same prerequisite as manual testing. CI's new `e2e` job in
 `.github/workflows/test.yml` needs `EXPO_PUBLIC_SUPABASE_URL` /
-`EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` added as repository secrets before it will pass —
-until then it fails loudly rather than silently skipping.
+`EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` added as repository **variables** (Settings →
+Secrets and variables → Actions → Variables — not Secrets: both are `EXPO_PUBLIC_*` values Expo
+bakes into the client bundle, so they're already public) before it will pass — until then it
+fails loudly rather than silently skipping.
 
 **Fixed along the way:** `app.json`'s `web.output` was `"static"`, which makes `expo start
 --web` server-render each route in a Node process before serving it. The Supabase client's

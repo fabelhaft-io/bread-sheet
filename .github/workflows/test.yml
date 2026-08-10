@@ -72,10 +72,13 @@ jobs:
       run:
         working-directory: bread-sheet-app
     # Requires EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY repo
-    # secrets pointing at a reachable (ideally dedicated test) Supabase project — the specs
-    # under e2e/ hit real Supabase auth, same as manual testing. Until those secrets are
-    # added this job fails loudly rather than silently skipping, per this repo's "fail fast,
-    # no inline env defaults" convention (see CLAUDE.md).
+    # *variables* (Settings > Secrets and variables > Actions > Variables — not Secrets:
+    # both are EXPO_PUBLIC_* values Expo bakes into the client bundle, so they're already
+    # public, same as they are in bread-sheet-app/.env) pointing at a reachable (ideally
+    # dedicated test) Supabase project — the specs under e2e/ hit real Supabase auth, same
+    # as manual testing. Until those variables are added this job fails loudly rather than
+    # silently skipping, per this repo's "fail fast, no inline env defaults" convention
+    # (see CLAUDE.md).
 
     steps:
       - uses: actions/checkout@v4
@@ -95,8 +98,8 @@ jobs:
       - name: Run E2E tests
         run: npm run test:e2e
         env:
-          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
-          EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
+          EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}

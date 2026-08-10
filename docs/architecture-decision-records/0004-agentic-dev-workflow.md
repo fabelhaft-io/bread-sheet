@@ -78,5 +78,7 @@ asymmetry, not a gap — the seam exists so it's a config change later, not a re
   fail-fast behavior and ticket parsing were verified directly, but a live run needs to happen
   in the user's own environment with a real `ANTHROPIC_API_KEY`.
 * The `e2e` CI job needs `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`
-  added as repository secrets before it passes in CI — not done as part of this change (adding
-  repo secrets is a deliberate, separate action for whoever owns the GitHub repo settings).
+  added as repository *variables* before it passes in CI — not done as part of this change
+  (adding them is a deliberate, separate action for whoever owns the GitHub repo settings).
+  Both are `EXPO_PUBLIC_*` values Expo bakes into the client bundle at build time, so they're
+  already public — repository variables, not secrets, is the correct place for them.
