@@ -31,8 +31,20 @@ prompt.
 - Never run `terraform apply` or any state-mutating cloud CLI command (`aws ...`, `gcloud ...`
   beyond read-only describe/list calls).
 - Only the `reviewer` role may open the pull request (`gh pr create`), and only once the full
-  test matrix (server unit/integration tests + typecheck, app unit tests + typecheck + lint, and
-  the Playwright `test:e2e` suite for any UI-reachable change) passes. Never merge a PR.
+  test matrix (server unit/integration tests + typecheck, app unit tests + typecheck + lint, the
+  Playwright `test:e2e` suite for any UI-reachable change, and — for any change touching
+  camera/scan code, once `bread-sheet-app/package.json` has a `test:maestro` script — the native
+  Maestro suite) passes. Never merge a PR.
+
+## Native E2E (Android + Maestro)
+
+- The reviewer runs `npm --prefix bread-sheet-app run test:maestro` **only** for tickets whose
+  diff touches camera/scan code (the scan tab, manual barcode entry/validation, on-device OCR,
+  or anything under `bread-sheet-app/e2e/maestro/`) **and** only once that script actually
+  exists — it doesn't yet (see `docs/architecture/agent-dev-team.md`'s Maestro follow-up).
+- If the script exists but fails because the Android SDK/AVD/Maestro aren't provisioned on this
+  machine, that's an environment prerequisite gap: record it in the findings doc, don't treat it
+  as a code failure, and never fabricate a passing result to get past it.
 
 ## Documentation
 

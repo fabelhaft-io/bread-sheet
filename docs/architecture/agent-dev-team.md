@@ -211,12 +211,20 @@ crashes with no `window` in Node. Nothing in the repo depends on static prerende
 `"single"` (a plain client-rendered SPA shell) is also the correct mode for a web target that
 only exists for dev/E2E use.
 
-### Follow-up: Android emulator + Maestro (not built)
+### Follow-up: Android emulator + Maestro (`P9-003`, in progress)
 
-Documented here so it's a known next step, not a silent gap. Needs, in order:
+Documented here so it's a known next step, not a silent gap.
 
-1. Android SDK + an AVD on the dev machine (or a CI-hosted emulator action).
-2. [Maestro](https://maestro.mobile.dev) installed — its declarative YAML flows are a good fit
-   for agent-authored specs (screenshot assertions, no native build step beyond a debug APK).
-3. A `reviewer` test-matrix step added on both harnesses once (1) and (2) exist, covering the
-   camera/barcode-scan paths Playwright/web structurally can't reach.
+- **Done:** the reviewer's test-matrix step (`.claude/agents/dev-reviewer.md`,
+  `agent-team/src/agents/reviewer-agent.ts`, `agent-team/src/prompts/guardrails.md`) already
+  runs `npm --prefix bread-sheet-app run test:maestro` conditionally for camera/scan tickets —
+  applied directly rather than through an agent run, since it edits files outside every
+  pillar's write scope (exactly what "OS-level shell sandboxing" and "Coordinator-owned git"
+  above exist to prevent). It's a no-op until the script below exists.
+- **Not done:** an Android SDK + AVD provisioning script, [Maestro](https://maestro.mobile.dev)
+  install, and the actual declarative YAML flows — a self-contained, `bread-sheet-app/`-pillar
+  ticket an implementer can complete without touching harness code. A first attempt at this
+  (self-provisioning runner, Metro-lifecycle fix, a working barcode-scan flow) was built and
+  reached a real reviewer `PASS` during harness development, but was discarded rather than
+  merged — it predated the sandboxing/coordinator-git hardening and touched the
+  now-off-limits reviewer files above as part of its own diff.
