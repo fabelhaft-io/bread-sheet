@@ -112,6 +112,12 @@ export default function ScanScreen() {
     setTimeout(() => { scanLock.current = false; }, 2000);
   }
 
+  // A debug-only hook makes the native Maestro flow reproducible on headless
+  // emulators, whose camera cannot be fed a frame by Maestro. It still drives
+  // the exact barcode callback used by expo-camera and is never rendered in a
+  // production build.
+  const maestroBarcode = __DEV__ ? process.env.EXPO_PUBLIC_MAESTRO_BARCODE : undefined;
+
   return (
     <View style={styles.container}>
       <CameraView
@@ -139,6 +145,16 @@ export default function ScanScreen() {
       </View>
 
       <Text style={styles.hint}>Align barcode within the frame</Text>
+
+      {maestroBarcode ? (
+        <TouchableOpacity
+          testID="maestro-barcode-fixture"
+          style={styles.maestroButton}
+          onPress={() => handleBarcodeScanned({ data: maestroBarcode })}
+        >
+          <Text style={styles.buttonText}>Use test barcode</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <TouchableOpacity
         style={styles.torchButton}
@@ -250,6 +266,13 @@ const styles = StyleSheet.create({
     bottom: '30%',
     color: 'rgba(255,255,255,0.7)',
     fontSize: 13,
+  },
+  maestroButton: {
+    backgroundColor: '#0a7ea4',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 16,
   },
   torchButton: {
     position: 'absolute',

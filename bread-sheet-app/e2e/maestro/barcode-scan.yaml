@@ -13,12 +13,19 @@ appId: com.breadsheetexpo.breadsheet
     timeout: 15000
 - tapOn: "Scan"
 - tapOn: "Allow Camera"
+# Android's runtime permission dialog is separate from the app's permission
+# button. `optional` keeps this compatible with an AVD that retained a grant.
+- tapOn:
+    text: "While using the app"
+    optional: true
 - extendedWaitUntil:
     visible: "Align barcode within the frame"
     timeout: 10000
-# Keep this assertion after the real camera callback. It proves that a valid
-# barcode was decoded and that the scan handler navigated to the product route.
-# The product screen is rendered for the scanned EAN-13 by the debug server.
+# Headless AVDs cannot receive camera frames from Maestro. The debug build's
+# fixture button invokes the same expo-camera callback deterministically.
+- tapOn: "Use test barcode"
+# Keep this assertion after the barcode callback. It proves that a valid code
+# was accepted and that the scan handler navigated to the product route.
 - extendedWaitUntil:
     visible: "Product"
     timeout: 30000
