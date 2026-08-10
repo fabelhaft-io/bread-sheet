@@ -49,7 +49,15 @@ function beforeToolCall(
   }
 }
 
-export function createReviewerAgent({ model, worktreePath }: { model: string; worktreePath: string }) {
+export function createReviewerAgent({
+  model,
+  worktreePath,
+  baseBranch,
+}: {
+  model: string;
+  worktreePath: string;
+  baseBranch: string;
+}) {
   const workspace = new Workspace({
     filesystem: new LocalFilesystem({ basePath: worktreePath }),
     sandbox: new LocalSandbox({ workingDirectory: worktreePath }),
@@ -73,9 +81,18 @@ write/edit/mkdir/delete call whose path isn't under \`docs/\` or exactly \`FEATU
 find a bug in the implementation, write it into the findings doc — you cannot fix it yourself,
 by design.
 
+This run's base branch is \`${baseBranch}\` — use it wherever these instructions say "main"
+below (diffing, and the PR base).
+
+Your task prompt may include a "COORDINATOR SCOPE CHECK" line — that's an objective,
+coordinator-computed list of changed files that fall outside every pillar invoked for this
+ticket (computed from \`git diff\`/\`git status\`, not from the implementer's self-report). It
+is a flag to verify, not an automatic fail: confirm whether those files are actually in scope
+before deciding \`PASS\`/\`BLOCKED\`.
+
 Working procedure:
 1. Read the ticket and its acceptance criteria in \`FEATURES.md\`, and run
-   \`git diff main...HEAD\` to see the full implementer diff.
+   \`git diff ${baseBranch}...HEAD\` to see the full implementer diff.
 2. Run the full test matrix via the shell tool:
    - \`server\`: \`npm --prefix server run typecheck\`, \`npm --prefix server test\` (if backend
      touched)
@@ -92,11 +109,16 @@ Working procedure:
    \`docs/P5-003-implementation-plan.md\`: current state, what was implemented, test results
    (key pass/fail summary, not full logs), open questions.
 6. **On pass:** check the ticket's boxes in \`FEATURES.md\`, commit, then run
-   \`gh pr create --base main --head agent/<TICKET-ID> --title "..." --body "..."\` referencing
-   the ticket and the findings doc. Never merge it.
+   \`gh pr create --base ${baseBranch} --head agent/<TICKET-ID> --title "..." --body "..."\`
+   referencing the ticket and the findings doc. Never merge it.
 7. **On fail:** do not open a PR. Mark the findings doc \`BLOCKED\` with concrete, specific open
    questions. Commit the doc.
-8. End your final message with either the PR URL, or the word \`BLOCKED\` followed by a short
-   summary — the coordinator parses this to decide whether to retry.`,
+8. Your final turn is validated against a structured schema (the coordinator reads it
+   programmatically, not by re-parsing your prose, so get \`status\` right — it's the only
+   thing that decides whether a fix cycle happens): \`status\` is \`PASS\` only when you
+   actually opened the PR, \`prUrl\` is set only then, \`findingsDocPath\` is always the doc you
+   wrote, \`testMatrix\` reflects what you actually ran (\`not_run\` for anything skipped because
+   the ticket didn't touch that pillar), and \`openQuestions\` must be concrete and non-empty
+   whenever \`status\` is \`BLOCKED\` — that's what the next fix cycle is handed.`,
   });
 }

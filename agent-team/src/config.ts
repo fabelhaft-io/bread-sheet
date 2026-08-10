@@ -4,14 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// The only providers this orchestrator has been wired against. Extending this list is
-// how a fourth provider gets added later; an unlisted prefix is a config error, not a
-// silent pass-through, per this repo's "fail fast, no inline env defaults" convention.
 const ALLOWED_PROVIDER_PREFIXES = ['anthropic/', 'openai/', 'deepseek/'] as const;
 
-// Holds env var *names* only (e.g. "ANTHROPIC_API_KEY"), never a credential value — named
-// to avoid CodeQL's clear-text-logging heuristic, which flags any identifier matching
-// /key|secret|token|credential/i as a sensitive-data source regardless of what it holds.
 const REQUIRED_ENV_VAR_BY_PROVIDER: Record<string, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
@@ -44,6 +38,7 @@ function resolveModel(roleEnvVar: string): string {
 
 export interface AgentTeamConfig {
   repoRoot: string;
+  baseBranch: string;
   frontendModel: string;
   backendModel: string;
   reviewerModel: string;
@@ -52,6 +47,9 @@ export interface AgentTeamConfig {
 export function loadConfig(): AgentTeamConfig {
   return {
     repoRoot: process.env.REPO_ROOT ?? path.resolve(__dirname, '..', '..'),
+    // Defaults to `main`, which is correct once this orchestrator has landed there.
+    // Override for a dry run against a branch that hasn't merged yet.
+    baseBranch: process.env.BASE_BRANCH ?? 'main',
     frontendModel: resolveModel('AGENT_MODEL_FRONTEND'),
     backendModel: resolveModel('AGENT_MODEL_BACKEND'),
     reviewerModel: resolveModel('AGENT_MODEL_REVIEWER'),

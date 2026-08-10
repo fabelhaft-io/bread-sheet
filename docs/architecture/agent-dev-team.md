@@ -13,7 +13,10 @@ harness (or the LLM behind it) a config change, not a rewrite:
 
 - **Input:** a ticket ID that exists as a `### [TICKET-...]` heading in `FEATURES.md`.
 - **Isolation:** a dedicated git worktree at `../bread-sheet-agent-<ticket-id>` on branch
-  `agent/<ticket-id>`, branched off `main`.
+  `agent/<ticket-id>`, branched off `main` (Harness B: override with `BASE_BRANCH` in
+  `agent-team/.env` for a dry run against a branch that hasn't merged to `main` yet — the
+  worktree needs `agent-team/` and the ticket itself to actually exist on whatever it's
+  branched from).
 - **Roles:**
   - `frontend` — implements, owns `bread-sheet-app/` only.
   - `backend` — implements, owns `server/` only.
@@ -38,6 +41,46 @@ both harnesses reference/embed it, so they can't silently drift apart on what's 
 
 Findings doc shape (mirrors `docs/P5-003-implementation-plan.md`): current state, what was
 implemented, test results (pass/fail summary, not full logs), open questions.
+
+### Typed handoff (Harness B)
+
+The findings doc above is for humans. The *coordinator*-facing handoff — what decides whether a
+run passes, retries, or gives up — is a schema-validated object, not prose the coordinator has
+to re-parse. `agent-team/src/lib/handoff.ts` defines two Zod schemas:
+
+- `implementerHandoffSchema` — `status` (`DONE`/`BLOCKED`), `filesChanged`, `testResults`
+  (`typecheck`/`lint`/`unitTests`, each `pass`/`fail`/`not_run` — `not_run` is a legitimate,
+  honest answer for a check the ticket didn't need), a one-paragraph `summary`, and
+  `openQuestions`.
+- `reviewerHandoffSchema` — `status` (`PASS`/`BLOCKED`), `findingsDocPath`, `prUrl` (only when
+  `PASS`), a six-field `testMatrix`, and `openQuestions` (required, concrete, non-empty when
+  `BLOCKED` — that's exactly what gets handed to the next fix cycle).
+
+Each implementer/reviewer call is `agent.stream(prompt, { structuredOutput: { schema } })`, not
+`.generate()` — the coordinator drains `output.fullStream` (via `src/lib/progress.ts`'s
+`logAgentProgress`, printing one terse `[frontend]`/`[backend]`/`[reviewer]`-prefixed line per
+tool call/result as it happens, nothing for text deltas) and only then awaits `output.object`,
+which resolves to the schema-validated structured handoff once the stream finishes. The
+coordinator reads that `.object`, not `.text`. This replaced an earlier version that used
+`.generate()` (silent until the entire multi-minute tool-calling turn finished — genuinely
+useless for watching a live run) and regex-matched the reviewer's prose for the word
+`"BLOCKED"` — fragile by construction (it also had to avoid false-triggering on the word
+appearing near a PR URL mention).
+
+**`findOutOfPillarFiles`** (same file) is a second, independent check the coordinator runs
+itself after the implementer(s) finish, *before* even asking the reviewer to look: it diffs the
+worktree (`git diff`/`git status`, not the model's self-reported `filesChanged`) against the
+pillar(s) actually invoked for the ticket, and flags anything outside all of them. Physical
+filesystem containment (`LocalFilesystem`'s `basePath`, see Harness B below) already stops a
+file *tool* call from writing outside a pillar; this catches the one thing containment can't — a
+shell command reaching outside it (`echo x > ../server/foo.ts`) — and surfaces it to the
+reviewer as a `COORDINATOR SCOPE CHECK` line in its prompt, to confirm rather than auto-reject
+(a legitimate ticket occasionally does need both pillars).
+
+Harness A (Claude Code) has no equivalent schema enforcement — a subagent's report back to the
+coordinator skill is still prose, checked by instruction only. That asymmetry is intentional for
+now (Claude Code's Agent tool doesn't expose a structured-output contract the same way), not
+something both harnesses need to match line-for-line.
 
 ## Harness A — Claude Code
 

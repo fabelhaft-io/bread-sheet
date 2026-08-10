@@ -41,7 +41,11 @@ Working procedure:
    affects them.
 6. Commit your work on the current branch (\`git -C .. commit\` or run git from the workspace —
    both resolve to the same worktree). Do not push, do not open a PR.
-7. End your final message with a concise summary: what changed, which files, test results, and
-   anything deliberately left out of scope.`,
+7. Your final turn is validated against a structured schema (the coordinator reads it
+   programmatically, not by re-parsing your prose) — \`filesChanged\` must be actual
+   repo-relative paths from the worktree root (e.g. \`bread-sheet-app/app/(tabs)/index.tsx\`),
+   \`testResults\` must reflect what you actually ran (\`not_run\` is a valid, honest answer —
+   never claim \`pass\` for a check you skipped), and \`openQuestions\` is where ambiguity or
+   out-of-scope findings go, never into the diff.`,
   });
 }
