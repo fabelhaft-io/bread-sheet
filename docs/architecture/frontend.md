@@ -430,3 +430,46 @@ What was broken was durability (fixed by P8-001) and visibility. The gates that 
 Upgrading to an email that already has an account fails at `updateUser` and leaves the ratings on the anonymous id; the upgrade screen surfaces `EMAIL_ALREADY_REGISTERED_MESSAGE` inline rather than Supabase's raw copy. Merging two existing accounts is explicitly out of scope.
 
 > Testing note: `lib/__mocks__/api.ts` is the manual mock behind a bare `jest.mock('@/lib/api')`. It keeps `ApiError` and `NetworkError` as real classes, because screens and `formatApiError` branch on `instanceof`. Tests that exercise the caches mock `expo-file-system/legacy` with an in-memory `Map` and call `setActiveCacheUser` / `__resetOfflineStoreForTests` in `beforeEach`.
+
+---
+
+## Native E2E: Android Emulator + Maestro (TICKET-P9-003)
+
+Playwright (`npm run test:e2e`) drives the app through Expo web, which structurally
+cannot reach the native-only flows: the camera permission gate, the native `CameraView`
+and the `onBarcodeScanned` callback. **Maestro** covers those on a real Android emulator
+against the debug build.
+
+### Invocation
+
+```sh
+npm run test:maestro          # from bread-sheet-app/
+```
+
+`scripts/run-maestro-android.sh` is intentionally idempotent and self-provisioning — a
+fresh machine needs only bash, curl, unzip and network. It installs the Android
+command-line tools, the API 35 `google_apis;x86_64` system image and the
+`bread-sheet-api-35` AVD under `$ANDROID_HOME` (default `~/Android/Sdk`), a cached
+Temurin JDK 17 when the host lacks one, and Maestro; then boots the emulator headlessly,
+builds/installs the debug client with `expo run:android --variant debug`, and runs
+`e2e/maestro/barcode-scan.yaml`. It fails fast (before any download or emulator boot)
+when Supabase credentials are missing or the API is unreachable, and it translates a
+host-local `EXPO_PUBLIC_API_URL` (`localhost`/`127.0.0.1`) to the emulator's `10.0.2.2`
+host alias — so the API must be running (`cd server && npm run dev`) or `EXPO_PUBLIC_API_URL`
+must point at a reachable staging URL.
+
+### The debug barcode fixture
+
+Headless emulators cannot receive camera frames from Maestro, so the debug build exposes a
+"Use test barcode" button on the Scan tab **only** when `EXPO_PUBLIC_MAESTRO_BARCODE` is
+set (never rendered in a production build). The button invokes the exact
+`handleBarcodeScanned` callback that `expo-camera` drives, so the flow proves the camera
+permission grant, native `CameraView` mounting, the barcode callback, API lookup and
+navigation to the product route — but **not** optical decoding. That is a deliberate,
+documented product decision (see `e2e/maestro/README.md`): a strict "real camera frame
+decoded" interpretation would require a virtual-camera or physical-device strategy.
+
+The fixture contract is unit-tested in `app/(tabs)/scan-screen.test.tsx`: hidden when the
+env var is unset; a valid configured code routes to `/(app)/product/<code>` and an invalid
+one opens the pre-filled manual sheet — the same branches a camera read takes.
+

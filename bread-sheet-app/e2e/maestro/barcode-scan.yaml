@@ -1,8 +1,8 @@
 # Native Android smoke flow for the camera/barcode path.
 # Run with: npm run test:maestro
-# The emulator camera must be pointed at a screen or card showing an EAN-13
-# barcode. Maestro cannot synthesize a camera frame; the runner script starts
-# the configured emulator and leaves the camera available for this flow.
+# Headless emulators cannot receive camera frames from Maestro, so the debug
+# build exposes a "Use test barcode" fixture (EXPO_PUBLIC_MAESTRO_BARCODE) that
+# drives the exact same expo-camera barcode callback deterministically.
 appId: com.breadsheetexpo.breadsheet
 ---
 - launchApp:

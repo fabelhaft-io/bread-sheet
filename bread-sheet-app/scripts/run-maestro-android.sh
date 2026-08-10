@@ -17,6 +17,40 @@ AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
 EMULATOR="$ANDROID_HOME/emulator/emulator"
 ADB="$ANDROID_HOME/platform-tools/adb"
 
+# Android's `localhost` is the emulator itself. Keep the API prerequisite
+# reproducible by translating a host-local URL to the emulator's documented
+# host alias. EXPO_PUBLIC_API_URL is captured by the native debug bundle at
+# build time, so this must happen before `expo run:android`.
+if [[ -n "${EXPO_PUBLIC_API_URL:-}" ]]; then
+  if [[ "$EXPO_PUBLIC_API_URL" =~ ^(https?://)(localhost|127\.0\.0\.1)(:.*|/.*|$) ]]; then
+    EXPO_PUBLIC_API_URL="${BASH_REMATCH[1]}10.0.2.2${BASH_REMATCH[3]}"
+  fi
+else
+  EXPO_PUBLIC_API_URL="http://10.0.2.2:3000"
+fi
+export EXPO_PUBLIC_API_URL
+
+# Fail fast on prerequisites that would otherwise surface only as a crash or a
+# mid-flow assertion after minutes of downloads/emulator boot — repo convention
+# is "fail fast, no inline env defaults" (see CLAUDE.md / test.yml).
+if [[ -z "${EXPO_PUBLIC_SUPABASE_URL:-}" || -z "${EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY:-}" ]]; then
+  echo 'EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY must be set (see bread-sheet-app/.env.example): lib/supabase.ts throws at import time without them, so guest sign-in cannot start.' >&2
+  exit 1
+fi
+
+# The flow's final assertion needs the API reachable from the emulator
+# (10.0.2.2 is the emulator's alias for the host loopback). Any HTTP response —
+# even a 404 from a server with no root route — proves the server is up; curl
+# exits non-zero on connection refusal, which is what this check catches.
+api_host_url="$EXPO_PUBLIC_API_URL"
+if [[ "$api_host_url" =~ ^(https?://)10\.0\.2\.2(:.*|/.*|$) ]]; then
+  api_host_url="${BASH_REMATCH[1]}localhost${BASH_REMATCH[2]}"
+fi
+if ! curl -sS --max-time 5 -o /dev/null "$api_host_url"; then
+  echo "API not reachable at $api_host_url — start the local API (cd server && npm run dev) or set EXPO_PUBLIC_API_URL to a reachable URL." >&2
+  exit 1
+fi
+
 java_major_version() {
   # Java 8 reports `1.8.x`, while modern Java reports `17.0.x`. Match only the
   # version token so vendor launcher output cannot be mistaken for Java's
@@ -89,19 +123,6 @@ provision_android_sdk() {
 ensure_java
 provision_android_sdk
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
-
-# Android's `localhost` is the emulator itself. Keep the API prerequisite
-# reproducible by translating a host-local URL to the emulator's documented
-# host alias. EXPO_PUBLIC_API_URL is captured by the native debug bundle at
-# build time, so this must happen before `expo run:android`.
-if [[ -n "${EXPO_PUBLIC_API_URL:-}" ]]; then
-  if [[ "$EXPO_PUBLIC_API_URL" =~ ^(https?://)(localhost|127\.0\.0\.1)(:.*|/.*|$) ]]; then
-    EXPO_PUBLIC_API_URL="${BASH_REMATCH[1]}10.0.2.2${BASH_REMATCH[3]}"
-  fi
-else
-  EXPO_PUBLIC_API_URL="http://10.0.2.2:3000"
-fi
-export EXPO_PUBLIC_API_URL
 
 if ! command -v maestro >/dev/null; then
   command -v curl >/dev/null || { echo 'curl is required to provision Maestro' >&2; exit 1; }

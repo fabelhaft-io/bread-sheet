@@ -22,6 +22,18 @@ installs the debug client, and runs the flow. Set `ANDROID_HOME` (or `ANDROID_SD
 and `ANDROID_AVD_NAME` to override the defaults. `curl`, `unzip`, and `tar` are the only
 host prerequisites (the first run requires network access).
 
+The runner fails fast (before any download or emulator boot) when a prerequisite would
+otherwise only surface as a crash or a mid-flow assertion:
+
+- `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` must be
+  set (see `bread-sheet-app/.env.example`) — `lib/supabase.ts` throws at import time
+  without them, so the guest sign-in step could not start.
+- The API must be reachable — the flow's final product-screen assertion needs it. A
+  host-local `EXPO_PUBLIC_API_URL` (`localhost`/`127.0.0.1`) is translated to the
+  emulator alias automatically, and the runner checks the host-side URL before
+  provisioning. Start the local API (`cd server && npm run dev`, listening on `:3000`)
+  or point `EXPO_PUBLIC_API_URL` at a reachable staging URL.
+
 Headless emulators cannot receive camera frames from Maestro. The debug build therefore
 exposes a fixture button only when `EXPO_PUBLIC_MAESTRO_BARCODE` is set; the runner supplies
 an EAN-13 default and the button invokes the same barcode callback used by `expo-camera`.

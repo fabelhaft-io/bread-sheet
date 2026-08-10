@@ -47,6 +47,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   cameraProps = {};
   mockPermission.mockReturnValue([{ granted: true }, requestPermission]);
+  // TICKET-P9-003: the debug-only Maestro fixture button renders only when
+  // EXPO_PUBLIC_MAESTRO_BARCODE is set; default to unset so the fixture never
+  // leaks into unrelated tests.
+  delete process.env.EXPO_PUBLIC_MAESTRO_BARCODE;
 });
 
 afterEach(() => {
@@ -113,5 +117,39 @@ describe('ScanScreen', () => {
     fireEvent.press(screen.getByTestId('scan-manual-entry'));
 
     expect(cameraProps.onBarcodeScanned).toBeUndefined();
+  });
+});
+
+// TICKET-P9-003: headless Android emulators cannot receive a camera frame from
+// Maestro, so the debug build exposes a "Use test barcode" button (rendered
+// only when EXPO_PUBLIC_MAESTRO_BARCODE is set) that drives the *same*
+// handleBarcodeScanned callback as expo-camera. These tests pin that contract:
+// the fixture is invisible by default and, when enabled, routes exactly like a
+// real scan instead of taking a separate code path.
+describe('ScanScreen Maestro debug fixture (TICKET-P9-003)', () => {
+  it('does not render the fixture button when EXPO_PUBLIC_MAESTRO_BARCODE is unset', () => {
+    render(<ScanScreen />);
+
+    expect(screen.queryByTestId('maestro-barcode-fixture')).toBeNull();
+  });
+
+  it('routes the configured code through the same callback as a camera scan when set', () => {
+    process.env.EXPO_PUBLIC_MAESTRO_BARCODE = '4006381333931';
+    render(<ScanScreen />);
+
+    fireEvent.press(screen.getByTestId('maestro-barcode-fixture'));
+
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(screen.queryByTestId('manual-barcode-input')).toBeNull();
+  });
+
+  it('still routes an invalid configured code into the manual sheet (same as a camera read)', () => {
+    process.env.EXPO_PUBLIC_MAESTRO_BARCODE = '14006381333931';
+    render(<ScanScreen />);
+
+    fireEvent.press(screen.getByTestId('maestro-barcode-fixture'));
+
+    expect(mockRouter.push).not.toHaveBeenCalled();
+    expect(screen.getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
   });
 });

@@ -148,6 +148,14 @@ cd bread-sheet-app && npx playwright install chromium   # one-time
 npm run test:e2e
 ```
 
+Native Android E2E (Maestro) covers the camera/scan paths Expo web cannot reach:
+
+```sh
+cd bread-sheet-app && npm run test:maestro
+```
+
+`run-maestro-android.sh` self-provisions the Android SDK (API 35), an AVD, a JDK 17 and Maestro on first run, then boots a headless emulator, installs the debug build and runs `e2e/maestro/barcode-scan.yaml`. Requires Supabase credentials and a reachable API (a `localhost`/`127.0.0.1` `EXPO_PUBLIC_API_URL` is translated to the emulator alias automatically); the script fails fast otherwise. See `docs/architecture/frontend.md` § Native E2E for details and the headless-camera limitation.
+
 ## Configuration Reference
 
 ### `server/.env` — backend API
