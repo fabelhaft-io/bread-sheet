@@ -1390,9 +1390,9 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - Install [Maestro](https://maestro.mobile.dev) and author its declarative YAML flows for the camera/scan paths.
 - Add a reviewer test-matrix step (both harnesses — Claude Code and `agent-team/`) that runs the Maestro flows once the above exist, per the shared contract in `agent-team/src/prompts/guardrails.md`.
 **Acceptance Criteria:**
-- [ ] Android emulator runs locally (or in CI) without manual per-run setup.
-- [ ] At least one Maestro flow exercises barcode scanning end-to-end against a debug build.
-- [ ] The reviewer role's test matrix (in both `.claude/agents/dev-reviewer.md` and `agent-team/src/agents/reviewer-agent.ts`) runs it for tickets that touch camera/scan code.
+- [x] Android emulator runs locally (or in CI) without manual per-run setup.
+- [x] At least one Maestro flow exercises barcode scanning end-to-end against a debug build.
+- [x] The reviewer role's test matrix (in both `.claude/agents/dev-reviewer.md` and `agent-team/src/agents/reviewer-agent.ts`) runs it for tickets that touch camera/scan code.
 
 ### [TICKET-P9-004] Live Dry-Run of the Agentic Dev Team
 **Goal:** Verify the `/dev-team` (Claude Code) and `agent-team` (Mastra) harnesses end-to-end against a real ticket and a real model, not just the config/ticket-parsing checks done while building them.
