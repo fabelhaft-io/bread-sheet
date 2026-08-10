@@ -277,6 +277,10 @@ Architecture and data documentation lives in `docs/architecture/`:
 | `data.md` | Data inventory, third-party flows, user content rights, GDPR obligations |
 | `agent-dev-team.md` | The agentic dev team that works `FEATURES.md` tickets: shared contract, the Claude Code (`/dev-team`) and standalone Mastra (`agent-team/`) harnesses, E2E testing setup |
 
+`agent-team/README.md` is the standalone Mastra harness's own setup/run instructions (`.env`
+setup, `npm run dev-team -- <TICKET-ID>`, running in the background + tailing the log,
+model/provider swapping) — `agent-dev-team.md` above covers its architecture, not how to run it.
+
 Ad-hoc API testing: open `docs/bruno/` as a collection in [Bruno](https://www.usebruno.com/). Copy `docs/bruno/environments/.env.example` to `docs/bruno/environments/.env` and fill in your Supabase credentials. Run **Auth › Sign in with password** (or **Sign in anonymously**) once — the post-response script stores the JWT in `accessToken` automatically. All other requests use it via their bearer auth.
 
 ## ADRs
@@ -295,7 +299,8 @@ Code session, or `npm run dev-team -- <TICKET-ID>` from `agent-team/` for the st
 Mastra-based harness — both implement the same contract (git-worktree isolation, a
 `docs/<TICKET-ID>-findings.md` doc, a PR against `main`) and the same guardrails. Model/provider
 choice (Claude, and structurally GPT/DeepSeek) is a single env-var switch on the Mastra harness.
-See `docs/architecture/agent-dev-team.md`.
+See `agent-team/README.md` for the Mastra harness's setup/running instructions and
+`docs/architecture/agent-dev-team.md` for the full contract and architecture.
 
 ## Mandatory Post-Implementation Steps
 
