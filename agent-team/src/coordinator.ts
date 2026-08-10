@@ -74,6 +74,56 @@ function commitMessageFromHandoffs(ticketId: string, handoffs: ImplementerHandof
 }
 
 /**
+ * Mastra's default `errorStrategy` for `structuredOutput` is `'strict'`: if the model's final
+ * turn fails schema validation (seen live against `deepseek-v4-flash` — an empty/malformed
+ * final message, not a budget issue), it calls `abort()` and `out.object` **rejects**, which
+ * used to propagate uncaught past `runCoordinator` to the CLI's top-level `.catch` and kill the
+ * whole run — including the reviewer's already-written findings doc/PR fields, discarded with
+ * no commit. `errorStrategy: 'fallback'` + a schema-shaped `fallbackValue` makes Mastra emit
+ * this handoff instead of aborting, so `out.object` resolves like any other cycle. These are
+ * passed to every `structuredOutput` option below; see `resolveImplementerHandoff`/
+ * `resolveReviewerHandoff` for the other (non-overlapping) failure mode this doesn't cover.
+ */
+function implementerSchemaFailureFallback(role: string): ImplementerHandoff {
+  return {
+    status: 'BLOCKED',
+    filesChanged: [],
+    testResults: { typecheck: 'not_run', lint: 'not_run', unitTests: 'not_run' },
+    summary: `${role} implementer's final turn failed structured-output schema validation.`,
+    openQuestions: [
+      `The ${role} implementer's model (see AGENT_MODEL_${role.toUpperCase()}) returned a final ` +
+        'turn Mastra could not validate against the handoff schema — a model/provider quirk, not ' +
+        'a budget issue. Check the log\'s "Error in agent stream" line for the raw error. Whatever ' +
+        'the implementer wrote to disk this cycle is still there uncommitted; re-run the cycle, or ' +
+        'switch models if it recurs.',
+    ],
+  };
+}
+
+function reviewerSchemaFailureFallback(): ReviewerHandoff {
+  return {
+    status: 'BLOCKED',
+    findingsDocPath: "(none — reviewer's structured handoff failed schema validation)",
+    prTitle: '',
+    prBody: '',
+    testMatrix: {
+      serverTypecheck: 'not_run',
+      serverTests: 'not_run',
+      appTypecheck: 'not_run',
+      appLint: 'not_run',
+      appTests: 'not_run',
+      e2eTests: 'not_run',
+    },
+    openQuestions: [
+      'The reviewer\'s model (see AGENT_MODEL_REVIEWER) returned a final turn Mastra could not ' +
+        'validate against the handoff schema — a model/provider quirk, not a budget issue. Check ' +
+        'the log\'s "Error in agent stream" line for the raw error. Whatever findings doc it wrote ' +
+        'this cycle is still there uncommitted; re-run the cycle, or switch models if it recurs.',
+    ],
+  };
+}
+
+/**
  * Mastra resolves `out.object` to `undefined` — not a rejection — when the agent's turn ends
  * (e.g. `maxSteps` exhausted) without ever emitting the structured handoff. That used to reach
  * `commitMessageFromHandoffs` as a bare `undefined` array entry and crash the whole coordinator
@@ -167,7 +217,14 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
       });
       implementerRuns.push(
         frontend
-          .stream(prompt, { maxSteps: MAX_STEPS, structuredOutput: { schema: implementerHandoffSchema } })
+          .stream(prompt, {
+            maxSteps: MAX_STEPS,
+            structuredOutput: {
+              schema: implementerHandoffSchema,
+              errorStrategy: 'fallback',
+              fallbackValue: implementerSchemaFailureFallback('frontend'),
+            },
+          })
           .then(async (out) => {
             await logAgentProgress('frontend', out);
             implementerHandoffs.push(await resolveImplementerHandoff('frontend', out));
@@ -183,7 +240,14 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
       });
       implementerRuns.push(
         backend
-          .stream(prompt, { maxSteps: MAX_STEPS, structuredOutput: { schema: implementerHandoffSchema } })
+          .stream(prompt, {
+            maxSteps: MAX_STEPS,
+            structuredOutput: {
+              schema: implementerHandoffSchema,
+              errorStrategy: 'fallback',
+              fallbackValue: implementerSchemaFailureFallback('backend'),
+            },
+          })
           .then(async (out) => {
             await logAgentProgress('backend', out);
             implementerHandoffs.push(await resolveImplementerHandoff('backend', out));
@@ -221,7 +285,14 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
     const reviewOutput = await reviewer.stream(
       `Review ticket ${ticket.id} in worktree ${worktree.path} on branch ${worktree.branch} ` +
         `(base branch: ${config.baseBranch}).\n\n${ticketPrompt}${scopeWarning}`,
-      { maxSteps: MAX_STEPS, structuredOutput: { schema: reviewerHandoffSchema } },
+      {
+        maxSteps: MAX_STEPS,
+        structuredOutput: {
+          schema: reviewerHandoffSchema,
+          errorStrategy: 'fallback',
+          fallbackValue: reviewerSchemaFailureFallback(),
+        },
+      },
     );
     await logAgentProgress('reviewer', reviewOutput);
     const review: ReviewerHandoff = await resolveReviewerHandoff(reviewOutput);
