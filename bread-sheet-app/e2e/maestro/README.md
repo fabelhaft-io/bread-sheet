@@ -30,4 +30,15 @@ camera permission and native `CameraView` are still exercised. Production builds
 the fixture control.
 
 The app's API must be reachable from the emulator for the final product-screen assertion.
-For a local API, use an emulator-reachable host address rather than `localhost`.
+The runner provides a reproducible default of `http://10.0.2.2:3000` (the Android emulator's
+host-machine alias), and translates `localhost`/`127.0.0.1` in `EXPO_PUBLIC_API_URL` to that
+alias before building. Start the local API using the repository's documented development
+command, or set `EXPO_PUBLIC_API_URL` to a reachable staging URL; no per-run URL rewrite is
+needed. Cloud Supabase credentials still need to be present in the app environment for guest
+authentication.
+
+The fixture is not optical barcode decoding. It is a deliberate limitation of headless Android
+emulators: Maestro cannot inject a camera frame. Therefore this flow proves permission, native
+`CameraView`, the barcode callback, API lookup, and navigation, but does not by itself satisfy a
+strict “real camera frame decoded” interpretation of the acceptance criterion. A physical-device
+or emulator virtual-camera flow remains required if that interpretation is mandatory.

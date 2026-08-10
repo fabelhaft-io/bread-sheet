@@ -17,13 +17,28 @@ AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
 EMULATOR="$ANDROID_HOME/emulator/emulator"
 ADB="$ANDROID_HOME/platform-tools/adb"
 
+java_major_version() {
+  # Java 8 reports `1.8.x`, while modern Java reports `17.0.x`. Match only the
+  # version token so vendor launcher output cannot be mistaken for Java's
+  # version, then normalize the legacy 1.x form.
+  local version
+  version="$(java -version 2>&1 | sed -nE 's/^[[:space:]]*.*version "([^"]+)".*/\1/p' | head -n1)"
+  if [[ "$version" =~ ^1\.([0-9]+)([.-]|$) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  elif [[ "$version" =~ ^([0-9]+)([.-]|$) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '0\n'
+  fi
+}
+
 ensure_java() {
   local java_major=0
   if command -v java >/dev/null 2>&1; then
     # `java -version` writes to stderr. This also handles vendors that report
     # versions as `17.0.x` and the old `1.8.x` format without relying on a JDK
     # manager being installed on the host.
-    java_major="$(java -version 2>&1 | sed -nE 's/.*version "([0-9]+).*/\\1/p' | head -n1)"
+    java_major="$(java_major_version)"
     [[ "$java_major" =~ ^[0-9]+$ ]] || java_major=0
   fi
   if (( java_major < 17 )); then
@@ -46,7 +61,7 @@ ensure_java() {
     fi
     export JAVA_HOME="$java_root"
     export PATH="$JAVA_HOME/bin:$PATH"
-    java_major="$(java -version 2>&1 | sed -nE 's/.*version "([0-9]+).*/\\1/p' | head -n1)"
+    java_major="$(java_major_version)"
   fi
   (( java_major >= 17 )) || { echo 'Java 17+ is required by Android SDK tools' >&2; exit 1; }
 }
@@ -74,6 +89,19 @@ provision_android_sdk() {
 ensure_java
 provision_android_sdk
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+
+# Android's `localhost` is the emulator itself. Keep the API prerequisite
+# reproducible by translating a host-local URL to the emulator's documented
+# host alias. EXPO_PUBLIC_API_URL is captured by the native debug bundle at
+# build time, so this must happen before `expo run:android`.
+if [[ -n "${EXPO_PUBLIC_API_URL:-}" ]]; then
+  if [[ "$EXPO_PUBLIC_API_URL" =~ ^(https?://)(localhost|127\.0\.0\.1)(:.*|/.*|$) ]]; then
+    EXPO_PUBLIC_API_URL="${BASH_REMATCH[1]}10.0.2.2${BASH_REMATCH[3]}"
+  fi
+else
+  EXPO_PUBLIC_API_URL="http://10.0.2.2:3000"
+fi
+export EXPO_PUBLIC_API_URL
 
 if ! command -v maestro >/dev/null; then
   command -v curl >/dev/null || { echo 'curl is required to provision Maestro' >&2; exit 1; }
