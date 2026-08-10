@@ -1385,14 +1385,14 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 
 ### [TICKET-P9-003] Android Emulator + Maestro E2E Coverage
 **Goal:** Cover the native-only flows (camera, barcode scan, on-device OCR) that Playwright/Expo-web structurally can't reach, per the "Follow-up: Android emulator + Maestro (not built)" section of `docs/architecture/agent-dev-team.md`.
+**Context:** the reviewer test-matrix wiring (both harnesses — `.claude/agents/dev-reviewer.md` and `agent-team/src/agents/reviewer-agent.ts`, plus the shared contract in `agent-team/src/prompts/guardrails.md`) is already done, applied directly rather than through an agent run — it edits harness files outside every pillar's write scope, which is exactly what the OS-level sandboxing + coordinator-owned git (see `docs/architecture/agent-dev-team.md`) now exists to prevent any agent role from doing. It's a no-op today (conditional on a `test:maestro` script that doesn't exist yet) and will start running the moment this ticket adds one. This ticket is entirely `bread-sheet-app/`-pillar work now — a single implementer run should be able to complete it.
 **Implementation:**
-- Install Android SDK + create an AVD (locally and/or as a CI-hosted emulator action).
+- Install Android SDK + create an AVD (locally and/or as a CI-hosted emulator action) and add the `test:maestro` script to `bread-sheet-app/package.json`.
 - Install [Maestro](https://maestro.mobile.dev) and author its declarative YAML flows for the camera/scan paths.
-- Add a reviewer test-matrix step (both harnesses — Claude Code and `agent-team/`) that runs the Maestro flows once the above exist, per the shared contract in `agent-team/src/prompts/guardrails.md`.
 **Acceptance Criteria:**
 - [ ] Android emulator runs locally (or in CI) without manual per-run setup.
 - [ ] At least one Maestro flow exercises barcode scanning end-to-end against a debug build.
-- [ ] The reviewer role's test matrix (in both `.claude/agents/dev-reviewer.md` and `agent-team/src/agents/reviewer-agent.ts`) runs it for tickets that touch camera/scan code.
+- [ ] The reviewer's already-wired conditional step actually runs (confirms `test:maestro` exists and the reviewer's test matrix picks it up — no reviewer-side code change needed).
 
 ### [TICKET-P9-004] Live Dry-Run of the Agentic Dev Team
 **Goal:** Verify the `/dev-team` (Claude Code) and `agent-team` (Mastra) harnesses end-to-end against a real ticket and a real model, not just the config/ticket-parsing checks done while building them.

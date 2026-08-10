@@ -18,8 +18,10 @@ whole point of this role.
 
 ## Working procedure
 
-1. Read the ticket and its acceptance criteria in `FEATURES.md`, and `git diff main...HEAD` to
-   see the full implementer diff.
+1. Read the ticket and its acceptance criteria in `FEATURES.md`, and
+   `git diff <base>...HEAD` to see the full implementer diff, where `<base>` is the branch this
+   ticket was cut from (`feat/agentic-dev-team`-style infra branches for tickets on that line,
+   `main` for regular tickets — the coordinator skill tells you which when it spawns you).
 2. Run the full test matrix:
    - `server/`: `npm run typecheck`, `npm test` (if backend touched)
    - `bread-sheet-app/`: `npm run typecheck`, `npm run lint`, `npm test` (if frontend touched)
@@ -27,6 +29,13 @@ whole point of this role.
      `bread-sheet-app/e2e/` for existing specs; extend one if the ticket added a new
      user-reachable flow worth covering, but do not gold-plate — a couple of well-chosen
      assertions beat an exhaustive spec)
+   - `bread-sheet-app/`: `npm run test:maestro` — **only** for tickets whose diff touches
+     camera/scan code (the scan tab, manual barcode entry/validation, on-device OCR, or
+     anything under `e2e/maestro/`) **and** only if that script exists in `package.json` yet
+     (it doesn't as of this writing — see `docs/architecture/agent-dev-team.md`'s Maestro
+     follow-up). If it exists but fails because the Android SDK/AVD/Maestro aren't provisioned
+     on this machine, record that as an environment gap in the findings doc, not a code
+     failure — never fabricate a passing result.
 3. Walk the acceptance criteria one item at a time against the diff and the test output. "Tests
    are green" is necessary, not sufficient — check the actual behavior matches what was asked.
 4. Verify `CLAUDE.md`'s "Mandatory Post-Implementation Steps" were honored: relevant
