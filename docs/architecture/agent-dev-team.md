@@ -147,9 +147,21 @@ toolbelt out of the box:
 - `src/agents/frontend-agent.ts` / `backend-agent.ts` use `createCodingAgent()` with `basePath`
   rooted at the pillar's subdirectory in the worktree (`bread-sheet-app/` / `server/`) — a
   `LocalFilesystem` physically contained to that subtree, plus a few least-privilege exceptions
-  (`CLAUDE.md` read-only, each pillar's own architecture doc + relevant extras read-write,
-  driven from `handoff.ts`'s shared path constants). Sandboxed shell, no git write access (see
-  the two sections above).
+  (`CLAUDE.md` and all of `docs/` read-only, each pillar's own architecture doc + relevant
+  extras read-write, driven from `handoff.ts`'s shared path constants —
+  `SHARED_READONLY_PATH`/`SHARED_READONLY_PREFIXES`/`FRONTEND_EXTRA_PATHS`/
+  `BACKEND_EXTRA_PATHS`/`BACKEND_EXTRA_PREFIXES`). `allowedPaths` only grants *reachability*,
+  not read-vs-write — each agent registers its own `beforeToolCall` hook (mirroring the
+  reviewer's, below) that rejects any write/edit/mkdir/delete/ast-edit call whose target isn't
+  inside `basePath` or one of that pillar's writable extras, so `CLAUDE.md`/`docs/` are
+  genuinely read-only rather than just read-only by convention. The OS-level sandbox
+  (`hardenedSandbox`'s `readOnlyPaths`) binds the worktree's own `docs/` too (not `repoRoot`'s —
+  that could leak another concurrent session's uncommitted edits to the main checkout into a
+  sandboxed run), so plain shell commands reach it directly instead of needing a
+  `git show HEAD:docs/...` workaround — a real gap until a live P9-003 run hit it: blocked from
+  reading `docs/architecture/agent-dev-team.md` directly, the frontend implementer worked around
+  it via `git show`, burning tool-call budget on an indirect read for something that should have
+  been a plain one. Sandboxed shell, no git write access (see the two sections above).
 - `src/agents/reviewer-agent.ts` builds its own `Workspace` rooted at the worktree root (needs
   to run tests across both pillars) and registers a `beforeToolCall` hook rejecting any
   write/edit/mkdir/delete outside `docs/`/`FEATURES.md` (`isAllowedReviewerWritePath`). Same
@@ -163,6 +175,21 @@ toolbelt out of the box:
   the reviewer, commits its docs/FEATURES.md changes, pushes + opens the PR on `PASS`, retries
   up to twice on `BLOCKED`. Every coordinator-side action logs with a `[coordinator]` prefix,
   distinct from the agents' own `[frontend]`/`[backend]`/`[reviewer]` lines.
+
+**Step budget (`MAX_STEPS`, currently 100):** each agent turn (`.stream(..., { maxSteps,
+structuredOutput })`) gets a bounded number of tool calls before Mastra ends the turn. If the
+turn ends without ever emitting the structured object, `out.object` resolves to `undefined` —
+not a rejection — which used to crash the whole coordinator process with a bare
+`Cannot read properties of undefined (reading 'summary')` the first time a P9-003 run's frontend
+implementer needed 77 calls against the old cap of 60 (heavy environment probing + Maestro asset
+generation + verification, much of it redundant re-derivation of facts already handed to it).
+`resolveImplementerHandoff`/`resolveReviewerHandoff` in `coordinator.ts` now catch this and
+synthesize a `BLOCKED` handoff with an open question naming the exhausted role instead — whatever
+the agent wrote to disk that cycle is left in place either way, so this only changes whether the
+run degrades gracefully into the normal fix-cycle path or crashes uninformatively. Each agent's
+own instructions also now name the budget explicitly and tell it to trust `environmentFacts`
+(see `src/lib/environment.ts`) rather than re-probing it, and to stop and report honestly instead
+of running out mid-task.
 
 ## E2E testing (`bread-sheet-app/e2e/`)
 
