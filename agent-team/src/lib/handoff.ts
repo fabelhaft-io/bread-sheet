@@ -51,8 +51,15 @@ const PILLAR_PREFIX = { frontend: 'bread-sheet-app/', backend: 'server/' } as co
 export const FRONTEND_EXTRA_PATHS = ['README.md', 'docs/architecture/frontend.md'] as const;
 export const BACKEND_EXTRA_PATHS = ['docs/architecture/backend.md'] as const;
 export const BACKEND_EXTRA_PREFIXES = ['docs/bruno/'] as const;
-// CLAUDE.md is granted read-only to both pillars for reference — never committed by anyone.
+// CLAUDE.md and the rest of docs/ are granted read-only to both pillars for reference — an
+// implementer legitimately needs e.g. docs/architecture/agent-dev-team.md (the shared contract)
+// or another pillar's architecture doc, and being unable to read it directly used to mean either
+// giving up or routing around the restriction with `git show HEAD:docs/...` (which works, since
+// the file-tool sandbox and the OS shell sandbox both only ever restricted *writes* here, not
+// reads via git plumbing) — pure wasted tool-call budget for something that should be a plain
+// read. Never committed by anyone but the coordinator's own docs/-scoped reviewer commit path.
 export const SHARED_READONLY_PATH = 'CLAUDE.md';
+export const SHARED_READONLY_PREFIXES = ['docs/'] as const;
 
 export interface InvokedPillars {
   frontend: boolean;

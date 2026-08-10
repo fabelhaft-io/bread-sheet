@@ -20,7 +20,7 @@ import {
 } from './lib/handoff.js';
 
 const MAX_FIX_CYCLES = 2;
-const MAX_STEPS = 60;
+const MAX_STEPS = 100;
 const MAX_PRIOR_FINDINGS_CHARS = 6000;
 
 export interface CoordinatorResult {
@@ -73,6 +73,62 @@ function commitMessageFromHandoffs(ticketId: string, handoffs: ImplementerHandof
   return `${ticketId}: ${summaries.join(' ')}`.slice(0, 2000);
 }
 
+/**
+ * Mastra resolves `out.object` to `undefined` — not a rejection — when the agent's turn ends
+ * (e.g. `maxSteps` exhausted) without ever emitting the structured handoff. That used to reach
+ * `commitMessageFromHandoffs` as a bare `undefined` array entry and crash the whole coordinator
+ * process on `h.summary` with no indication of which role or why. Whatever the agent wrote to
+ * disk this cycle is still there uncommitted regardless — this synthesizes a BLOCKED handoff so
+ * the normal review → fix-cycle path (or a human reading the log) sees an honest, specific
+ * reason instead of a bare TypeError.
+ */
+async function resolveImplementerHandoff(
+  role: string,
+  out: { object: Promise<ImplementerHandoff | undefined> },
+): Promise<ImplementerHandoff> {
+  const handoff = await out.object;
+  if (handoff) return handoff;
+  log(`${role} implementer finished without a structured handoff — likely exhausted the ${MAX_STEPS}-step budget before its final turn`);
+  return {
+    status: 'BLOCKED',
+    filesChanged: [],
+    testResults: { typecheck: 'not_run', lint: 'not_run', unitTests: 'not_run' },
+    summary: `${role} implementer exhausted its ${MAX_STEPS}-step budget before producing a handoff.`,
+    openQuestions: [
+      `The ${role} implementer ran out of its ${MAX_STEPS}-step tool-call budget before finishing ` +
+        'and reporting a structured handoff. Check the log for redundant tool calls (e.g. ' +
+        're-probing environment facts already given in the prompt, or repeated retries of the ' +
+        'same verification) that ate the budget, then either trim those or raise MAX_STEPS.',
+    ],
+  };
+}
+
+/** Same undefined-object failure mode as resolveImplementerHandoff, for the reviewer's turn. */
+async function resolveReviewerHandoff(out: { object: Promise<ReviewerHandoff | undefined> }): Promise<ReviewerHandoff> {
+  const review = await out.object;
+  if (review) return review;
+  log(`reviewer finished without a structured handoff — likely exhausted the ${MAX_STEPS}-step budget before its final turn`);
+  return {
+    status: 'BLOCKED',
+    findingsDocPath: '(none — reviewer ran out of budget before writing one)',
+    prTitle: '',
+    prBody: '',
+    testMatrix: {
+      serverTypecheck: 'not_run',
+      serverTests: 'not_run',
+      appTypecheck: 'not_run',
+      appLint: 'not_run',
+      appTests: 'not_run',
+      e2eTests: 'not_run',
+    },
+    openQuestions: [
+      `The reviewer ran out of its ${MAX_STEPS}-step tool-call budget before finishing and ` +
+        'reporting a structured handoff. Check the log for what test matrix it had gotten ' +
+        'through, then either trim redundant steps or raise MAX_STEPS before retrying.',
+    ],
+  };
+}
+
 export async function runCoordinator(ticketId: string): Promise<CoordinatorResult> {
   const config = loadConfig();
   const ticket = findTicket(config.repoRoot, ticketId);
@@ -114,7 +170,7 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
           .stream(prompt, { maxSteps: MAX_STEPS, structuredOutput: { schema: implementerHandoffSchema } })
           .then(async (out) => {
             await logAgentProgress('frontend', out);
-            implementerHandoffs.push(await out.object);
+            implementerHandoffs.push(await resolveImplementerHandoff('frontend', out));
           }),
       );
     }
@@ -130,7 +186,7 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
           .stream(prompt, { maxSteps: MAX_STEPS, structuredOutput: { schema: implementerHandoffSchema } })
           .then(async (out) => {
             await logAgentProgress('backend', out);
-            implementerHandoffs.push(await out.object);
+            implementerHandoffs.push(await resolveImplementerHandoff('backend', out));
           }),
       );
     }
@@ -168,7 +224,7 @@ export async function runCoordinator(ticketId: string): Promise<CoordinatorResul
       { maxSteps: MAX_STEPS, structuredOutput: { schema: reviewerHandoffSchema } },
     );
     await logAgentProgress('reviewer', reviewOutput);
-    const review: ReviewerHandoff = await reviewOutput.object;
+    const review: ReviewerHandoff = await resolveReviewerHandoff(reviewOutput);
 
     // Same principle for the reviewer's own writes (findings doc, FEATURES.md checkboxes) —
     // it can produce them via its file tools (still hook-restricted to docs/+FEATURES.md), but

@@ -146,6 +146,12 @@ Working procedure:
    always the doc you wrote, \`testMatrix\` reflects what you actually ran (\`not_run\` for
    anything skipped because the ticket didn't touch that pillar), and \`openQuestions\` must be
    concrete and non-empty whenever \`status\` is \`BLOCKED\` — that's what the next fix cycle is
-   handed.`,
+   handed.
+
+Your tool-call budget for this turn is finite. Run the test matrix and write the findings doc;
+don't re-derive things a quick \`git diff\`/\`git log\` already answered. If you're genuinely
+unsure whether you have enough budget left to finish cleanly, stop and report your honest
+structured handoff now (\`BLOCKED\`, with what's left in \`openQuestions\`) rather than
+continuing until you run out mid-review with nothing to report at all.`,
   });
 }
