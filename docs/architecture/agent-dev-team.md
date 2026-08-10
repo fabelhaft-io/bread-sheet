@@ -136,14 +136,10 @@ Haiku/Fable). Cross-provider swapping (GPT, DeepSeek) is Harness B's job.
 
 ## Harness B — standalone Mastra orchestrator
 
-`agent-team/` is a separate Node/TS project, invoked outside any Claude Code session:
-
-```sh
-cd agent-team
-cp .env.example .env   # fill in AGENT_MODEL + the matching provider API key
-npm install
-npm run dev-team -- <TICKET-ID>
-```
+`agent-team/` is a separate Node/TS project, invoked outside any Claude Code session. See
+[`agent-team/README.md`](../../agent-team/README.md) for setup, running a ticket, running in
+the background + tailing the log, and switching model/provider — this section covers only the
+internal architecture.
 
 Built on [Mastra](https://mastra.ai)'s `@mastra/core`, which ships most of a coding-agent
 toolbelt out of the box:
@@ -167,15 +163,6 @@ toolbelt out of the box:
   the reviewer, commits its docs/FEATURES.md changes, pushes + opens the PR on `PASS`, retries
   up to twice on `BLOCKED`. Every coordinator-side action logs with a `[coordinator]` prefix,
   distinct from the agents' own `[frontend]`/`[backend]`/`[reviewer]` lines.
-
-**Model/provider swapping is the point of this harness** — verified for real, not just
-designed: `P9-003` has reached a genuine `PASS` on DeepSeek, and separately confirmed working
-end-to-end on Anthropic. Moving the whole team to a different provider is changing
-`AGENT_MODEL` (or the three per-role variables) and adding the matching API key, no code
-change — but mind the exact model-ID string each provider expects (e.g. DeepSeek wants
-lowercase hyphenated names like `deepseek-v4-flash`, not `DeepSeek-V4-Flash`); `config.ts`'s
-fail-fast only catches a bad provider *prefix*, a bad model name within a valid provider
-surfaces as a live API error instead.
 
 ## E2E testing (`bread-sheet-app/e2e/`)
 

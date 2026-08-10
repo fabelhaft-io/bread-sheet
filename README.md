@@ -154,8 +154,9 @@ npm run test:e2e
 `FEATURES.md` tickets are implemented by a small team of coding agents (frontend / backend /
 reviewer) rather than by hand — `/dev-team <TICKET-ID>` (Claude Code) or `npm run dev-team --
 <TICKET-ID>` (standalone Mastra harness, `agent-team/`). See
-[`docs/architecture/agent-dev-team.md`](docs/architecture/agent-dev-team.md) for setup and the full
-contract.
+[`agent-team/README.md`](agent-team/README.md) for the Mastra harness's setup and running
+instructions, and [`docs/architecture/agent-dev-team.md`](docs/architecture/agent-dev-team.md)
+for the full shared contract and architecture.
 
 ### Building an Android APK
 
