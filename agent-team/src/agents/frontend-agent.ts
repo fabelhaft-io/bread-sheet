@@ -12,7 +12,15 @@ const guardrails = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'guardr
 // instructions asks it to write. Everything else outside bread-sheet-app/ stays unreachable.
 const ALLOWED_PATHS = ['../CLAUDE.md', '../README.md', '../docs/architecture/frontend.md'];
 
-export function createFrontendAgent({ model, worktreePath }: { model: string; worktreePath: string }) {
+export function createFrontendAgent({
+  model,
+  worktreePath,
+  environmentFacts,
+}: {
+  model: string;
+  worktreePath: string;
+  environmentFacts: string;
+}) {
   const basePath = path.join(worktreePath, 'bread-sheet-app');
   const workspace = new Workspace({
     filesystem: new LocalFilesystem({ basePath, allowedPaths: ALLOWED_PATHS }),
@@ -25,6 +33,15 @@ export function createFrontendAgent({ model, worktreePath }: { model: string; wo
     model,
     workspace,
     instructions: `${guardrails}
+
+---
+
+${environmentFacts}
+
+If your task prompt includes findings from a prior attempt at this ticket (a previous run's
+findings doc or fix-cycle feedback), read that first — it usually already answers "what's
+blocking this," and re-deriving it via a broad exploratory sweep just burns tokens and time for
+the same answer.
 
 ---
 

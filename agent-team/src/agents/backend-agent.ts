@@ -12,7 +12,15 @@ const guardrails = fs.readFileSync(path.join(__dirname, '..', 'prompts', 'guardr
 // own instructions asks it to write. Everything else outside server/ stays unreachable.
 const ALLOWED_PATHS = ['../CLAUDE.md', '../docs/bruno', '../docs/architecture/backend.md'];
 
-export function createBackendAgent({ model, worktreePath }: { model: string; worktreePath: string }) {
+export function createBackendAgent({
+  model,
+  worktreePath,
+  environmentFacts,
+}: {
+  model: string;
+  worktreePath: string;
+  environmentFacts: string;
+}) {
   const basePath = path.join(worktreePath, 'server');
   const workspace = new Workspace({
     filesystem: new LocalFilesystem({ basePath, allowedPaths: ALLOWED_PATHS }),
@@ -25,6 +33,15 @@ export function createBackendAgent({ model, worktreePath }: { model: string; wor
     model,
     workspace,
     instructions: `${guardrails}
+
+---
+
+${environmentFacts}
+
+If your task prompt includes findings from a prior attempt at this ticket (a previous run's
+findings doc or fix-cycle feedback), read that first — it usually already answers "what's
+blocking this," and re-deriving it via a broad exploratory sweep just burns tokens and time for
+the same answer.
 
 ---
 

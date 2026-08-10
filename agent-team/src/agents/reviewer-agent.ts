@@ -53,10 +53,12 @@ export function createReviewerAgent({
   model,
   worktreePath,
   baseBranch,
+  environmentFacts,
 }: {
   model: string;
   worktreePath: string;
   baseBranch: string;
+  environmentFacts: string;
 }) {
   const workspace = new Workspace({
     filesystem: new LocalFilesystem({ basePath: worktreePath }),
@@ -83,6 +85,8 @@ by design.
 
 This run's base branch is \`${baseBranch}\` — use it wherever these instructions say "main"
 below (diffing, and the PR base).
+
+${environmentFacts}
 
 Your task prompt may include a "COORDINATOR SCOPE CHECK" line — that's an objective,
 coordinator-computed list of changed files that fall outside every pillar invoked for this
