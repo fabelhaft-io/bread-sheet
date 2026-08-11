@@ -241,13 +241,18 @@ Documented here so it's a known next step, not a silent gap.
   applied directly rather than through an agent run, since it edits files outside every
   pillar's write scope (exactly what "OS-level shell sandboxing" and "Coordinator-owned git"
   above exist to prevent). It's a no-op until the script below exists.
-- **Not done:** an Android SDK + AVD provisioning script, [Maestro](https://maestro.mobile.dev)
-  install, and the actual declarative YAML flows — a self-contained, `bread-sheet-app/`-pillar
-  ticket an implementer can complete without touching harness code. A first attempt at this
-  (self-provisioning runner, Metro-lifecycle fix, a working barcode-scan flow) was built and
-  reached a real reviewer `PASS` during harness development, but was discarded rather than
-  merged — it predated the sandboxing/coordinator-git hardening and touched the
-  now-off-limits reviewer files above as part of its own diff.
+- **Built, unmerged:** `bread-sheet-app/scripts/test-maestro.js` (self-provisioning runner behind
+  `npm run test:maestro`) and two declarative flows (`e2e/maestro/barcode-scan.yaml`,
+  `manual-entry.yaml`) exist on `agent/P9-003` / PR #110. See
+  `docs/architecture/frontend.md#native-e2e-android-emulator--maestro-ticket-p9-003`.
+  An earlier attempt at the same thing was built and reached a real reviewer `PASS` during
+  harness development, but was discarded rather than merged — it predated the
+  sandboxing/coordinator-git hardening and touched the now-off-limits reviewer files above as
+  part of its own diff.
+- **Not done:** anything has ever *run* the suite end to end. The branch is `BLOCKED` on
+  provisioning, not on code — see `docs/P9-003-findings.md` for the state and the human runbook.
+  Also not done: a CI job (`reactivecircus/android-emulator-runner`) that would make the flows
+  execute on every PR instead of when someone remembers to run them.
 
 #### The P9-003 lesson
 
@@ -256,7 +261,16 @@ runner, two flows and a `__DEV__` injection seam, passed the reviewer with `✅ 
 green on every CI check. It also could not run: `buildAndInstallDebug()` never awaited its
 `runStreaming()` promise, so every invocation aborted at the Gradle step; the injection seam's
 effect cleanup cancelled its own scan; and AVD discovery couldn't see an AVD that existed. The
-ticket is back to `BLOCKED` (`docs/P9-003-findings.md` has all four defects with repro).
+ticket went back to `BLOCKED` (`docs/P9-003-findings.md` has all four defects with repro).
+
+The fix cycle that followed closed all four, plus a fifth the implementer found by doing the one
+thing the first review didn't — executing the runner past its first gate (`spawn` onto an
+`fs.createWriteStream` whose `fd` is still `null`). The second reviewer re-verified each fix by
+mutation rather than by report, and the runner now boots and tears down a real headless emulator.
+The ticket is nonetheless still `BLOCKED`, and on the honest reason this time: the deliverable has
+never completed a run, because the machine has neither `bread-sheet-app/.env` nor the Maestro CLI
+— and no agent role may create the former or install the latter. That is the shape a correct
+`BLOCKED` has under the Verification rules: not a defect list, a handoff.
 
 None of this was visible from where the reviewer stood. It ran the jest suite (244 green,
 truthfully reported), read the runner carefully, hit a missing prerequisite on the very first
