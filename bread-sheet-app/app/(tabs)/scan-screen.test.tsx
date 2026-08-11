@@ -9,12 +9,36 @@ import ScanScreen from './scan';
  * become an editable field rather than an error.
  */
 
-const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), setParams: jest.fn() };
 const mockPermission = jest.fn();
 const requestPermission = jest.fn();
-// Search params the mock router hands back — lets the P9-003 injection tests
-// drive the dev-only `?inject=` deep-link seam.
-const mockParams = jest.fn();
+
+/**
+ * Router params the mocked `expo-router` hands back (TICKET-P9-003).
+ *
+ * `setParams` really mutates this object and re-renders every component that
+ * read it, because that is what the real router does — and the injection seam
+ * under test clears its own `?inject=` param. A mock that froze the params
+ * would keep the seam's effect from ever re-running, so it would pass no matter
+ * what the seam did; that is exactly how the "seam cancels its own scan" defect
+ * reached a green suite.
+ */
+let mockParamsState: Record<string, string | undefined> = {};
+const mockParamsSubscribers = new Set<() => void>();
+
+function applyMockParams(next: Record<string, string | undefined>) {
+  mockParamsState = { ...mockParamsState, ...next };
+  for (const key of Object.keys(mockParamsState)) {
+    if (mockParamsState[key] === undefined) delete mockParamsState[key];
+  }
+  mockParamsSubscribers.forEach((notify) => notify());
+}
+
+const mockRouter = {
+  push: jest.fn(),
+  replace: jest.fn(),
+  back: jest.fn(),
+  setParams: jest.fn(applyMockParams),
+};
 
 // Captured so the test can drive the scan callback and assert on the
 // symbologies the camera was configured with.
@@ -28,7 +52,17 @@ jest.mock('expo-router', () => {
     // The screen only uses the focus effect to reset its scan lock.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run-once mock, deps intentionally empty
     useFocusEffect: (cb: () => unknown) => React.useEffect(() => cb(), []),
-    useLocalSearchParams: () => mockParams(),
+    // Subscribes so a `setParams` call re-renders the caller, like the real hook.
+    useLocalSearchParams: () => {
+      const [, forceRender] = React.useReducer((n: number) => n + 1, 0);
+      React.useEffect(() => {
+        mockParamsSubscribers.add(forceRender);
+        return () => {
+          mockParamsSubscribers.delete(forceRender);
+        };
+      }, [forceRender]);
+      return mockParamsState;
+    },
   };
 });
 
@@ -50,7 +84,8 @@ beforeEach(() => {
   jest.useFakeTimers();
   jest.clearAllMocks();
   cameraProps = {};
-  mockParams.mockReturnValue({});
+  mockParamsState = {};
+  mockParamsSubscribers.clear();
   mockPermission.mockReturnValue([{ granted: true }, requestPermission]);
 });
 
@@ -123,8 +158,12 @@ describe('ScanScreen', () => {
   // TICKET-P9-003 — the dev-only injection seam the Maestro E2E flow drives via
   // `breadsheet://scan?inject=<barcode>`: it must go through the same routing as
   // a real camera scan, not a separate test-only code path.
+  //
+  // These run against a router mock whose `setParams` really mutates the params
+  // and re-renders (see the top of this file). That re-render is the seam's own
+  // doing, and it must not cancel the scan it just started.
   it('injects a scanned barcode from the dev ?inject= param straight to the product screen', () => {
-    mockParams.mockReturnValue({ inject: '4006381333931' });
+    mockParamsState = { inject: '4006381333931' };
     render(<ScanScreen />);
 
     // The seam defers past the router's deep-link update via setTimeout(0).
@@ -136,8 +175,25 @@ describe('ScanScreen', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });
 
+  it('consumes the inject param and still completes the scan it started', () => {
+    mockParamsState = { inject: '4006381333931' };
+    render(<ScanScreen />);
+
+    act(() => {
+      jest.runAllTimers();
+    });
+
+    // The param really is gone from the router's state — the seam is spent, so
+    // a re-focus cannot replay the scan…
+    expect(mockParamsState.inject).toBeUndefined();
+    // …and the re-render that clearing it caused did not cancel the pending
+    // scan, nor let it fire twice.
+    expect(mockRouter.push).toHaveBeenCalledTimes(1);
+    expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
+  });
+
   it('routes a dev-injected non-lookupable code to the manual sheet, like a real scan', () => {
-    mockParams.mockReturnValue({ inject: '14006381333931' });
+    mockParamsState = { inject: '14006381333931' };
     render(<ScanScreen />);
 
     act(() => {
@@ -146,5 +202,16 @@ describe('ScanScreen', () => {
 
     expect(mockRouter.push).not.toHaveBeenCalled();
     expect(screen.getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
+  });
+
+  it('stays inert when no inject param is present', () => {
+    render(<ScanScreen />);
+
+    act(() => {
+      jest.runAllTimers();
+    });
+
+    expect(mockRouter.setParams).not.toHaveBeenCalled();
+    expect(mockRouter.push).not.toHaveBeenCalled();
   });
 });

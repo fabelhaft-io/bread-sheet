@@ -84,20 +84,42 @@ export default function ScanScreen() {
   // callback uses — validation, navigation to `/(app)/product/<barcode>`, and
   // every downstream product-screen state are exercised for real. The seam is
   // dead in release builds (`__DEV__` is false there), and the param is
-  // consumed immediately so a later re-focus cannot re-fire the same scan.
+  // consumed on arrival so a later re-focus cannot re-fire the same scan.
   const { inject } = useLocalSearchParams<{ inject?: string }>();
+  const consumedInject = useRef<string | null>(null);
+  const injectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The pending injection timer is cleared on UNMOUNT ONLY. Clearing it from the
+  // injection effect's cleanup is what made the seam cancel its own scan:
+  // `setParams` changes `inject`, which re-runs the effect, whose cleanup killed
+  // the timer before it ever fired.
+  useEffect(
+    () => () => {
+      if (injectTimer.current) clearTimeout(injectTimer.current);
+    },
+    []
+  );
+
   useEffect(() => {
     if (!__DEV__) return;
-    if (typeof inject !== 'string' || inject.length === 0) return;
+    if (typeof inject !== 'string' || inject.length === 0) {
+      // The param is gone (normally because we just cleared it) — re-arm so a
+      // second injection of the same barcode in one session still fires.
+      consumedInject.current = null;
+      return;
+    }
+    // Guard re-entry for the case where clearing the param is a no-op: a scan is
+    // injected once per arrival of the param, never once per render.
+    if (consumedInject.current === inject) return;
+    consumedInject.current = inject;
     router.setParams({ inject: undefined });
-    // Defer past the router's own deep-link state update, and out of the effect
-    // body so processScan's state updates aren't a synchronous cascading render.
-    const id = setTimeout(() => processScan(inject), 0);
-    return () => clearTimeout(id);
-    // processScan and router are stable useCallback refs — `inject` is the only
-    // input that can change between renders.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inject]);
+    // Defer out of the effect body so processScan's state updates aren't a
+    // synchronous cascading render, and past the router's deep-link update.
+    injectTimer.current = setTimeout(() => {
+      injectTimer.current = null;
+      processScan(inject);
+    }, 0);
+  }, [inject, processScan, router]);
 
   // Rendered in every permission state — manual entry must not require the
   // camera, which is the point of the ticket (web, denied permission, no

@@ -14,7 +14,14 @@
 # plus product lookup, the same requirement as the Playwright specs.
 appId: com.breadsheetexpo.breadsheet
 ---
-- launchApp
+# clearState per flow, not just once per run: the flows run in sequence and each
+# one signs in as a guest, so without it the second flow inherits the first's
+# persisted Supabase session, boots straight into the tabs and stalls waiting for
+# "Continue as Guest". The runner's `adb pm clear` only cleans up between runs.
+- launchApp:
+    clearState: true
+    permissions:
+      camera: allow
 - extendedWaitUntil:
     visible: "Continue as Guest"
     timeout: 60000
@@ -38,10 +45,17 @@ appId: com.breadsheetexpo.breadsheet
       id: "scan-torch"
     timeout: 20000
 - openLink: "breadsheet://scan?inject=4006381333931"
-# The product screen renders the barcode chip in every state (found, 404
-# "add this product", offline), so this one assertion proves the scan fired
-# and navigation landed on the product screen.
+# Assert on the product screen's own testIDs, one per landing state (found /
+# 404 "add this product" / offline). NOT on the literal barcode string: that
+# number is also the manual sheet's placeholder, so a flow asserting the text
+# can pass while still sitting on the scan tab — a vacuously green E2E test is
+# worse than none. Also note the barcode chip on the found screen sits well
+# down the ScrollView and may not be `visible` to Maestro at all.
 - extendedWaitUntil:
-    visible: "4006381333931"
+    visible:
+      id: ".*product-(screen|not-found|offline).*"
     timeout: 30000
+# Belt and braces: the scan tab's camera UI is gone, so we really navigated.
+- assertNotVisible:
+    id: ".*scan-torch.*"
 - takeScreenshot: e2e/maestro/artifacts/barcode-scan

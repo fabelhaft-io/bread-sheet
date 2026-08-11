@@ -18,10 +18,13 @@
  *   JAVA_HOME                         JDK 17+ for the Gradle build (else probed)
  *   MAESTRO_AVD                       AVD name to use/create (default breadsheet-e2e)
  *   MAESTRO_SYSTEM_IMAGE              system image to install if none present
- *   MAESTRO_INSTALL=0                 never auto-install the Maestro CLI
+ *   MAESTRO_INSTALL=1                 opt IN to auto-installing the Maestro CLI
+ *                                     (`curl … | bash`); off by default
  *   MAESTRO_METRO_PORT                Metro port (default 8081)
  *   MAESTRO_FLOW                      run a single flow file instead of e2e/maestro
  *   MAESTRO_SKIP_ENV_CHECK=1          don't require bread-sheet-app/.env
+ *   MAESTRO_PREREQS_ONLY=1            resolve prerequisites, then exit 0 without
+ *                                     booting/building (a fast machine check)
  *   MAESTRO_GRADLE_TIMEOUT_MS / MAESTRO_BOOT_TIMEOUT_MS / MAESTRO_METRO_TIMEOUT_MS
  *
  * Prerequisites for a full run: JDK 17+, an Android SDK with emulator +
@@ -63,9 +66,21 @@ function warn(...args) {
   console.warn('[test:maestro] WARN:', ...args);
 }
 
+/**
+ * A prerequisite/step failure. Thrown rather than `process.exit`ed: exiting from
+ * deep inside the run skips `main`'s `finally`, which is what tears down the
+ * headless emulator and Metro — a failed run must not leave either orphaned.
+ */
+class RunnerError extends Error {
+  constructor(message, code = 2) {
+    super(message);
+    this.name = 'RunnerError';
+    this.code = code;
+  }
+}
+
 function fail(message, code = 2) {
-  console.error(`[test:maestro] ERROR: ${message}`);
-  process.exit(code);
+  throw new RunnerError(message, code);
 }
 
 /** Blocking sleep without spawning a child process. */
@@ -73,7 +88,7 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/** Run a short-lived command to completion, returning { status, stdout }. */
+/** Run a short-lived command to completion, returning { status, stdout, stderr }. */
 function runSync(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, {
     encoding: 'utf8',
@@ -82,7 +97,12 @@ function runSync(cmd, args, opts = {}) {
     maxBuffer: 16 * 1024 * 1024,
   });
   if (res.error) throw res.error;
-  return { status: res.status, stdout: (res.stdout || '').trim() };
+  return {
+    status: res.status,
+    stdout: (res.stdout || '').trim(),
+    // `java -version` writes to stderr on every JDK ≤ 8 and most later ones.
+    stderr: (res.stderr || '').trim(),
+  };
 }
 
 /** Run a long-lived command, streaming output, resolving { code, signal }. */
@@ -155,6 +175,18 @@ function resolveAndroidSdk() {
   );
 }
 
+const MIN_JAVA_MAJOR = 17;
+
+/** Major version from `java -version` output, or null if unparseable. */
+function javaMajorVersion(output) {
+  // openjdk version "21.0.3" / java version "1.8.0_401" / openjdk version "17"
+  const match = /version "(\d+)(?:\.(\d+))?/.exec(output);
+  if (!match) return null;
+  const first = Number(match[1]);
+  // 1.8.0_401 → major 8; anything from 9 on puts the major first.
+  return first === 1 ? Number(match[2] || 0) : first;
+}
+
 function resolveJava() {
   const candidates = [
     process.env.JAVA_HOME && path.join(process.env.JAVA_HOME, 'bin', 'java'),
@@ -164,17 +196,28 @@ function resolveJava() {
     '/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java',
   ].filter(Boolean);
 
+  const rejected = [];
   for (const java of candidates) {
     try {
       const res = runSync(java, ['-version']);
-      if (res.status === 0) return java;
+      if (res.status !== 0) continue;
+      // A JDK that runs but is too old fails 30 minutes later inside Gradle with
+      // an unrelated-looking error; reject it here and keep probing instead.
+      const major = javaMajorVersion(`${res.stderr}\n${res.stdout}`);
+      if (major !== null && major < MIN_JAVA_MAJOR) {
+        rejected.push(`${java} (Java ${major})`);
+        continue;
+      }
+      return java;
     } catch {
       // keep probing
     }
   }
   fail(
-    'JDK 17+ not found (required for the Gradle build of the debug APK). Set JAVA_HOME ' +
-      'or install a JDK (Android Studio ships one at /opt/android-studio/jbr on Linux).'
+    `JDK ${MIN_JAVA_MAJOR}+ not found (required for the Gradle build of the debug APK). ` +
+      (rejected.length ? `Too old: ${rejected.join(', ')}. ` : '') +
+      'Set JAVA_HOME or install a JDK (Android Studio ships one at /opt/android-studio/jbr ' +
+      'on Linux).'
   );
 }
 
@@ -191,13 +234,17 @@ function resolveMaestro() {
   if (onPath) return 'maestro';
   if (fs.existsSync(envMaestro)) return envMaestro;
 
-  if (process.env.MAESTRO_INSTALL === '0') {
+  // Opt-IN, not opt-out: piping a remote script into bash is a supply-chain
+  // surface, and this repo's convention is to fail fast and tell the user what
+  // to run rather than to silently do it for them.
+  if (process.env.MAESTRO_INSTALL !== '1') {
     fail(
-      'Maestro CLI not installed (MAESTRO_INSTALL=0). Install with ' +
-        '`curl -Ls "https://get.maestro.mobile.dev" | bash` then re-run.'
+      'Maestro CLI not installed. Install it with ' +
+        '`curl -Ls "https://get.maestro.mobile.dev" | bash` (adds ~/.maestro/bin to PATH) ' +
+        'then re-run. Set MAESTRO_INSTALL=1 to let this script run that installer for you.'
     );
   }
-  log('Maestro CLI not found — installing to ~/.maestro via the official script…');
+  log('Maestro CLI not found — MAESTRO_INSTALL=1, installing to ~/.maestro…');
   const res = runSync('bash', ['-c', 'curl -Ls "https://get.maestro.mobile.dev" | bash']);
   if (res.status !== 0 || !fs.existsSync(envMaestro)) {
     fail(
@@ -278,14 +325,44 @@ function installedSystemImages(sdk) {
   return found;
 }
 
-function listExistingAvds(avdmanager, env = {}) {
+/**
+ * Names of the AVDs on this machine.
+ *
+ * Discovery goes through `emulator -list-avds`, NOT `avdmanager list avd`:
+ * `emulator` ships in every SDK that can boot anything, needs no cmdline-tools
+ * and no JDK, whereas `avdmanager` is a cmdline-tools component that plenty of
+ * Android Studio installs simply don't have. Reading the AVD list through the
+ * tool that might be missing is what made this script refuse AVDs that exist.
+ * `avdmanager` is still used, but only to *create* one.
+ */
+function listExistingAvds(sdk) {
+  const names = new Set();
   try {
-    const { status, stdout } = runSync(avdmanager, ['list', 'avd', '-c'], { env });
-    if (status !== 0) return [];
-    return stdout.split('\n').filter(Boolean);
+    const { status, stdout } = runSync(path.join(sdk, 'emulator', 'emulator'), ['-list-avds']);
+    if (status === 0) {
+      for (const line of stdout.split('\n')) {
+        const name = line.trim();
+        // The emulator prints occasional notices ("INFO |…") on the same stream.
+        if (name && !name.includes(' ') && !name.startsWith('INFO')) names.add(name);
+      }
+    }
   } catch {
-    return [];
+    // fall through to the on-disk scan
   }
+
+  // Secondary source: the AVD home directory. Covers an emulator binary that
+  // refuses to run (e.g. missing KVM permissions) but a perfectly listable AVD.
+  const avdHome =
+    process.env.ANDROID_AVD_HOME || path.join(os.homedir(), '.android', 'avd');
+  try {
+    for (const entry of fs.readdirSync(avdHome)) {
+      if (entry.endsWith('.ini')) names.add(entry.slice(0, -'.ini'.length));
+    }
+  } catch {
+    // no AVD home — nothing to add
+  }
+
+  return [...names];
 }
 
 /**
@@ -297,7 +374,7 @@ function listExistingAvds(avdmanager, env = {}) {
 function ensureAvd(sdk, javaHome) {
   const avdmanager = findAvdmanager(sdk);
   const toolEnv = javaHome ? { JAVA_HOME: javaHome } : {};
-  const existing = avdmanager ? listExistingAvds(avdmanager, toolEnv) : [];
+  const existing = listExistingAvds(sdk);
 
   // Reuse the requested AVD if it already exists (the "no per-run setup" happy
   // path once one has been created).
@@ -306,13 +383,23 @@ function ensureAvd(sdk, javaHome) {
     return AVD_NAME;
   }
 
+  // An explicitly requested AVD that doesn't exist is a typo, not a cue to boot
+  // something else.
+  if (process.env.MAESTRO_AVD) {
+    fail(
+      `MAESTRO_AVD="${AVD_NAME}" does not exist. AVDs found: ` +
+        `${existing.length ? existing.join(', ') : '(none)'}.`
+    );
+  }
+
   if (!avdmanager) {
     // No cmdline-tools → cannot create an AVD. Fall back to any existing AVD so
     // a machine that already has one (e.g. via Android Studio) still works.
     if (existing.length > 0) {
       warn(`avdmanager not found under ${sdk}/cmdline-tools — reusing existing AVD ` +
         `"${existing[0]}" instead of creating "${AVD_NAME}". Install cmdline-tools ` +
-        '(`sdkmanager "cmdline-tools;latest"`) for full self-provisioning.');
+        '(`sdkmanager "cmdline-tools;latest"`) for full self-provisioning, or set ' +
+        'MAESTRO_AVD to pick a specific one.');
       return existing[0];
     }
     fail(
@@ -365,8 +452,42 @@ function ensureAvd(sdk, javaHome) {
 
 // ─── Emulator lifecycle ───────────────────────────────────────────────────────
 
-function adb(sdk, args) {
-  return runSync(path.join(sdk, 'platform-tools', 'adb'), args);
+/**
+ * adb, always pinned to one device. Every call after the emulator is up passes
+ * `serial`; without `-s` a second attached device or emulator (a phone plugged
+ * in, a leftover emulator from an aborted run) makes every command ambiguous —
+ * adb then errors out, or worse, wipes app data on the wrong device.
+ */
+function adb(sdk, args, serial = null) {
+  const prefix = serial ? ['-s', serial] : [];
+  return runSync(path.join(sdk, 'platform-tools', 'adb'), [...prefix, ...args]);
+}
+
+/** Serial numbers adb currently lists, in any state. */
+function listDeviceSerials(sdk) {
+  try {
+    const { status, stdout } = adb(sdk, ['devices']);
+    if (status !== 0) return [];
+    return stdout
+      .split('\n')
+      .slice(1) // "List of devices attached"
+      .map((line) => line.trim().split(/\s+/)[0])
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A log file descriptor a child can be spawned onto.
+ *
+ * Deliberately `openSync` and not `fs.createWriteStream`: a WriteStream opens
+ * its file asynchronously, so its `fd` is still `null` on the next line and
+ * `spawn` rejects it with `ERR_INVALID_ARG_VALUE: The argument 'stdio' is
+ * invalid`. That crashed the runner the moment it tried to boot the emulator.
+ */
+function openLogFd(name) {
+  return fs.openSync(path.join(ARTIFACTS_DIR, name), 'a');
 }
 
 function bootEmulator(sdk, avd) {
@@ -384,45 +505,64 @@ function bootEmulator(sdk, avd) {
     ...(process.env.MAESTRO_EMULATOR_ARGS ? process.env.MAESTRO_EMULATOR_ARGS.split(' ') : []),
   ];
 
-  const logFile = fs.createWriteStream(path.join(ARTIFACTS_DIR, 'emulator.log'), { flags: 'a' });
+  const logFd = openLogFd('emulator.log');
   const child = spawn(emulator, args, {
     detached: true,
-    stdio: ['ignore', logFile, logFile],
+    stdio: ['ignore', logFd, logFd],
   });
   child.unref();
   return child;
 }
 
-function waitForBoot(sdk) {
+/**
+ * Waits for the emulator we just started and returns its serial.
+ *
+ * `preexisting` is the serial list from before the boot, so a device that was
+ * already attached is never mistaken for ours. Deliberately not
+ * `adb wait-for-device`: that call has no timeout, so an emulator that dies
+ * during boot hangs the runner forever instead of failing at BOOT_TIMEOUT_MS.
+ */
+function waitForBoot(sdk, preexisting = []) {
   log('waiting for device…');
-  adb(sdk, ['wait-for-device']);
   const deadline = Date.now() + BOOT_TIMEOUT_MS;
-  let booted = false;
+  let serial = null;
+
   while (Date.now() < deadline) {
-    try {
-      const { stdout } = adb(sdk, ['shell', 'getprop', 'sys.boot_completed']);
-      if (stdout.trim() === '1') {
-        booted = true;
-        break;
+    if (!serial) {
+      const fresh = listDeviceSerials(sdk).filter(
+        (s) => s.startsWith('emulator-') && !preexisting.includes(s)
+      );
+      if (fresh.length > 0) {
+        serial = fresh[0];
+        log(`device attached: ${serial}`);
       }
-    } catch {
-      // adb not ready yet
+    }
+    if (serial) {
+      try {
+        const { stdout } = adb(sdk, ['shell', 'getprop', 'sys.boot_completed'], serial);
+        if (stdout.trim() === '1') {
+          const { stdout: api } = adb(
+            sdk, ['shell', 'getprop', 'ro.build.version.sdk'], serial
+          );
+          log(`device booted (API ${api.trim() || 'unknown'})`);
+          return serial;
+        }
+      } catch {
+        // adb not ready yet
+      }
     }
     sleepSync(5000);
   }
-  if (!booted) {
-    fail(
-      `emulator did not finish booting within ${BOOT_TIMEOUT_MS / 1000}s ` +
-        '(see e2e/maestro/artifacts/emulator.log).'
-    );
-  }
-  const { stdout: api } = adb(sdk, ['shell', 'getprop', 'ro.build.version.sdk']);
-  log(`device booted (API ${api.trim() || 'unknown'})`);
+
+  fail(
+    `emulator did not ${serial ? 'finish booting' : 'attach to adb'} within ` +
+      `${BOOT_TIMEOUT_MS / 1000}s (see e2e/maestro/artifacts/emulator.log).`
+  );
 }
 
 // ─── Build, install, Metro ────────────────────────────────────────────────────
 
-function buildAndInstallDebug(sdk, java) {
+async function buildAndInstallDebug(sdk, java, serial) {
   if (!fs.existsSync(ANDROID_DIR)) {
     log('android/ not present — running expo prebuild…');
     const pre = runSync(path.join(ROOT, 'node_modules', '.bin', 'expo'), [
@@ -446,7 +586,13 @@ function buildAndInstallDebug(sdk, java) {
   // Only point JAVA_HOME at a concrete JBR path; if `java` came from PATH, leave
   // JAVA_HOME alone and let Gradle find the same JDK on PATH.
   if (path.isAbsolute(java)) env.JAVA_HOME = path.dirname(path.dirname(java));
-  const res = runStreaming(gradlew, [':app:installDebug', '-x', 'lint'], {
+  // installDebug shells out to adb; ANDROID_SERIAL pins it to our emulator for
+  // the same reason every explicit adb call carries `-s`.
+  if (serial) env.ANDROID_SERIAL = serial;
+  // `await` is load-bearing: runStreaming returns a Promise, so reading `.code`
+  // off the unresolved Promise made every run abort with "exit undefined" while
+  // the Gradle child kept going in the background.
+  const res = await runStreaming(gradlew, [':app:installDebug', '-x', 'lint'], {
     cwd: ANDROID_DIR,
     env,
     timeoutMs: GRADLE_TIMEOUT_MS,
@@ -458,11 +604,11 @@ function buildAndInstallDebug(sdk, java) {
 
 function startMetro() {
   log(`starting Metro on :${METRO_PORT}…`);
-  const logFile = fs.createWriteStream(path.join(ARTIFACTS_DIR, 'metro.log'), { flags: 'a' });
+  const logFd = openLogFd('metro.log');
   const child = spawn(
     path.join(ROOT, 'node_modules', '.bin', 'expo'),
     ['start', '--port', METRO_PORT],
-    { detached: true, stdio: ['ignore', logFile, logFile] }
+    { detached: true, stdio: ['ignore', logFd, logFd] }
   );
   child.unref();
   return child;
@@ -492,47 +638,79 @@ async function main() {
     fail(`no Maestro flows found under ${FLOWS_DIR}`);
   }
 
+  // Every prerequisite is resolved BEFORE anything slow or stateful starts —
+  // including Maestro itself, which used to be looked up after the Gradle build
+  // and so reported "not installed" 10–40 minutes into a run.
   ensureEnvFile();
   const sdk = resolveAndroidSdk();
   const java = resolveJava();
   log(`Android SDK: ${sdk}`);
   log(`Java: ${java}`);
+  const maestro = resolveMaestro();
+  log(`Maestro: ${maestro}`);
 
   const avd = ensureAvd(sdk, path.isAbsolute(java) ? path.dirname(path.dirname(java)) : undefined);
+  log(`AVD: ${avd}`);
+
+  // Lets a machine verify that it *can* run the suite (SDK, JDK, Maestro, AVD
+  // all resolved) in a second, instead of finding out 40 minutes into a Gradle
+  // build. The prerequisite phase is the part that varies per machine.
+  if (process.env.MAESTRO_PREREQS_ONLY === '1') {
+    log('MAESTRO_PREREQS_ONLY=1 — prerequisites OK, not booting the emulator');
+    process.exit(0);
+  }
+
+  const preexistingSerials = listDeviceSerials(sdk);
   const emulatorChild = bootEmulator(sdk, avd);
   let metroChild = null;
+  let serial = null;
   let exitCode = 1;
 
   try {
-    waitForBoot(sdk);
-    adb(sdk, ['reverse', `tcp:${METRO_PORT}`, `tcp:${METRO_PORT}`]);
+    serial = waitForBoot(sdk, preexistingSerials);
+    adb(sdk, ['reverse', `tcp:${METRO_PORT}`, `tcp:${METRO_PORT}`], serial);
+
+    // Build + install FIRST: `pm clear` / `pm grant` both need the package to
+    // exist. Run before the install and they fail silently on a fresh device
+    // (no CAMERA pre-grant) and never wipe anything on a repeat run — leaving
+    // the previous run's guest session behind, which lands the app in the tabs
+    // and stalls both flows on "Continue as Guest".
+    await buildAndInstallDebug(sdk, java, serial);
 
     // Fresh app data (wipes any leftover session from a previous run)…
-    adb(sdk, ['shell', 'pm', 'clear', APP_ID]);
+    const cleared = adb(sdk, ['shell', 'pm', 'clear', APP_ID], serial);
+    if (cleared.status !== 0) {
+      fail(
+        `adb pm clear ${APP_ID} failed after install — the flows need a signed-out ` +
+          `app to start from. ${cleared.stderr || cleared.stdout}`
+      );
+    }
     // …then pre-grant the camera permission so the flow never races a system
-    // dialog (the flow also taps "While using the app" defensively).
-    adb(sdk, ['shell', 'pm', 'grant', APP_ID, 'android.permission.CAMERA']);
+    // dialog (the flow also taps "While using the app" defensively). `pm clear`
+    // revokes runtime permissions, so this must follow it.
+    const granted = adb(
+      sdk, ['shell', 'pm', 'grant', APP_ID, 'android.permission.CAMERA'], serial
+    );
+    if (granted.status !== 0) {
+      warn(
+        `could not pre-grant CAMERA (${granted.stderr || granted.stdout}) — the flow ` +
+          'falls back to tapping the runtime permission dialog.'
+      );
+    }
 
-    buildAndInstallDebug(sdk, java);
     metroChild = startMetro();
     await waitForMetro();
 
-    const maestro = resolveMaestro();
     const flowTarget = process.env.MAESTRO_FLOW
       ? path.join(FLOWS_DIR, process.env.MAESTRO_FLOW)
       : FLOWS_DIR;
     log(`running Maestro flows: ${flowTarget}`);
-    const res = await runStreaming(maestro, ['test', flowTarget]);
+    const res = await runStreaming(maestro, ['test', flowTarget], {
+      env: serial ? { ANDROID_SERIAL: serial } : {},
+    });
     exitCode = res.code === 0 ? 0 : 1;
   } finally {
-    log('tearing down…');
-    try {
-      adb(sdk, ['emu', 'kill']);
-    } catch {
-      // emulator already gone
-    }
-    if (metroChild) metroChild.kill('SIGTERM');
-    if (emulatorChild && !emulatorChild.killed) emulatorChild.kill('SIGTERM');
+    teardown(sdk, serial, metroChild, emulatorChild);
   }
 
   if (exitCode === 0) {
@@ -545,7 +723,53 @@ async function main() {
   process.exit(exitCode);
 }
 
-main().catch((err) => {
-  console.error('[test:maestro] unexpected failure:', err);
-  process.exit(1);
-});
+function teardown(sdk, serial, metroChild, emulatorChild) {
+  log('tearing down…');
+  try {
+    adb(sdk, ['emu', 'kill'], serial);
+  } catch {
+    // emulator already gone
+  }
+  // Both children are `detached`, so they lead their own process groups: expo
+  // spawns Metro as a child of itself, and killing only the wrapper leaves Metro
+  // holding :8081 for the next run. Negative pid signals the whole group.
+  for (const child of [metroChild, emulatorChild]) {
+    if (!child || !child.pid) continue;
+    try {
+      process.kill(-child.pid, 'SIGTERM');
+    } catch {
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        // already gone
+      }
+    }
+  }
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    if (err instanceof RunnerError) {
+      console.error(`[test:maestro] ERROR: ${err.message}`);
+      process.exit(err.code);
+    }
+    console.error('[test:maestro] unexpected failure:', err);
+    process.exit(1);
+  });
+} else {
+  // Required (not executed) → expose the pure helpers so the units that carried
+  // the defects — AVD discovery, JDK version parsing — are directly testable.
+  // See scripts/test-maestro-wiring.test.js.
+  module.exports = {
+    RunnerError,
+    adb,
+    bootEmulator,
+    buildAndInstallDebug,
+    javaMajorVersion,
+    listDeviceSerials,
+    listExistingAvds,
+    teardown,
+    waitForBoot,
+    MIN_JAVA_MAJOR,
+  };
+}
