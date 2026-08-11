@@ -35,6 +35,12 @@ harness (or the LLM behind it) a config change, not a rewrite:
 - **Test matrix the reviewer must run before passing a ticket:** `server` `npm test` +
   `typecheck`; `bread-sheet-app` `npm test` + `typecheck` + `lint`; `bread-sheet-app`
   `npm run test:e2e` for anything reachable through the UI.
+- **What counts as evidence** (guardrails, "Verification"): a criterion asserting runtime
+  behaviour must be *executed*, not inferred; any new executable the ticket adds gets one real
+  happy-path run; an environment gap on the ticket's own deliverable is `BLOCKED` rather than a
+  footnote under a pass; absence is proven with a command and its output, not inferred from a
+  failure; and a new test whose mock freezes the state the code under test mutates doesn't
+  count as coverage. Added after PR #110 — see "the P9-003 lesson" below.
 
 The full guardrail wording is kept in one place — `agent-team/src/prompts/guardrails.md` — and
 both harnesses reference/embed it, so they can't silently drift apart on what's allowed.
@@ -242,3 +248,21 @@ Documented here so it's a known next step, not a silent gap.
   reached a real reviewer `PASS` during harness development, but was discarded rather than
   merged — it predated the sandboxing/coordinator-git hardening and touched the
   now-off-limits reviewer files above as part of its own diff.
+
+#### The P9-003 lesson
+
+The second attempt — PR #110, the first ticket worked end-to-end by the agent team — produced a
+runner, two flows and a `__DEV__` injection seam, passed the reviewer with `✅ PASS`, and went
+green on every CI check. It also could not run: `buildAndInstallDebug()` never awaited its
+`runStreaming()` promise, so every invocation aborted at the Gradle step; the injection seam's
+effect cleanup cancelled its own scan; and AVD discovery couldn't see an AVD that existed. The
+ticket is back to `BLOCKED` (`docs/P9-003-findings.md` has all four defects with repro).
+
+None of this was visible from where the reviewer stood. It ran the jest suite (244 green,
+truthfully reported), read the runner carefully, hit a missing prerequisite on the very first
+gate, and — following the Maestro clause above to the letter — recorded that as an environment
+gap rather than a code failure. The gap was in the contract, not in the reviewer's diligence: it
+allowed a ticket whose entire deliverable was a test runner to pass without that runner ever
+having run, and nothing required the two new unit tests to be checked for whether they *could*
+fail. Hence the **Verification** section in `guardrails.md`, whose rules are aimed squarely at
+those two holes.

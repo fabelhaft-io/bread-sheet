@@ -35,16 +35,57 @@ export function ensureWorktree(repoRoot: string, ticketId: string, baseBranch: s
 
   const existingWorktrees = git(['worktree', 'list', '--porcelain'], repoRoot);
   if (existingWorktrees.includes(`worktree ${worktreePath}`)) {
+    refreshFromBase(worktreePath, branch, baseBranch);
     return { path: worktreePath, branch };
   }
 
   if (branchExists(repoRoot, branch)) {
     git(['worktree', 'add', worktreePath, branch], repoRoot);
+    refreshFromBase(worktreePath, branch, baseBranch);
   } else {
     git(['worktree', 'add', worktreePath, '-b', branch, baseBranch], repoRoot);
   }
 
   return { path: worktreePath, branch };
+}
+
+/**
+ * Brings a *reused* ticket branch — a resumed `BLOCKED` run — up to date with its base.
+ *
+ * Without this, a resumed run works against the repo as it stood when the branch was first
+ * cut. That includes `agent-team/src/prompts/guardrails.md`, which Harness A's agents read
+ * from the worktree by relative path, so a stale branch means agents following a superseded
+ * contract. The timing makes it the likely case rather than an edge case: guardrail changes
+ * tend to land right after a bad run, which is exactly when a `BLOCKED` branch is sitting
+ * there waiting to be re-run. (Harness B reads guardrails from the launching checkout via
+ * `__dirname`, so it isn't affected by that specific staleness — but a reused branch is
+ * equally missing every other `main`-side fix since it was cut, which is the general case
+ * this covers.)
+ *
+ * A conflict stops the run instead of handing an agent a conflicted tree to "resolve":
+ * that's a human's call, and coordinator-owned git (see docs/architecture/agent-dev-team.md)
+ * exists precisely so an agent never gets the opportunity.
+ */
+function refreshFromBase(worktreePath: string, branch: string, baseBranch: string): void {
+  const behind = git(['rev-list', '--count', `${branch}..${baseBranch}`], worktreePath).trim();
+  if (behind === '0') return;
+
+  try {
+    git(['merge', '--no-edit', baseBranch], worktreePath);
+  } catch (err) {
+    try {
+      git(['merge', '--abort'], worktreePath);
+    } catch {
+      // Nothing to abort — the merge refused to start (most often an unclean worktree).
+    }
+    throw new Error(
+      `Ticket branch ${branch} is ${behind} commit(s) behind ${baseBranch} and could not be ` +
+        `updated automatically:\n${(err as Error).message}\n` +
+        `Resolve it by hand in ${worktreePath} (merge or rebase ${baseBranch}, or delete the ` +
+        `worktree to start the ticket fresh), then re-run. Stopping rather than letting agents ` +
+        `work against a stale or conflicted tree.`
+    );
+  }
 }
 
 /**

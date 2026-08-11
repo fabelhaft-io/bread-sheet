@@ -41,10 +41,45 @@ prompt.
 - The reviewer runs `npm --prefix bread-sheet-app run test:maestro` **only** for tickets whose
   diff touches camera/scan code (the scan tab, manual barcode entry/validation, on-device OCR,
   or anything under `bread-sheet-app/e2e/maestro/`) **and** only once that script actually
-  exists — it doesn't yet (see `docs/architecture/agent-dev-team.md`'s Maestro follow-up).
+  exists in `bread-sheet-app/package.json` (see `docs/architecture/agent-dev-team.md`).
 - If the script exists but fails because the Android SDK/AVD/Maestro aren't provisioned on this
   machine, that's an environment prerequisite gap: record it in the findings doc, don't treat it
-  as a code failure, and never fabricate a passing result to get past it.
+  as a code failure, and never fabricate a passing result to get past it. **This applies only to
+  a suite that is incidental to the ticket.** If the ticket's own deliverable is what can't be
+  exercised, see "Verification" below — that's `BLOCKED`, not a footnote under a pass.
+
+## Verification
+
+These are the reviewer's rules for what counts as evidence. They exist because P9-003 shipped a
+`PASS` on a 551-line test runner that had never executed past its first prerequisite check; four
+defects were sitting past that point (see `docs/P9-003-findings.md`).
+
+- **Execute, don't infer.** Every acceptance criterion that asserts runtime behaviour is either
+  *executed* or the run is `BLOCKED`. "Verified by inspection", "the code clearly does X", and a
+  green unit suite are not substitutes for running the thing the criterion is about. Only a
+  criterion that is genuinely about static structure (a file exists, a script is named X) may be
+  satisfied statically, and the findings doc must say so explicitly.
+- **New executables get run at least once on their happy path.** Any new script, CLI entry point,
+  job, or npm script the ticket adds must complete a real run before the ticket passes. A program
+  whose only observed behaviour is its own error path is unverified, no matter how well it reads.
+- **An environment gap on the ticket's own deliverable is `BLOCKED`.** The environment-gap clause
+  exists so an unrelated suite can't block an unrelated ticket. It is not a way to pass a ticket
+  whose deliverable is the thing that couldn't be exercised. When in doubt: if fixing the
+  environment could change the verdict, the verdict is `BLOCKED`.
+- **Prove absence; don't infer it from a failure.** A sandbox denial, a `command not found` from a
+  tool that isn't on `PATH`, and a genuinely missing dependency look alike and mean different
+  things. Before recording something as absent, check it directly (`ls` the path, run the binary
+  by absolute path) and paste the command and its real output into the findings doc. P9-003
+  recorded an Android SDK as non-existent that was present, and that's what justified skipping the
+  live run.
+- **A mock that freezes state the code under test mutates is not coverage.** If the code calls a
+  mocked API that changes state it also reads (router params, a store, a cache), the mock must
+  reflect the change — otherwise the test passes regardless of what the code does. The reviewer
+  checks new tests for this specifically: for each new test, ask what production bug it would
+  actually fail on.
+- **Report what you ran, not what you would have run.** The findings doc's test-results table
+  lists the command, its exit status, and the observed output for every row. `not_run` is an
+  honest and acceptable result; a row that implies an execution that didn't happen is not.
 
 ## Documentation
 

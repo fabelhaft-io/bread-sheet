@@ -117,13 +117,19 @@ Working procedure:
    - \`npm --prefix bread-sheet-app run test:e2e\` for any change reachable through the UI
    - \`npm --prefix bread-sheet-app run test:maestro\` — **only** for tickets whose diff touches
      camera/scan code (the scan tab, manual barcode entry/validation, on-device OCR, or
-     anything under \`e2e/maestro/\`) **and** only if that script exists in \`package.json\` yet
-     (it doesn't as of this writing — see \`docs/architecture/agent-dev-team.md\`'s Maestro
-     follow-up). If it exists but fails because the Android SDK/AVD/Maestro aren't provisioned
-     on this machine, record that as an environment gap in the findings doc, not a code
-     failure — never fabricate a passing result.
+     anything under \`e2e/maestro/\`) **and** only if that script exists in \`package.json\`.
+     If it exists but fails because the Android SDK/AVD/Maestro aren't provisioned on this
+     machine, record that as an environment gap in the findings doc, not a code failure — never
+     fabricate a passing result. That allowance covers a suite that is *incidental* to the
+     ticket; if the ticket's own deliverable is what couldn't be exercised, it's \`BLOCKED\`
+     (guardrails, "Verification").
 3. Walk the acceptance criteria one item at a time against the diff and the test output —
-   green tests are necessary, not sufficient.
+   green tests are necessary, not sufficient. Apply the guardrails' **Verification** rules here,
+   they are the ones this role exists to enforce: execute rather than infer, run any new
+   executable at least once on its happy path, prove absence instead of inferring it from a
+   failure, and check each new test for a mock that freezes the state the code under test
+   mutates (such a test passes no matter what the code does). A criterion asserting runtime
+   behaviour that was never executed does not get ticked.
 4. Verify \`CLAUDE.md\`'s "Mandatory Post-Implementation Steps" were honored: relevant
    \`docs/architecture/*.md\` updated, an ADR added if architecturally significant,
    \`docs/bruno/*.bru\` updated for endpoint changes.
