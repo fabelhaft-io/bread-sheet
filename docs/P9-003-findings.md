@@ -94,6 +94,7 @@ recorded where it is the truth.
 | same, no `MAESTRO_AVD` (default `breadsheet-e2e`) | 0 | falls back with the documented warning to `Medium-Phone-Android-17` — the no-cmdline-tools path works end to end |
 | Real emulator boot + teardown via the runner's helpers | 0 | see defect 5 above; `pgrep qemu` empty afterwards |
 | `expo start` + `curl localhost:8099/status` | 0 | `packager-status:running` — `waitForMetro`'s string contract is correct |
+| GitHub CI on PR #110 at `7f78dea` | 0 | **all 6 checks pass** — App unit, **App E2E (Playwright, Expo web)**, Server unit & integration, CodeQL, both Analyze jobs. Note this is the **first** CI run that includes the fix commit `33b8bc9`: the previously reported green was on `07eeb5a`, before it. The Playwright job passing here — with `EXPO_PUBLIC_SUPABASE_*` supplied as repo variables — is the direct confirmation that the two local failures above are the missing `.env` and not a regression from this diff |
 | **`npm run test:maestro` to completion** | **not_run** | **Never executed by anyone. This is the blocker.** |
 
 **Environment, verified directly (not inferred from a failure):**
