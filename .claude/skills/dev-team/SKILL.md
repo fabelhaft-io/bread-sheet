@@ -26,7 +26,13 @@ ask, since everything after this is meant to run unattended.
    git worktree add ../bread-sheet-agent-<TICKET-ID> -b agent/<TICKET-ID> main
    ```
    If the branch or worktree already exists (a previous run), reuse it rather than erroring —
-   this is what makes a `BLOCKED` retry resume cleanly.
+   this is what makes a `BLOCKED` retry resume cleanly. **When reusing, first bring the branch
+   up to date with `main`** (`git -C ../bread-sheet-agent-<TICKET-ID> merge --no-edit main`).
+   Agents read `agent-team/src/prompts/guardrails.md` from the worktree by relative path, so a
+   branch cut before a contract change has them following a superseded contract — and guardrail
+   changes tend to land right after a bad run, i.e. exactly when a `BLOCKED` branch is waiting
+   to be re-run. If that merge conflicts, `git merge --abort`, stop, and hand it back to the
+   user: resolving it is theirs to do, not an agent's.
 3. **Decide pillar(s).** Read the ticket's goal/implementation notes. If it mentions both an API
    surface and a screen/UI, it's both; if only one pillar's files are implicated, spawn only that
    implementer. When genuinely unsure, spawn both.
