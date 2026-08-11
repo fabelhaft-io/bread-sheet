@@ -1,0 +1,50 @@
+# TICKET-P9-003 — manual barcode entry flow (debug build, Android emulator).
+#
+# The camera-free path (CLAUDE.md's camera-free principle): the scan tab's
+# "Enter code manually" sheet must work without the camera at all, and it lands
+# on the same /(app)/product/<barcode> destination a scan produces. This flow
+# exercises that path end-to-end on a debug build.
+#
+# Prereqs: same as barcode-scan.yaml — see scripts/test-maestro.js.
+appId: com.breadsheetexpo.breadsheet
+---
+# Per-flow clean slate — see the note in barcode-scan.yaml. This flow needs no
+# camera at all, which is the point of the path it covers.
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Continue as Guest"
+    timeout: 60000
+- tapOn: "Continue as Guest"
+- extendedWaitUntil:
+    visible:
+      id: "home-screen"
+    timeout: 20000
+- tapOn: "Scan"
+- extendedWaitUntil:
+    visible:
+      id: "scan-manual-entry"
+    timeout: 20000
+- tapOn:
+    id: "scan-manual-entry"
+- extendedWaitUntil:
+    visible:
+      id: "manual-barcode-input"
+    timeout: 10000
+# The field autoFocuses, but tap it anyway so inputText cannot land nowhere.
+- tapOn:
+    id: "manual-barcode-input"
+- inputText: "4006381333931"
+- tapOn:
+    id: "manual-barcode-submit"
+# Same falsifiable landing assertion as barcode-scan.yaml — and here it matters
+# most: "4006381333931" is this very sheet's placeholder, so if inputText never
+# reached the field, submit would show a validation error and the number would
+# still be on screen. A text assertion would pass without ever navigating.
+- extendedWaitUntil:
+    visible:
+      id: ".*product-(screen|not-found|offline).*"
+    timeout: 30000
+- assertNotVisible:
+    id: ".*manual-barcode-input.*"
+- takeScreenshot: e2e/maestro/artifacts/manual-entry

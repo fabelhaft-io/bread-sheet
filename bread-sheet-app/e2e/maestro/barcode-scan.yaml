@@ -1,0 +1,61 @@
+# TICKET-P9-003 — camera barcode scan flow (debug build, Android emulator).
+#
+# Why a deep link instead of a camera frame: Maestro cannot control what the
+# emulator camera sees, so the pixel-decode step (CameraX → ML Kit) is the one
+# link in the scan chain an on-device E2E test cannot drive. The scan tab's
+# dev-only injection seam (app/(tabs)/scan.tsx, __DEV__-gated) feeds the exact
+# same processScan path the camera's onBarcodeScanned callback uses, so
+# validation, navigation to /(app)/product/<barcode>, and every downstream
+# product-screen state are exercised for real against the debug build.
+#
+# Prereqs (enforced by scripts/test-maestro.js): a booted emulator with the
+# debug APK installed and CAMERA pre-granted, Metro on :8081 (adb-reversed),
+# and a reachable Supabase project via bread-sheet-app/.env — guest sign-in
+# plus product lookup, the same requirement as the Playwright specs.
+appId: com.breadsheetexpo.breadsheet
+---
+# clearState per flow, not just once per run: the flows run in sequence and each
+# one signs in as a guest, so without it the second flow inherits the first's
+# persisted Supabase session, boots straight into the tabs and stalls waiting for
+# "Continue as Guest". The runner's `adb pm clear` only cleans up between runs.
+- launchApp:
+    clearState: true
+    permissions:
+      camera: allow
+- extendedWaitUntil:
+    visible: "Continue as Guest"
+    timeout: 60000
+- tapOn: "Continue as Guest"
+- extendedWaitUntil:
+    visible:
+      id: "home-screen"
+    timeout: 20000
+- tapOn: "Scan"
+# Defensive: if the runtime permission dialog is up (e.g. pm grant was cleared
+# by an app-data reset), accept it. optional: true makes a pre-granted run pass
+# without it. Tapped before the camera-UI assertion below because the dialog
+# would otherwise cover the camera view and stall that wait.
+- tapOn:
+    text: "While using the app"
+    optional: true
+# The torch button only renders once the camera permission is granted and the
+# camera view is mounted — it is the flow's "camera UI is live" checkpoint.
+- extendedWaitUntil:
+    visible:
+      id: "scan-torch"
+    timeout: 20000
+- openLink: "breadsheet://scan?inject=4006381333931"
+# Assert on the product screen's own testIDs, one per landing state (found /
+# 404 "add this product" / offline). NOT on the literal barcode string: that
+# number is also the manual sheet's placeholder, so a flow asserting the text
+# can pass while still sitting on the scan tab — a vacuously green E2E test is
+# worse than none. Also note the barcode chip on the found screen sits well
+# down the ScrollView and may not be `visible` to Maestro at all.
+- extendedWaitUntil:
+    visible:
+      id: ".*product-(screen|not-found|offline).*"
+    timeout: 30000
+# Belt and braces: the scan tab's camera UI is gone, so we really navigated.
+- assertNotVisible:
+    id: ".*scan-torch.*"
+- takeScreenshot: e2e/maestro/artifacts/barcode-scan

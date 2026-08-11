@@ -430,3 +430,84 @@ What was broken was durability (fixed by P8-001) and visibility. The gates that 
 Upgrading to an email that already has an account fails at `updateUser` and leaves the ratings on the anonymous id; the upgrade screen surfaces `EMAIL_ALREADY_REGISTERED_MESSAGE` inline rather than Supabase's raw copy. Merging two existing accounts is explicitly out of scope.
 
 > Testing note: `lib/__mocks__/api.ts` is the manual mock behind a bare `jest.mock('@/lib/api')`. It keeps `ApiError` and `NetworkError` as real classes, because screens and `formatApiError` branch on `instanceof`. Tests that exercise the caches mock `expo-file-system/legacy` with an in-memory `Map` and call `setActiveCacheUser` / `__resetOfflineStoreForTests` in `beforeEach`.
+
+## Native E2E: Android emulator + Maestro (TICKET-P9-003)
+
+Playwright covers everything reachable through Expo web; the flows it structurally
+cannot reach — camera, barcode scan, on-device OCR — are covered by Maestro against a
+debug build on a headless Android emulator. `npm run test:maestro` is the single
+entry point (`scripts/test-maestro.js`); the reviewer's test matrix runs it
+conditionally for tickets whose diff touches camera/scan code.
+
+The runner resolves **every** prerequisite up front — Android SDK (`ANDROID_HOME`,
+else common install paths), JDK 17+ (`JAVA_HOME`, else the Android Studio JBR,
+version-checked so an old JDK is rejected here rather than 40 minutes later inside
+Gradle), the Maestro CLI, and an AVD — then, and only then, boots and builds:
+
+1. Boot the emulator headless
+   (`-no-window -gpu swiftshader_indirect -camera-back virtualscene`) and wait for
+   `sys.boot_completed`, pinning the serial of the emulator *it* started so every
+   later `adb` call carries `-s` and cannot hit another attached device.
+2. `expo prebuild` (when `android/` is absent) + `gradlew :app:installDebug`.
+3. `adb pm clear` + `pm grant android.permission.CAMERA` — **after** the install,
+   since both need the package to exist, and `pm clear` revokes runtime
+   permissions so the grant must follow it.
+4. Metro on :8081 with `adb reverse`, then `maestro test e2e/maestro`.
+5. Teardown of the emulator and Metro's whole process group, on the failure path
+   as well as the success path.
+
+Flows (`e2e/maestro/`):
+
+- `barcode-scan.yaml` — guest sign-in → Scan tab → camera UI live → scan → product
+  screen.
+- `manual-entry.yaml` — the camera-free manual-entry path (P6-006).
+
+Both `launchApp` with `clearState: true`. The runner's `pm clear` gives a clean
+slate *between runs*; `clearState` gives one *between flows*, which matters because
+each flow signs in as a guest and the second would otherwise inherit the first's
+persisted Supabase session and never see "Continue as Guest".
+
+Both land on an assertion against the product screen's own testIDs
+(`product-screen` / `product-not-found` / `product-offline`), never against the
+barcode string — `4006381333931` is also the manual sheet's `placeholder`, so a
+text assertion stays satisfied when navigation never happened. A flow that can pass
+vacuously is worse than no flow.
+
+**Why the camera flow drives the scan with a deep link.** Maestro cannot control
+what the emulator camera sees, so the pixel-decode step (CameraX → ML Kit) is the
+one link in the chain an on-device test cannot drive. `scan.tsx` therefore has a
+`__DEV__`-only seam: opening `breadsheet://scan?inject=<barcode>` feeds the exact
+same `processScan` path the camera's `onBarcodeScanned` callback uses (validation →
+navigation → product screen), so everything downstream of the decode is exercised
+for real. The seam is dead in release builds. It consumes the param on arrival
+(`router.setParams({ inject: undefined })`) and tracks that in a `useRef`, so a
+re-focus cannot replay the scan — and, critically, the pending scan is **not** torn
+down by the effect cleanup that param change triggers. Clearing it there is a
+self-cancelling scan: `setParams` → `inject` changes → cleanup → `clearTimeout` →
+the injected scan never navigates. The timer is cleared on unmount only.
+
+**Environment overrides:** `MAESTRO_AVD` (a name that doesn't exist is a hard error
+listing the ones that do), `MAESTRO_FLOW`, `MAESTRO_METRO_PORT`,
+`MAESTRO_SKIP_ENV_CHECK=1`, `MAESTRO_PREREQS_ONLY=1` (resolve prerequisites and exit
+0 — a one-second "can this machine run the suite?" check instead of finding out
+mid-build), the `MAESTRO_*_TIMEOUT_MS` budgets, and `MAESTRO_INSTALL=1` to opt **in**
+to the runner installing the Maestro CLI via `curl … | bash`. That install is
+opt-in, not opt-out: piping a remote script into bash is a supply-chain surface, so
+by default the runner fails and prints the command for you to run.
+
+`scripts/test-maestro-wiring.test.js` guards all of this from jest — the npm script
+string, the runner's syntax, flow structure (app id, `clearState`, testID-based
+landing assertions), plus regression tests on the runner's exported helpers (AVD
+discovery works with no cmdline-tools installed; `adb devices` parsing) and
+structural guards for the defects that stopped it completing a run (the Gradle step
+is awaited, adb state calls follow the install, children are spawned onto a real
+file descriptor rather than a not-yet-open `WriteStream`).
+
+**Prerequisites** are the same as `npm run test:e2e`: a reachable Supabase project
+via `bread-sheet-app/.env` (guest sign-in + product lookup). Plus JDK 17+, an
+Android SDK with a system image and an AVD, and the Maestro CLI; the first Gradle
+run downloads dependencies and can take 10–40 minutes. AVDs are discovered with
+`emulator -list-avds`, which every SDK has — *not* `avdmanager list avd`, which
+lives in cmdline-tools that plenty of Android Studio installs lack; `avdmanager` is
+used only to **create** one. On a machine missing a prerequisite the runner names
+exactly which one and how to fix it (exit 2).
