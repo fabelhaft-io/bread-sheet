@@ -176,7 +176,19 @@ The app authenticates to RDS without a stored password. The mechanism:
 
 - **Runtime queries:** `configs/databaseConfig.ts` (when `DB_AUTH=iam`) creates an `@aws-sdk/rds-signer`
   `Signer` and returns an async `password` callback. The `pg.Pool` invokes it on each new physical
-  connection — minting a 15-min IAM auth token (local signing, no network round-trip).
+  connection — minting a 15-min IAM auth token (local signing, no network round-trip). In this mode the
+  config returns **discrete `host`/`port`/`user`/`database` fields, never a `connectionString`**, and
+  `db.ts` passes whichever set it gets. This is load-bearing, not style: `pg` merges the two as
+  `Object.assign({}, config, parse(config.connectionString))`, so the parsed URL overrides everything
+  passed beside it — and `pg-connection-string` *always* emits a `password` key (`''` when the URL has
+  none). Supplying both silently discards the signer callback, and RDS answers
+  `PAM authentication failed for user "breadsheet_iam"` (Prisma `P1010`) on every connection. Because
+  `start.sh` used to `export` the migration token into `DATABASE_URL`, the runtime adopted that
+  15-minute token as a fixed password: the API worked for 15 minutes after each deploy, then 500ed on
+  every route until redeployed. Guarded by the `pg config merge` block in `databaseConfig.test.ts`,
+  which asserts through pg's real `ConnectionParameters`.
+  A `DATABASE_URL` carrying query params is rejected at startup in this mode rather than having them
+  dropped silently — discrete fields cannot carry them.
 - **Migrations:** the Prisma migration engine reads `DATABASE_URL` directly and cannot use the pg.Pool
   callback. The ECS startup script (`scripts/start.sh`) calls `node scripts/rds-token.mjs --database-url`,
   which mints a token *and assembles the whole URL*, before running `npm run db:deploy`. The assembly
@@ -184,7 +196,9 @@ The app authenticates to RDS without a stored password. The mechanism:
   password slot: an RDS auth token is itself shaped like `host:5432/?Action=connect&X-Amz-Signature=...`,
   so interpolating it raw ends the userinfo at its first `/` and Prisma rejects the result with
   `P1013: invalid port number in database URL`. Bare `scripts/rds-token.mjs` still prints the raw token,
-  which is the form to paste at a `psql` password prompt.
+  which is the form to paste at a `psql` password prompt. The token-bearing URL is scoped to the
+  `npm run db:deploy` command and **deliberately not exported** — see the runtime bullet above for what
+  leaking it into the server process cost.
 - **IAM:** the task role has `rds-db:connect` scoped to the DB instance resource ID + the
   `breadsheet_iam` Postgres user (which has the `rds_iam` grant).
 - **TLS:** mandatory for IAM auth. The pg pool verifies the RDS server cert against the CA bundle
@@ -584,13 +598,16 @@ location would share an `express-rate-limit` bucket as CloudFront's own edge IP.
   between "old thing destroyed" and "new thing created and DNS repointed" if anything in between
   fails — plan applies touching DNS-critical renames with that in mind.
 
-**What's live.** The CloudFront/WAF layer — geo-restriction, rate limiting,
-`disable_execute_api_endpoint` — is fully live and is what actually bounds cost; that was the point of
-Phase 2 and it's done. `requireOriginSecret` and the `trust proxy = 2` fix went live with the first
-`dev` deploy after the Phase 2 merge, and that deploy is what exposed the `x-amzn-waf-` prefix bug
-above: the gate enforced correctly and rejected everything, because nothing was sending the header it
-checked for. The `custom_header` fix needs a `terraform apply` (no image rebuild — the running
-container already reads the right name); the `cors` reordering needs a `dev` deploy.
+**What's live.** All of it, as of 2026-09-12. The CloudFront/WAF layer — geo-restriction, rate
+limiting, `disable_execute_api_endpoint` — has been live since 2026-09-09 and is what actually bounds
+cost; that was the point of Phase 2. `requireOriginSecret` and the `trust proxy = 2` fix went live with
+the first `dev` deploy after the Phase 2 merge, and that deploy is what exposed the `x-amzn-waf-` prefix
+bug above: the gate enforced correctly and rejected everything, because nothing was sending the header
+it checked for. The `custom_header` fix (no image rebuild needed) and the `cors` reordering are both
+applied and deployed. Verified against the live edge: `/api/*` through the distribution reaches auth
+(`401`) with CORS headers present, the preflight answers `204`, and the same path straight to
+`origin.dev.bread-sheet.com` — with no header, or with a wrong value — still gets `403 forbidden`. The
+ADR's Phase 2 § "State after the fix" has the full check table.
 
 **One manual step remains.** `EDGE_BYPASS_SECRET` (the CI/keepalive header value) needs copying into
 a GitHub Actions secret — no GitHub provider is configured here, so this isn't automatable from
@@ -1013,8 +1030,9 @@ get an installable build with those modules working end-to-end.
 ### Database Migrations — Ride Along
 
 The container command is `sh scripts/start.sh`, which runs `npm run db:deploy` (Prisma migrations)
-before `node dist/server.js`. When `DB_AUTH=iam`, the script mints an IAM token into `DATABASE_URL`
-first — so the migration engine authenticates with a short-lived token too. Prisma's migration lock
+before `node dist/server.js`. When `DB_AUTH=iam`, the script mints an IAM token into a `DATABASE_URL`
+scoped to that one command — so the migration engine authenticates with a short-lived token too, while
+the server process keeps the passwordless URL and mints its own tokens. Prisma's migration lock
 keeps the brief two-task rolling-deploy overlap safe — no separate migration Job is needed.
 
 ---

@@ -200,7 +200,14 @@ DB_SSL=disabled
 #                migration engine (which reads DATABASE_URL directly). It shells out to
 #                `node scripts/rds-token.mjs --database-url` rather than assembling the URL in
 #                sh: an RDS auth token contains `/`, `?`, `&` and `=`, so it has to be
-#                percent-encoded before it can sit in the password slot of a URL.
+#                percent-encoded before it can sit in the password slot of a URL. That URL is
+#                scoped to the db:deploy command and NOT exported — see below.
+#                In `iam` mode DATABASE_URL must carry no query params (startup error if it does)
+#                and buildDatabaseConfig returns discrete host/port/user/database fields with NO
+#                connectionString. Mutually exclusive on purpose: `pg` merges them as
+#                Object.assign({}, config, parse(connectionString)) and pg-connection-string
+#                always emits a `password` key, so passing both silently discards the async
+#                signer callback and RDS answers P1010 `PAM authentication failed`.
 DB_AUTH=password                              # password | iam  (defaults to password if unset)
 
 # When DB_AUTH=iam, these are used by scripts/start.sh to assemble a token-bearing

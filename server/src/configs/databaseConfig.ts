@@ -1,8 +1,16 @@
 import fs from 'node:fs';
 import { Signer } from '@aws-sdk/rds-signer';
 
+/**
+ * Either `connectionString` OR the discrete `host`/`port`/`user`/`database` set is
+ * populated, never both — see the IAM branch in `buildDatabaseConfig` for why.
+ */
 export interface DatabaseConnectionConfig {
-  connectionString: string;
+  connectionString?: string;
+  host?: string;
+  port?: number;
+  user?: string;
+  database?: string;
   ssl: false | { ca: string; rejectUnauthorized: true };
   password?: () => Promise<string>;
 }
@@ -57,14 +65,32 @@ export function buildDatabaseConfig(
   const ssl = { ca, rejectUnauthorized: true } as const;
 
   if (authMode === 'iam') {
-    const { hostname, port, username } = parseDatabaseUrl(connectionString);
+    const { hostname, port, username, database } = parseDatabaseUrl(connectionString);
     const region = env.AWS_REGION;
     if (!region) {
       throw new Error('DB_AUTH=iam requires AWS_REGION');
     }
+
+    // Discrete fields, deliberately NOT a connectionString. `pg` merges the two as
+    //   config = Object.assign({}, config, parse(config.connectionString))
+    // so the parsed URL wins over anything passed alongside it — and
+    // `pg-connection-string` ALWAYS emits a `password` key, `''` for a URL with no
+    // password. Passing both therefore silently replaces the signer callback below
+    // with an empty password: the token is never minted and RDS answers
+    // `PAM authentication failed for user "<user>"` on every connection.
+    if (connectionString.includes('?')) {
+      throw new Error(
+        `DB_AUTH=iam does not support query parameters in DATABASE_URL (found "${connectionString.slice(connectionString.indexOf('?'))}"). ` +
+          'IAM auth connects via discrete pg fields, which cannot carry them — map the parameter onto a Pool option in db.ts instead.',
+      );
+    }
+
     const signer = new Signer({ hostname, port, username, region });
     return {
-      connectionString,
+      host: hostname,
+      port,
+      user: username,
+      database,
       ssl,
       password: () => signer.getAuthToken(),
     };
@@ -94,12 +120,18 @@ export function parseDatabaseUrl(url: string): {
   hostname: string;
   port: number;
   username: string;
+  database: string;
 } {
-  const match = url.match(/^postgresql:\/\/([^:@]+)(?::[^@]*)?@([^/:]+):(\d+)\//);
+  const match = url.match(/^postgresql:\/\/([^:@]+)(?::[^@]*)?@([^/:]+):(\d+)\/([^?/]+)/);
   if (!match) {
     throw new Error(
       'Cannot parse DATABASE_URL for IAM auth. Expected: postgresql://user@host:port/db',
     );
   }
-  return { username: match[1], hostname: match[2], port: Number(match[3]) };
+  return {
+    username: decodeURIComponent(match[1]),
+    hostname: match[2],
+    port: Number(match[3]),
+    database: decodeURIComponent(match[4]),
+  };
 }

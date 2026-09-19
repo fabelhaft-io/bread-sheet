@@ -888,13 +888,24 @@ did, it rejected everything.
   from an unreachable server — put every middleware that can reject *below* `cors`, or accept that its
   rejections will be reported to users as connectivity failures.
 
-**State after the fix.** The CloudFront/WAF layer (geo, rate limit, `disable_execute_api_endpoint`) has
-been live and bounding cost since 2026-09-09 and was never affected by either bug — it was only ever
-the origin-secret defence-in-depth check that was broken, and it was broken *closed*, so the residual
-it exists to cover ("someone finds `origin.dev.bread-sheet.com`") was never open. Restoring service
-needs a `terraform apply` only: the running image already checks the correct header name, so moving the
-insertion to the distribution fixes it without a rebuild. The `cors` reorder ships with the next `dev`
-deploy and changes no behaviour beyond making future rejections legible.
+**State after the fix — applied and verified 2026-09-12.** The CloudFront/WAF layer (geo, rate limit,
+`disable_execute_api_endpoint`) had been live and bounding cost since 2026-09-09 and was never affected
+by either bug: only the origin-secret defence-in-depth check was broken, and it was broken *closed*, so
+the residual it covers ("someone finds `origin.dev.bread-sheet.com`") was never open. The
+`custom_header` move needed no image rebuild — the running container already checked the correct name —
+and the `cors` reorder shipped with the following `dev` deploy. Verified against the live edge:
+
+| Check | Result |
+|---|---|
+| `GET /api/products/:barcode` via `server.dev.bread-sheet.com` | `401 Authorization header missing` — past the gate, and carrying `Access-Control-Allow-Origin` |
+| `OPTIONS` preflight, same path | `204` with `Allow-Origin` / `-Methods` / `-Headers` |
+| `GET /api/...` straight to `origin.dev.bread-sheet.com` | `403 forbidden` — no `Via: CloudFront`, so genuinely bypassed the distribution and was refused |
+| Same, with `X-Origin-Verify` set to a wrong value | `403 forbidden` |
+| Raw `*.execute-api` URL | API Gateway's own `{"message":"Not Found"}` — still disabled |
+| `GET /` via the distribution | `200` |
+
+The gate now discriminates in the intended direction: traffic through CloudFront passes, traffic around
+it does not.
 
 ## Implementation
 
@@ -912,7 +923,7 @@ Phase 1 is in progress in parallel with this ADR. Order matters where noted.
 | 7 | **L4** — GCP budget → Pub/Sub → billing-detach function at \$40; `aws_budgets_budget_action` stopping RDS at 150% | GCP, `../../terraform/backstops-budget.tf` | ✅ applied; wiring verified with synthetic under-budget messages (real detach path deliberately never exercised) |
 | 8 | Raise `GEMINI_DAILY_CALL_CAP` on `dev` to 300 once step 2 confirms ~\$0.0036/call | task env | ✅ |
 | P2 | **Phase 2** — API distribution on Free plan 2: WAF geo `DE` + rate rule + origin-secret header, `disable_execute_api_endpoint`, `us-east-1` cert, DNS alias; CI allow path | `terraform/`, `server/app.ts`, `.github/workflows/test-native-e2e.yml` | ✅ infra applied and verified; ☐ Free plan console step; ☐ `EDGE_BYPASS_SECRET` copied to GitHub |
-| P2a | **Phase 2 fix** — origin-secret header moves from WAF `insert_header` (arrives prefixed `x-amzn-waf-`, matched nothing, 403'd all API traffic) to the distribution's origin `custom_header`; `cors` reordered above the gates so such a rejection reads as 403 rather than as offline; regression test on the ordering | `terraform/dev-geo-restriction.tf`, `server/src/app.ts`, `server/src/app.test.ts` | ☐ `terraform apply` (fixes it — no image rebuild needed); ☐ `dev` deploy for the `cors` reorder |
+| P2a | **Phase 2 fix** — origin-secret header moves from WAF `insert_header` (arrives prefixed `x-amzn-waf-`, matched nothing, 403'd all API traffic) to the distribution's origin `custom_header`; `cors` reordered above the gates so such a rejection reads as 403 rather than as offline; regression test on the ordering | `terraform/dev-geo-restriction.tf`, `server/src/app.ts`, `server/src/app.test.ts` | ✅ applied and deployed 2026-09-12, verified end to end (see § Phase 2 verification) |
 
 Steps 1, 3, 4 and 6 are independent of each other and can land in any order; 5 depends on 2 only
 for its *number*, not its code; 8 depends on 2 and 5.
