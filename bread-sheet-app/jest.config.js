@@ -3,7 +3,13 @@ module.exports = {
   preset: 'jest-expo',
   // e2e/ holds Playwright specs (npm run test:e2e), not Jest ones — Playwright's `test`
   // refuses to run inside a Jest process, so they must stay out of Jest's test match.
-  testPathIgnorePatterns: ['/node_modules/', '<rootDir>/e2e/'],
+  // Plain '/e2e/' rather than '<rootDir>/e2e/': these are REGEXes, and rootDir is
+  // interpolated into them verbatim. A checkout whose absolute path contains a
+  // regex metacharacter — e.g. a worktree directory named `fix+something`, where
+  // `x+` stops matching a literal '+' — silently fails to match, and Jest then
+  // tries to run the Playwright specs, which abort with "Playwright Test needs
+  // to be invoked via 'npx playwright test'".
+  testPathIgnorePatterns: ['/node_modules/', '/e2e/'],
   moduleNameMapper: {
     // Resolve @/* path alias defined in tsconfig.json
     '^@/(.*)$': '<rootDir>/$1',
