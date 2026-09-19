@@ -155,6 +155,120 @@ describe('ScanScreen', () => {
     expect(cameraProps.onBarcodeScanned).toBeUndefined();
   });
 
+  /**
+   * The code that has just been acted on must not fire again while it is still
+   * in front of the lens. Pressing back from the product screen returns the
+   * user to a camera pointed at the barcode they just rated, and re-navigating
+   * on sight made the scan tab impossible to leave — which is how "back" from
+   * the rating success card appeared to land on the rating screen again.
+   */
+  describe('re-scan suppression', () => {
+    const CODE = '4006381333931';
+
+    function scan(data: string) {
+      fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data });
+    }
+
+    it('ignores the same code for as long as it keeps being seen', () => {
+      render(<ScanScreen />);
+
+      scan(CODE);
+      expect(mockRouter.push).toHaveBeenCalledTimes(1);
+
+      // Each sighting refreshes the suppression window, so a code parked in
+      // front of the camera never re-fires — not even once the 2 s burst lock
+      // that used to be the only guard has expired.
+      for (let i = 0; i < 5; i++) {
+        act(() => {
+          jest.advanceTimersByTime(1000);
+        });
+        scan(CODE);
+      }
+
+      expect(mockRouter.push).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-arms the same code once it has been out of frame', () => {
+      render(<ScanScreen />);
+
+      scan(CODE);
+      expect(mockRouter.push).toHaveBeenCalledTimes(1);
+
+      // No sightings for longer than the re-arm gap: the user took the camera
+      // off the label and put it back, which is a deliberate re-scan.
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      scan(CODE);
+
+      expect(mockRouter.push).toHaveBeenCalledTimes(2);
+    });
+
+    it('never delays a different code', () => {
+      render(<ScanScreen />);
+
+      scan(CODE);
+      act(() => {
+        jest.advanceTimersByTime(2000);
+      });
+      scan('5000112637939');
+
+      expect(mockRouter.push).toHaveBeenNthCalledWith(2, '/(app)/product/5000112637939');
+    });
+
+    it('never suppresses the dev injection seam, which is a deliberate request', () => {
+      // The Maestro flows drive `breadsheet://scan?inject=<barcode>`; asking for
+      // a code by name is not the camera re-reporting a label that never left
+      // the frame, so it must go through even while that code is suppressed.
+      mockParamsState = { inject: CODE };
+      render(<ScanScreen />);
+      // The seam defers past the router's deep-link update via setTimeout(0).
+      act(() => {
+        jest.advanceTimersByTime(0);
+      });
+      expect(mockRouter.push).toHaveBeenCalledTimes(1);
+
+      // The camera never stopped looking at it. Each of these sightings is
+      // swallowed and refreshes the suppression window, so by the time the
+      // burst lock expires the code is still very much suppressed.
+      for (let i = 0; i < 5; i++) {
+        act(() => {
+          jest.advanceTimersByTime(500);
+        });
+        scan(CODE);
+      }
+      expect(mockRouter.push).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        applyMockParams({ inject: CODE });
+      });
+      act(() => {
+        jest.runAllTimers();
+      });
+
+      expect(mockRouter.push).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not re-open the manual sheet for the code that opened it', () => {
+      render(<ScanScreen />);
+
+      // An ITF-14 case code: the sheet opens pre-filled instead of navigating.
+      scan('14006381333931');
+      expect(screen.getByTestId('manual-barcode-input')).toBeTruthy();
+
+      // Dismissing it re-enables the camera, which is still looking at that
+      // same unreadable code.
+      fireEvent.press(screen.getByTestId('manual-barcode-backdrop'));
+      act(() => {
+        jest.advanceTimersByTime(1000);
+      });
+      scan('14006381333931');
+
+      expect(screen.queryByTestId('manual-barcode-input')).toBeNull();
+      expect(mockRouter.push).not.toHaveBeenCalled();
+    });
+  });
+
   // TICKET-P9-003 — the dev-only injection seam the Maestro E2E flow drives via
   // `breadsheet://scan?inject=<barcode>`: it must go through the same routing as
   // a real camera scan, not a separate test-only code path.

@@ -16,6 +16,7 @@ const mockRouter = {
   push: jest.fn(),
   replace: jest.fn(),
   back: jest.fn(),
+  navigate: jest.fn(),
 };
 const mockUseLocalSearchParams = jest.fn(() => ({ barcode: '0000000000001' }));
 const mockUseSession = jest.fn();
@@ -465,5 +466,82 @@ describe('ProductScreen — existing rating pre-fill', () => {
     const { findByText } = render(<ProductScreen />);
     await findByText('Update Rating');
     await findByText('7.0');
+  });
+});
+
+/**
+ * The way out of the success card.
+ *
+ * The card is a state of this screen, not a route, so `router.back()` sent the
+ * user wherever they entered from — after a scan, the camera still pointed at
+ * the barcode they had just rated, which scanned it again and dropped them
+ * right back on the rating form. The exit has to be an explicit destination.
+ */
+describe('ProductScreen — leaving the success card', () => {
+  const PRODUCT = {
+    id: 'p1',
+    barcode: '0000000000001',
+    name: 'Sourdough Loaf',
+    brand: 'Artisan',
+    image: null,
+    description: null,
+  };
+
+  beforeEach(() => {
+    mockApiGet.mockReset();
+    mockApiPost.mockReset();
+    mockUseSession.mockReset();
+    // The router mock is module-level: without this, one test's navigation is
+    // still on record in the next one.
+    mockRouter.navigate.mockClear();
+    mockRouter.back.mockClear();
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'u1', is_anonymous: false } },
+      isAnonymous: false,
+      isLoading: false,
+    });
+    mockProductAndNoExistingRating(PRODUCT);
+    mockApiPost.mockResolvedValue(ratingEntry(PRODUCT, 5, null));
+  });
+
+  async function submitRating() {
+    const view = render(<ProductScreen />);
+    await view.findByText('Sourdough Loaf');
+    fireEvent.press(view.getByText('Submit Rating'));
+    await view.findByTestId('rating-submitted');
+    return view;
+  }
+
+  it('sends the user to the Home tab instead of popping back to the scanner', async () => {
+    const { getByTestId } = await submitRating();
+
+    fireEvent.press(getByTestId('rating-submitted-home'));
+
+    expect(mockRouter.navigate).toHaveBeenCalledWith('/(tabs)');
+    expect(mockRouter.back).not.toHaveBeenCalled();
+  });
+
+  it('offers a way back to the product itself, which returns the rating form', async () => {
+    const { getByTestId, findByTestId, queryByTestId } = await submitRating();
+
+    fireEvent.press(getByTestId('rating-submitted-back-to-product'));
+
+    await findByTestId('product-screen');
+    expect(queryByTestId('rating-submitted')).toBeNull();
+    expect(mockRouter.navigate).not.toHaveBeenCalled();
+  });
+
+  it('retires the success card when the screen is left, so it cannot come back stale', async () => {
+    const { unmount } = await submitRating();
+
+    // The focus-effect cleanup runs on blur as well as unmount; the mocked
+    // `useFocusEffect` exposes it as the effect cleanup, so unmounting is how a
+    // unit test reaches it. It must not throw, and re-rendering the screen has
+    // to land on the form.
+    unmount();
+
+    const { findByText, queryByTestId } = render(<ProductScreen />);
+    await findByText('Sourdough Loaf');
+    expect(queryByTestId('rating-submitted')).toBeNull();
   });
 });
