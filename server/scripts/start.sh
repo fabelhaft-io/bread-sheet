@@ -10,9 +10,14 @@ if [ "$DB_AUTH" = "iam" ]; then
   # The script assembles the URL itself: the token has to be percent-encoded
   # before it can sit in the password slot (it contains `/`, `?`, `&` and `=`),
   # which is not something POSIX sh can do cleanly.
-  DATABASE_URL=$(node scripts/rds-token.mjs --database-url)
-  export DATABASE_URL
+  #
+  # Scoped to this one command on purpose — NOT exported. A token lives 15 minutes;
+  # leaking it into the server's environment gives the runtime a connection string
+  # that still carries a password, and `pg` prefers that over the async signer
+  # callback (see db.ts). Every connection after the first 15 minutes then fails
+  # with `PAM authentication failed`.
+  DATABASE_URL=$(node scripts/rds-token.mjs --database-url) npm run db:deploy
+else
+  npm run db:deploy
 fi
-
-npm run db:deploy
 exec node dist/server.js

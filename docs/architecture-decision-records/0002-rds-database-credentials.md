@@ -89,6 +89,35 @@ the worst of both relative to A (simplicity) and C (no secret, no cost).
 >   application privileges (schema ownership, table grants).
 > - The SSM `DATABASE_URL` SecureString stays (rollback); delete once IAM auth is stable.
 
+> **Correction (2026-09-19 — the callback was never reaching `pg`):** the design above was right and
+> the implementation looked right, but IAM auth was broken in production: every request returned `500`
+> with Prisma `P1010` / `DatabaseAccessDenied` and
+> `PAM authentication failed for user "breadsheet_iam"`.
+>
+> Two mistakes compounded:
+>
+> 1. `db.ts` passed **both** `connectionString` and the `password` callback to `new Pool(...)`. `pg`
+>    merges them as `Object.assign({}, config, parse(config.connectionString))` — the parsed URL wins —
+>    and `pg-connection-string` always emits a `password` key (`''` for a URL with no password). The
+>    signer callback was therefore **silently discarded on every connection** and never invoked once.
+> 2. `scripts/start.sh` `export`ed the token-bearing `DATABASE_URL` it built for the migration engine,
+>    so the server process inherited it. Combined with (1), the runtime authenticated with the
+>    **boot-time token, frozen as a static password**. Tokens live 15 minutes: the API worked for 15
+>    minutes after each deploy, then failed on every route until the next deploy — which is what made
+>    it read as an intermittent infrastructure fault rather than a code bug.
+>
+> **Fix.** In `iam` mode `buildDatabaseConfig` now returns discrete `host`/`port`/`user`/`database`
+> fields and **no `connectionString`**; `db.ts` spreads whichever set it receives. `start.sh` scopes the
+> token URL to the `npm run db:deploy` command instead of exporting it. A `DATABASE_URL` with query
+> params is now a startup error in this mode rather than a silent drop, per the repo's fail-fast rule.
+>
+> **Testing lesson worth keeping.** The existing unit test asserted `typeof cfg.password === 'function'`
+> and passed throughout — the config object was always correct; `pg` was what threw it away. The
+> regression test added in `databaseConfig.test.ts` therefore asserts through pg's real
+> `ConnectionParameters`, and pins the broken shape too so it cannot be reintroduced. When a library
+> silently overrides your config, the contract to test is the library's resolved state, not your input
+> to it.
+
 > **Update (Session 15):** the `@prisma/adapter-pg` driver adapter (`src/db.ts`) is already wired in
 > interim state A — so the TLS half of C is decoupled and **done now**, ahead of the credential
 > migration. The pg pool verifies the RDS server cert against the RDS CA bundle shipped in the image
