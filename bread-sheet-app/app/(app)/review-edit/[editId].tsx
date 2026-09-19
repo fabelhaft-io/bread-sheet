@@ -146,8 +146,6 @@ export default function ReviewEditScreen() {
   const unchangedFields = Object.keys(edit.originalValues).filter(
     (f) => !changedFields.includes(f),
   );
-  const approvalsLeft = Math.max(0, APPROVALS_NEEDED - edit.approvals);
-
   const display = (v: string | number | null | undefined) =>
     v === null || v === undefined || v === '' ? 'Not provided' : String(v);
 
