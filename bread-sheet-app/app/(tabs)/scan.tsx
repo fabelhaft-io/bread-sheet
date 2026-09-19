@@ -15,10 +15,27 @@ import { isValidBarcode, sanitizeBarcodeInput } from '@/features/products/barcod
  */
 const BARCODE_TYPES = ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'itf14'] as const;
 
+/**
+ * How long a code we already acted on stays spent while it keeps being seen.
+ *
+ * Leaving the product screen (or closing the manual sheet) hands the camera
+ * back the very label that opened it, and the scanner would re-fire on the
+ * first frame — re-opening the screen the user is trying to leave, which makes
+ * the scan tab impossible to get out of while the barcode is in view. Each
+ * sighting refreshes the timer, so a code parked in front of the lens stays
+ * spent indefinitely; taking the camera off it for longer than this re-arms it,
+ * which is what a deliberate re-scan of the same product looks like. A
+ * *different* code is never delayed.
+ */
+const RESCAN_GAP_MS = 1500;
+
 export default function ScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const router = useRouter();
   const scanLock = useRef(false);
+  // The code we last acted on and when we last saw it. Refreshed by the camera
+  // (which re-reports a visible code every frame) and by re-entering the screen.
+  const spentScan = useRef<{ data: string; seenAt: number } | null>(null);
   const [torchOn, setTorchOn] = useState(false);
   const [scanningActive, setScanningActive] = useState(true);
   const [manualVisible, setManualVisible] = useState(false);
@@ -30,6 +47,10 @@ export default function ScanScreen() {
   useFocusEffect(
     useCallback(() => {
       setScanningActive(true);
+      scanLock.current = false;
+      // Returning counts as a sighting: the code we just navigated to is still
+      // in frame, and must not fire again the moment the camera wakes up.
+      if (spentScan.current) spentScan.current.seenAt = Date.now();
       return () => {
         setScanningActive(false);
         scanLock.current = false;
@@ -46,15 +67,39 @@ export default function ScanScreen() {
   const closeManualEntry = useCallback(() => {
     setManualVisible(false);
     scanLock.current = false;
+    // Dismissing the sheet re-enables the camera on the same unreadable code;
+    // count it as a sighting so the sheet doesn't spring straight back open.
+    if (spentScan.current) spentScan.current.seenAt = Date.now();
   }, []);
 
   // What happens when a barcode is read, whether the camera decoded it or a
   // dev-only test seam injected it (TICKET-P9-003). Both callers go through
   // here so the two paths can never drift apart.
   const processScan = useCallback(
-    (data: string) => {
+    (data: string, deliberate = false) => {
+      // A code we already acted on that never left the frame — ignore it rather
+      // than navigating back on top of the screen the user just came from. This
+      // is checked BEFORE the burst lock: a suppressed sighting still has to
+      // refresh the timer, or the code would re-arm itself while the lock is
+      // swallowing the very frames that prove it is still in view.
+      //
+      // `deliberate` callers — today only the dev injection seam below — are
+      // exempt: the suppression filters a label the camera keeps re-reporting,
+      // and someone asking for a code by name is not that.
+      const now = Date.now();
+      const spent = spentScan.current;
+      const isSpent = spent !== null && spent.data === data;
+      if (!deliberate && isSpent && now - spent.seenAt < RESCAN_GAP_MS) {
+        spent.seenAt = now;
+        return;
+      }
+
       if (scanLock.current) return;
+
       scanLock.current = true;
+      // Either a new code, or one that was out of frame long enough to count as
+      // a deliberate re-scan.
+      spentScan.current = { data, seenAt: now };
 
       // A code the server would reject with `400 Invalid barcode format` — an
       // ITF-14 case code, a CODE-128 label, a partial read. Hand the user the
@@ -69,7 +114,8 @@ export default function ScanScreen() {
       }
 
       router.push(`/(app)/product/${data}`);
-      // Reset lock after navigation so back-press can scan again.
+      // Release the burst lock after navigation. Re-scanning the same code is
+      // governed by RESCAN_GAP_MS above, not by this timer.
       setTimeout(() => { scanLock.current = false; }, 2000);
     },
     [router]
@@ -117,7 +163,7 @@ export default function ScanScreen() {
     // synchronous cascading render, and past the router's deep-link update.
     injectTimer.current = setTimeout(() => {
       injectTimer.current = null;
-      processScan(inject);
+      processScan(inject, true);
     }, 0);
   }, [inject, processScan, router]);
 

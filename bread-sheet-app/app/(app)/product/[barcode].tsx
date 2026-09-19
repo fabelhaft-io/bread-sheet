@@ -438,11 +438,29 @@ export default function ProductScreen() {
     useCallback(() => {
       if (!focusedBefore.current) {
         focusedBefore.current = true;
-        return;
+      } else {
+        void refreshProduct();
       }
-      void refreshProduct();
+      // Leaving retires the success card. It is a *state* of this screen, not a
+      // route of its own, so without this a user who navigates away and comes
+      // back to the same product is met by a stale "Rating Submitted!" instead
+      // of the form — with no way to reach the form short of a cold start.
+      return () => setSubmitted(false);
     }, [refreshProduct])
   );
+
+  /**
+   * Deliberate exit from the rating flow.
+   *
+   * `router.back()` is wrong here: the product screen sits on the root stack
+   * above the tabs, so back drops the user wherever they entered from — after a
+   * scan that is the camera, still pointed at the barcode they just rated,
+   * which scans it again and returns them to this very screen. `navigate` pops
+   * back to the tab navigator and lands on Home, where the new rating is listed.
+   */
+  const goHome = useCallback(() => {
+    router.navigate('/(tabs)');
+  }, [router]);
 
   const handleSubmit = useCallback(async () => {
     if (!product || submitting) return;
@@ -644,10 +662,20 @@ export default function ProductScreen() {
           </ThemedText>
         ) : null}
         <TouchableOpacity
+          testID="rating-submitted-home"
           style={[styles.button, { backgroundColor: colors.tint }]}
-          onPress={() => router.back()}
+          onPress={goHome}
         >
-          <Text style={[styles.buttonText, { color: colors.background }]}>Go Back</Text>
+          <Text style={[styles.buttonText, { color: colors.background }]}>Done</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="rating-submitted-back-to-product"
+          style={styles.successSecondary}
+          onPress={() => setSubmitted(false)}
+        >
+          <Text style={[styles.successSecondaryText, { color: colors.tint }]}>
+            Back to product
+          </Text>
         </TouchableOpacity>
       </ThemedView>
     );
@@ -999,6 +1027,14 @@ const styles = StyleSheet.create({
   successSubtitle: {
     opacity: 0.6,
     textAlign: 'center',
+  },
+  successSecondary: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  successSecondaryText: {
+    fontSize: 15,
+    fontWeight: '600',
   },
   notFoundBody: {
     fontSize: 15,

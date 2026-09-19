@@ -288,6 +288,19 @@ re-synced by an effect — a pre-filled bad scan is per-opening state.
 `^\d{8,13}$` opens the sheet pre-filled with its digits instead of dead-ending; scanning is suspended
 while the sheet is open.
 
+**Re-scan suppression.** A code the screen has already acted on is remembered (`spentScan`) together
+with the time it was last seen, and is ignored for as long as it keeps being seen — `RESCAN_GAP_MS`
+(1.5 s) since the *last sighting*, not since the navigation. The camera re-reports a visible code every
+frame, so each suppressed sighting pushes the window out and a label parked in front of the lens never
+re-fires; take the camera off it for longer than the gap and the next read counts as a deliberate
+re-scan. Returning to the tab and closing the manual sheet both count as sightings, because both hand
+the camera back the very label that left it. Without this, coming back from the product screen
+re-opened the product on the first frame and the scan tab could not be left at all — which is what made
+"back" from the rating success card look like it returned to the rating screen. The guard is checked
+*before* the 2 s burst lock (a swallowed sighting must still refresh the window, or the lock's own
+silence would re-arm the code), and it applies only to the camera: the `__DEV__` injection seam passes
+`deliberate` and is never suppressed. A *different* code is never delayed.
+
 ---
 
 ## Product Detail & Rating (`app/(app)/product/[barcode].tsx`)
@@ -306,6 +319,8 @@ The product itself is read through `useCachedResource` (see *Offline & Performan
 When a rating is found, the slider and comment field are pre-populated, the section title flips from "How does it taste?" to "Your rating", and the submit button reads "Update Rating". This applies to anonymous users too (P8-003) — their ratings are stored server-side under their anonymous user id, which now survives a restart.
 
 Submission always calls `POST /api/ratings`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven off whether a rating was found before submitting. A `NetworkError` on submit queues the rating in the outbox and reports success ("Saved on this device") rather than an error.
+
+**The success card is a state of this screen, not a route, and its exit has to be an explicit destination.** It offers **Done** → `router.navigate('/(tabs)')`, which pops the root stack back to the tab navigator and lands on Home where the new rating is already listed, plus **Back to product**, which just clears the state and returns the form. `router.back()` was wrong for both: the product screen sits on the root stack above the tabs, so back returns the user wherever they entered from — after a scan that is the camera, still pointed at the barcode they just rated, which scanned it again and put them straight back on the rating form. (The scanner's re-scan suppression, above, closes the other half of that loop, including for the header back button.) Leaving the screen also retires the card via the focus-effect cleanup, so a later visit to the same product opens the form rather than a stale "Rating Submitted!".
 
 For registered users on `VERIFIED` products the screen additionally calls `GET /api/products/:barcode/edits/pending` (failures degrade to "no pending edit") to drive the P5-006 edit entry point and review banner, described below.
 
