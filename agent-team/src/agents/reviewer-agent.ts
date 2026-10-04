@@ -66,11 +66,13 @@ export function createReviewerAgent({
     filesystem: new LocalFilesystem({ basePath: worktreePath }),
     // repoRoot/.git read-only: git status/diff/log against the real object database still
     // work, but the reviewer can't commit either — same reasoning as the implementers (see
-    // frontend-agent.ts). The worktree's own .git pointer file stays read-write as part of
-    // the workspacePath bind, which is harmless (it's never a git write target itself).
+    // frontend-agent.ts). The worktree's own .git pointer file sits inside the workspacePath
+    // bind and must be shadowed read-only too: if it were writable, a sandboxed command could
+    // repoint `gitdir:` at a git directory it controls, and the coordinator's unsandboxed git
+    // calls in that worktree would then run whatever that directory's config tells them to.
     sandbox: hardenedSandbox({
       workspacePath: worktreePath,
-      readOnlyPaths: [path.join(repoRoot, '.git')],
+      readOnlyPaths: [path.join(worktreePath, '.git'), path.join(repoRoot, '.git')],
     }),
     tools: {
       hooks: { beforeToolCall },

@@ -61,6 +61,18 @@ export const BACKEND_EXTRA_PREFIXES = ['docs/bruno/'] as const;
 export const SHARED_READONLY_PATH = 'CLAUDE.md';
 export const SHARED_READONLY_PREFIXES = ['docs/'] as const;
 
+// Secrets-shaped files are never committed, whatever scope they fall in: dotenv files (bar the
+// committed templates), private keys and certificates, signing keystores. Pillar scope is a whole
+// directory tree, and the coordinator stages new untracked directories file by file (see
+// worktree.ts's getChangedFiles), so without this a stray key file written anywhere under
+// `server/` or `bread-sheet-app/` would be committed and pushed with the ticket.
+const SECRET_FILE_RE =
+  /(^|\/)(\.env(\..+)?|.*\.(pem|key|p12|pfx|jks|keystore|mobileprovision)|id_(rsa|ed25519|ecdsa)(\.pub)?)$/i;
+
+export function isSecretPath(file: string): boolean {
+  return SECRET_FILE_RE.test(file) && !/(^|\/)\.env\.example$/.test(file);
+}
+
 export interface InvokedPillars {
   frontend: boolean;
   backend: boolean;
@@ -80,8 +92,9 @@ export function findOutOfPillarFiles(changedFiles: string[], invokedPillars: Inv
 
 /**
  * The real set of files the coordinator is willing to `git add`/commit after an implementer
- * turn — pillar-prefixed files plus each pillar's documented doc exceptions. Anything else a
- * shell command might have touched is simply never staged, regardless of what the implementer's
+ * turn — pillar-prefixed files plus each pillar's documented doc exceptions, minus anything
+ * secrets-shaped (see isSecretPath). Anything else a shell command might have touched is
+ * simply never staged, regardless of what the implementer's
  * self-reported `filesChanged` claims — this is what closes the "agent commits something
  * outside its pillar" gap for good, not just OS-level sandboxing (which stops the write itself,
  * but a determined `write + git commit` in one shell invocation can still smuggle content into
@@ -98,10 +111,12 @@ export function filterCommittableImplementerFiles(changedFiles: string[], invoke
     prefixes.push(PILLAR_PREFIX.backend, ...BACKEND_EXTRA_PREFIXES);
     BACKEND_EXTRA_PATHS.forEach((p) => exactPaths.add(p));
   }
-  return changedFiles.filter((f) => prefixes.some((prefix) => f.startsWith(prefix)) || exactPaths.has(f));
+  return changedFiles.filter(
+    (f) => !isSecretPath(f) && (prefixes.some((prefix) => f.startsWith(prefix)) || exactPaths.has(f)),
+  );
 }
 
 /** Same idea as filterCommittableImplementerFiles, for the reviewer's docs/-and-FEATURES.md scope. */
 export function filterCommittableReviewerFiles(changedFiles: string[]): string[] {
-  return changedFiles.filter((f) => f === 'FEATURES.md' || f.startsWith('docs/'));
+  return changedFiles.filter((f) => !isSecretPath(f) && (f === 'FEATURES.md' || f.startsWith('docs/')));
 }
