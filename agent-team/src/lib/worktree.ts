@@ -94,16 +94,43 @@ function refreshFromBase(worktreePath: string, branch: string, baseBranch: strin
  * an implementer's self-reported filesChanged against what actually happened on disk.
  * Includes uncommitted changes (git diff has no commit yet to compare when an agent hasn't
  * committed), so this is `diff <base>...HEAD` plus working-tree status, deduped.
+ *
+ * Both calls use `-z` and status uses `--untracked-files=all`. Plain `--porcelain` collapses a
+ * new untracked directory to one `dir/` entry — which `git add -- dir/` then stages wholesale,
+ * secrets-shaped files included, without the scope filter ever seeing them — and C-quotes any
+ * path with a space or non-ASCII byte (`"assets/a b.png"`), which then matches no scope prefix
+ * and is silently left uncommitted. For a rename or copy, both the new and the original path
+ * are returned, since the original path's deletion is part of the change too.
  */
 export function getChangedFiles(worktreePath: string, baseBranch: string): string[] {
-  const committed = git(['diff', '--name-only', `${baseBranch}...HEAD`], worktreePath)
-    .split('\n')
+  const committed = git(['diff', '--name-only', '-z', `${baseBranch}...HEAD`], worktreePath)
+    .split('\0')
     .filter(Boolean);
-  const uncommitted = git(['status', '--porcelain'], worktreePath)
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => line.slice(3).trim());
+  const uncommitted = statusEntries(worktreePath).flatMap((e) => (e.origPath ? [e.path, e.origPath] : [e.path]));
   return [...new Set([...committed, ...uncommitted])];
+}
+
+interface StatusEntry {
+  path: string;
+  /** Set for a staged rename or copy: the path it came from. */
+  origPath?: string;
+}
+
+/**
+ * `git status --porcelain=v1 -z --untracked-files=all`: NUL-terminated `XY path` entries,
+ * unquoted; a rename or copy (R/C in either column) is followed by one extra NUL-terminated
+ * entry holding the original path.
+ */
+function statusEntries(worktreePath: string): StatusEntry[] {
+  const entries = git(['status', '--porcelain=v1', '-z', '--untracked-files=all'], worktreePath).split('\0');
+  const result: StatusEntry[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.length < 4) continue;
+    const isRenameOrCopy = /[RC]/.test(entry.slice(0, 2));
+    result.push({ path: entry.slice(3), origPath: isRenameOrCopy ? entries[++i] : undefined });
+  }
+  return result;
 }
 
 /**
@@ -115,8 +142,13 @@ export function getChangedFiles(worktreePath: string, baseBranch: string): strin
  * No-ops (returns false) if `files` is empty or nothing in it actually has a diff to stage.
  */
 export function commitFiles(worktreePath: string, files: string[], message: string): boolean {
-  if (files.length === 0) return false;
-  git(['add', '--', ...files], worktreePath);
+  // Only paths with a pending change can be staged: `git add` fails outright ("pathspec did not
+  // match") on a path that is in neither the index nor the worktree — e.g. a file deleted and
+  // committed in an earlier fix cycle, which getChangedFiles still reports via `base...HEAD`.
+  const pending = new Set(statusEntries(worktreePath).map((e) => e.path));
+  const stageable = files.filter((f) => pending.has(f));
+  if (stageable.length === 0) return false;
+  git(['add', '--', ...stageable], worktreePath);
   const staged = git(['diff', '--cached', '--name-only'], worktreePath).trim();
   if (!staged) return false;
   git(['commit', '-m', message], worktreePath);

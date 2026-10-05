@@ -93,6 +93,28 @@ Two fixes on top of `@mastra/core`'s own bwrap builder, since its default omits 
   manager (nvm here), `npm` is a symlink into a sibling `lib/node_modules/npm/`, invisible
   unless the whole version directory is bound.
 
+**Bind order is load-bearing.** bwrap applies binds in argument order, so a later read-write
+`--bind` of a parent directory re-exposes anything an earlier `--ro-bind` covered inside it.
+`readOnlyPaths` are therefore bound *last*. Until that was fixed they came first, and the
+reviewer — whose workspace is the worktree root — could write the worktree's `.git` pointer file
+on the real disk even though it was meant to be read-only (reproduced: `echo "gitdir: /tmp/evil"
+> .git` exit 0, host file changed). That is a sandbox escape, not a scope slip: a repointed
+`gitdir:` lets a sandboxed command substitute a git directory whose config (e.g.
+`core.fsmonitor`) the coordinator's *unsandboxed* `git status`/`add`/`commit` would then
+execute on the host. The reviewer now binds its own `.git` pointer read-only; the implementers
+were never exposed, because their workspace is the pillar directory, not the worktree root.
+
+**Environment and caches.** `LocalSandbox` passes only the host `PATH` plus the `env` it is
+given — nothing else from `process.env` — so the API keys `config.ts` loads never reach agent
+commands. `hardenedSandbox()` adds a persistent, agent-only cache directory
+(`~/.cache/bread-sheet-agent-team/`, bound read-write) with `HOME`, `npm_config_cache` and
+`XDG_CACHE_HOME` pointing into it, plus `LANG=C.UTF-8`. Without a bound `HOME`, each command
+got an empty, throwaway home on bwrap's ephemeral root and every `npm install` started cold.
+It is deliberately not the user's real `~/.npm`/`~/.cache`, so nothing sandboxed can touch host
+tool state. **No command timeout is enforced:** `@mastra/core` 1.64's `LocalSandbox` declares a
+`timeout` option (documented as a 30 s default) but never reads it, so a command only times out
+when the model passes `timeout` to `execute_command` itself.
+
 Passing `bwrapArgs` to `LocalSandbox` **replaces** Mastra's default argument construction
 rather than extending it, so `hardenedSandbox()` duplicates that default rather than layering
 on top — a coupling risk if `@mastra/core`'s builder changes later. Non-Linux (or bwrap
@@ -111,6 +133,17 @@ only `status`/`diff`/`log`; `add`/`commit`/`push` fail with "Read-only file syst
 coordinator (`coordinator.ts`, unsandboxed, trusted Node code) is the only thing that ever runs
 `git add`/`commit`/`push`/`gh pr create`, working from real, post-agent-turn disk state — an
 out-of-scope write that never persisted has nothing for the coordinator to accidentally stage.
+The changed-file list it filters (`getChangedFiles` in `worktree.ts`) comes from
+`git diff --name-only -z <base>...HEAD` plus `git status --porcelain=v1 -z
+--untracked-files=all`: plain `--porcelain` collapses a new untracked directory to a single
+`dir/` entry (which `git add -- dir/` then stages wholesale, unfiltered) and C-quotes any path
+with a space or non-ASCII byte (which then matches no scope prefix and is silently dropped).
+`commitFiles` stages only paths with a pending change, since `git add` aborts on a path that is
+in neither the index nor the worktree — e.g. a file deleted and committed in an earlier fix
+cycle, which `base...HEAD` still reports. Secrets-shaped files (`.env*` other than
+`.env.example`, `*.pem`/`*.key`/`*.p12`/`*.pfx`/`*.jks`/`*.keystore`, `id_rsa`-style keys —
+`isSecretPath` in `handoff.ts`) are never committed, in any scope, and are reported by the scope
+check instead.
 After each implementer turn it commits only `filterCommittableImplementerFiles`'s result
 (pillar prefixes plus each pillar's documented doc exceptions — `FRONTEND_EXTRA_PATHS`/
 `BACKEND_EXTRA_PATHS`/`BACKEND_EXTRA_PREFIXES` in `handoff.ts`, the same source of truth each
@@ -125,6 +158,13 @@ reviewer's `prTitle`/`prBody`, returning the real URL `gh` prints — not a mode
 using Claude Code's native `Read`/`Edit`/`Write`/`Bash` tools; the reviewer's tool scoping to
 `docs/`/`FEATURES.md` is instruction-enforced (Claude Code has no per-path tool sandbox), and
 the implementers get no `Agent` tool so they can't sub-spawn.
+
+The project's `.claude/settings.json` backs the guardrails up for every Claude Code session
+(coordinator and subagents alike): `gh pr merge` and every force-push form (`--force`, `-f`,
+`--force-with-lease`) are denied outright — a deny rule wins over any broader allow such as a
+personal `Bash(gh pr *)` in `settings.local.json` — and `ssh`/`scp`/`rsync` always ask. Two
+`PreToolUse` hooks block reading or editing `.env*` files other than `.env.example`, through the
+file tools and through Bash.
 
 `.claude/skills/dev-team/SKILL.md` is the coordinator, run inline in whichever Claude Code
 session invokes it. Trigger with:
