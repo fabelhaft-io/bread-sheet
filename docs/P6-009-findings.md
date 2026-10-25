@@ -661,3 +661,168 @@ Seven of eight criteria are met. Criterion 8 fails on B-1 alone, so the `FEATURE
    green because the Supabase config was handed over mid-run and passed inline. The next reviewer in
    a fresh worktree will hit the same wall. Worth deciding whether worktree creation should symlink
    the env files, or whether the harness should export the pair from a single place.
+
+---
+
+## Reviewer re-review after fix cycle 1 — **PASS**
+
+**Reviewed:** `6caab3f` (frontend) and `e45bf53` (server) on top of the review commit `794e715`.
+**Date:** 2026-10-25. **Outcome:** every row of the matrix is green, all eight acceptance criteria
+are met, the `FEATURES.md` boxes are ticked and the PR is opened.
+
+All three findings from cycle 1 were addressed, and I verified each by **execution**, not by reading
+the diff — including re-doing the sabotage tests the backend reported, since a claimed sabotage test
+is exactly the kind of evidence that has to be reproduced rather than trusted.
+
+### Worktree integrity
+
+The worktree directory vanished mid-cycle and was re-created (`git worktree prune` + `git worktree
+add`, then `npm ci` in both packages). Checked and sound: `git worktree list` shows exactly the two
+expected entries with `~/IdeaProjects/bread-sheet-agent-P6-009` at `e45bf53 [agent/P6-009]`,
+`git status` is clean, both `node_modules` trees are present, and all four suites run from them.
+Nothing was lost — `git log` still shows the full five-commit chain (`4943d71`, `1d25f63`, `794e715`,
+`6caab3f`, `e45bf53`).
+
+### Test matrix — fix cycle 1
+
+| # | Command (cwd) | Exit | Result |
+|---|---|---|---|
+| 1 | `npm run typecheck` (`server/`) | 0 | PASS |
+| 2 | `npm run lint` (`server/`) | 0 | PASS — see "the phantom lint failure" below |
+| 3 | `npm test` (`server/`) | 0 | PASS — 33 files, 374 tests |
+| 4 | `npm run typecheck` (`bread-sheet-app/`) | **0** | **PASS — B-1 fixed** (was exit 2 with 2 × TS2345) |
+| 5 | `npm run lint` (`bread-sheet-app/`) | 0 | PASS |
+| 6 | `npm test` (`bread-sheet-app/`) | 0 | PASS — 30 suites, 309 tests |
+| 7 | `npx playwright test` (Supabase config inline, local API on :3000) | **0** | **PASS — 2 passed (5.9 s)** |
+| 8 | `npm run test:maestro` — **full native run** (config inline, `EXPO_PUBLIC_API_URL=http://10.0.2.2:3000`) | **0** | **PASS — 2/2 flows: `barcode-scan` 23 s, `manual-entry` 23 s** |
+| 9 | Sabotage test of each hardened assertion (3 ×, in a throwaway worktree) | — | PASS — each fails without its visibility filter, detail below |
+| 10 | Live API re-check of the N-1 behaviour against real Postgres | — | PASS — table below |
+| 11 | `prisma migrate deploy` on a fresh database for the e2e run | 0 | PASS — all 13 migrations |
+
+The Maestro run again produced the two-hop sequence in the server log, once per flow, now against a
+brand-new empty database (so the first hop really did fetch from Open Food Facts and create both
+rows):
+
+```
+22:25:20.669 GET /api/products/gtin/4006381333931                    200
+22:25:21.235 GET /api/products/5b47e150-7ff3-4bb4-8a0c-1c0fdc54aabe  200
+22:25:42.461 GET /api/products/gtin/4006381333931                    200
+22:25:42.882 GET /api/products/5b47e150-7ff3-4bb4-8a0c-1c0fdc54aabe  200
+```
+
+### B-1 — fixed
+
+`6caab3f` completes the `PRODUCT` fixture's `packaged` to a full `PackagedDetails` (all eleven
+fields) in `app/(app)/product/product-screen-offline.test.tsx`. `npm run typecheck` — the command
+that caught it, covering both `tsconfig.json` and `tsconfig.test.json` — now exits 0.
+
+### N-1 — fixed, and it closed a latent bug
+
+`e45bf53` adds `isProductVisible(product, user)` to `productVisibility.ts` and switches
+`getProductByGtin` to it, so the `REJECTED`-is-invisible rule now has exactly one implementation.
+
+The implementer's choice of a **predicate** rather than reusing `visibleProductWhere` as a filter is
+not a shortcut, it is the correct call, and it prevents a real defect. The lookup must distinguish
+"no such GTIN" from "exists but invisible": a *filtered* `findFirst` would have returned `null` for a
+`REJECTED` row, fallen through to the Open Food Facts re-fetch, hit `P2002` on the unique `gtin`, and
+then — via the concurrent-first-scan re-read added in `4943d71` — returned the `REJECTED` product
+with **`200`**. Fetching unfiltered and applying the predicate avoids that path entirely. Verified
+live against real Postgres:
+
+| Request on a `REJECTED` row (repeated) | Got |
+|---|---|
+| `GET /api/products/gtin/4006381333931` ×2 | **404**, **404** |
+| `GET /api/products/<that id>` | **404** |
+| `Product` / `PackagedProduct` row count afterwards | **1 / 1** — no duplicate created, no OFF re-fetch, no `P2002` |
+
+Grep now finds every product read going through the helper in one of its two forms
+(`visibleProductWhere` or `isProductVisible`); nothing re-types `status === 'REJECTED'` inline.
+
+### N-2 — fixed, and independently sabotage-tested
+
+The backend reported sabotage-testing each assertion. I reproduced it rather than taking it on trust,
+in a **throwaway detached worktree** (`git worktree add --detach` at `e45bf53`, with
+`server/node_modules` and the gitignored `src/generated` symlinked in) so the review worktree was
+never modified — the reviewer stays read-only on `server/`. Baseline there: 41 tests, 2 files, green.
+Each sabotage was reverted with `git checkout` before the next.
+
+| Sabotage | Expected | Observed |
+|---|---|---|
+| Drop `...visibleProductWhere()` from `productVerificationService.castVote` (`:36`) | the REJECTED test fails | **1 failed, 9 passed** — `× throws ProductNotFoundError when the product is REJECTED (invisible)`, `AssertionError: expected "vi.fn()" to be called with arguments`, diff shows the missing `"not": "REJECTED"` |
+| Drop `...visibleProductWhere(user)` from `assertProductVisible` (what `getPendingEdit` uses) | the REJECTED test fails | **1 failed, 30 passed** — `× throws ProductNotFoundError for a REJECTED (invisible) product`, same missing-`not` diff; `productVisibility.test.ts` also drops to 1 failed / 4 passed |
+| Remove the `isProductVisible` gate from `getProductByGtin` (N-1's own coverage) | the GTIN REJECTED test fails | **1 failed, 21 passed** — `× returns 404 for a REJECTED product to a registered caller` |
+
+In every case **only** the visibility test failed, so the assertions are precise as well as
+load-bearing. The throwaway worktree was removed afterwards (`git worktree remove --force`) and
+`git worktree list` plus a clean `git status` confirm the review worktree was untouched.
+
+The `productEditController` case was relabelled
+`maps the service ProductNotFoundError (raised for a REJECTED/invisible product) to 404` with a
+comment stating it is controller error-mapping coverage, not visibility coverage. That is the honest
+description of what a test with a mocked service can assert, and it is the right fix.
+
+### N-3 — fixed
+
+`CLAUDE.md`'s "Test mocks" paragraph now reads `product/[id].tsx`.
+
+### The phantom `npm run lint` failure — artifact, proven, not a real failure
+
+The backend reported `npm run lint` in `server/` intermittently printing *"86 errors, 0 warnings in 4
+files"* against `measure-gemini-latency.mjs`, `rds-token.mjs`, `rds-token.test.mjs` and `build.mjs`.
+I reproduced it and tracked it down. It is **not** a failure of this project's lint command:
+
+- `server/package.json`'s script is `eslint "src/**/*.ts"`. Running that exact command through the
+  binary directly — `node ./node_modules/eslint/bin/eslint.js "src/**/*.ts"` — exits **0** with no
+  output.
+- `npm run lint` with stdout redirected to a file exits **0**, and npm's own echo confirms the real
+  command: `npm notice run eslint "src/**/*.ts"`.
+- `npm run lint` with stdout attached interactively exits **1** and prints the 86 errors — and npm's
+  echo then shows a *different*, rewritten invocation (`'eslint' -f json … .`). The cause is an
+  environment-level CLI proxy (`rtk`, `/home/jano/.local/bin/rtk`, whose `lint` subcommand is
+  "ESLint with grouped rule violations") intercepting the call and linting `.` instead of the
+  script's glob.
+- The four flagged files are `.mjs` scripts that the flat config never gave Node globals to, so they
+  produce `no-undef` wall-to-wall. **None is touched by P6-009** — the only `scripts/` file this
+  branch adds is `verify-product-split.sql`, which is not linted.
+- It is pre-existing, not a regression: the same probe on `main` reports *more* (97 problems,
+  additionally `server/lambda/imageResizer/index.js`).
+
+So the lint row is a genuine PASS. Two follow-ups fall out of it, neither in this ticket's scope:
+`server/scripts/*.mjs` and `server/lambda/**` should either get Node globals in the flat config or be
+explicitly ignored, so that a whole-directory `eslint .` is clean; and agents on this machine should
+be aware that `rtk` rewrites some tool invocations, which is exactly how a stale, unrelated failure
+can look like it belongs to the ticket under review.
+
+### Acceptance criteria — final
+
+All eight **MET**. The two that were short in cycle 1:
+
+- **#6** (every product read goes through `productVisibility`; a test asserts `REJECTED` → `404`) —
+  now fully met: the inline check is gone (N-1), the three weak tests assert the filtered `where`
+  clause, and all three were sabotage-tested (N-2).
+- **#8** (both suites pass; Playwright and Maestro pass against the new routes) — now fully met:
+  server and app typecheck/lint/test all green, Playwright 2/2, Maestro 2/2 on a real emulator
+  against a local API and a freshly migrated database.
+
+Criterion #3's "a failure leaves neither" remains **structural** (both writes inside one
+`prisma.$transaction`, and no product write anywhere outside a transaction), stated as such because
+the suite mocks Prisma and this repo has no integration harness to drive a mid-transaction failure.
+Everything else was executed.
+
+### Follow-ups carried out of this ticket (not blocking)
+
+1. **N-5** — a `CUSTOM` product's nutrition section does not exist yet because the product screen has
+   never had one; the `packaged`-null branch that did land is the barcode chip. Real nutrition
+   rendering arrives with P6-007.
+2. **N-6** — no Playwright spec drives the resolver on web; the on-device Maestro run is what covers
+   it. A small web spec for `/(app)/product/gtin/<gtin>` → `product/<id>` would make the Playwright
+   suite meaningful here.
+3. **N-7** — `GET /api/users/me/ratings` still does not filter `REJECTED` products out of a user's
+   own history. Unchanged from `main`, arguably correct, noted only for completeness.
+4. **`GET /api/ratings/product/:productId`** — re-keyed rather than left alone (a necessity, since
+   `Product.barcode` is gone), unused by the app, visibility-guarded. P6-002 owns its removal.
+5. **Lint scope** — `server/scripts/*.mjs` and `server/lambda/**` are outside the flat config's
+   globals, so a whole-directory `eslint .` reports ~97 pre-existing `no-undef` errors.
+6. **Reproducible e2e prerequisites** — both e2e suites need the Supabase pair supplied; a fresh
+   worktree has no env files and the next run will hit the same wall unless worktree creation
+   symlinks them or the harness exports the pair.

@@ -1306,21 +1306,21 @@ where custom items can't hold them, and lets P6-007 add custom items without a s
 to implemented.
 
 **Acceptance Criteria:**
-- [ ] `Product` holds no GTIN, nutrition or ingredient columns; `PackagedProduct` holds them, 1:1 by
+- [x] `Product` holds no GTIN, nutrition or ingredient columns; `PackagedProduct` holds them, 1:1 by
       `productId`, with `gtin` unique.
-- [ ] The migration preserves every existing product, rating, verification and edit, and every existing
+- [x] The migration preserves every existing product, rating, verification and edit, and every existing
       row ends up `kind: PACKAGED` with exactly one `PackagedProduct`.
-- [ ] Creating a packaged product (OFF fetch or user submission) writes both rows in one transaction; a
+- [x] Creating a packaged product (OFF fetch or user submission) writes both rows in one transaction; a
       failure leaves neither.
-- [ ] Every product route is keyed by `Product.id`; `GET /api/products/gtin/:gtin` is the only way to
+- [x] Every product route is keyed by `Product.id`; `GET /api/products/gtin/:gtin` is the only way to
       resolve a GTIN, and keeps today's `400` / OFF-fetch / `404` behaviour.
-- [ ] `ProductEdit` references `productId`, and the one-pending-edit-per-product rule still holds at the
+- [x] `ProductEdit` references `productId`, and the one-pending-edit-per-product rule still holds at the
       database layer.
-- [ ] Every product read goes through `productVisibility`; a test asserts that a `REJECTED` product is
+- [x] Every product read goes through `productVisibility`; a test asserts that a `REJECTED` product is
       `404` on every product-reading endpoint, for both kinds.
-- [ ] Scanning, manual entry, the add-product 404 path and the P6-006 invalid-code path all work through
+- [x] Scanning, manual entry, the add-product 404 path and the P6-006 invalid-code path all work through
       the GTIN resolver; an offline scan of a cached product paints from cache.
-- [ ] Backend and frontend suites pass; Playwright and Maestro scan flows pass against the new routes.
+- [x] Backend and frontend suites pass; Playwright and Maestro scan flows pass against the new routes.
 
 ## Phase 7: Auth Enhancements
 
