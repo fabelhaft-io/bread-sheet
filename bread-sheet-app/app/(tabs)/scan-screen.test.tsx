@@ -116,7 +116,7 @@ describe('ScanScreen', () => {
     await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
     await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/gtin/4006381333931');
   });
 
   it('recognises itf14 and code128 alongside the four retail symbologies', async () => {
@@ -132,7 +132,7 @@ describe('ScanScreen', () => {
 
     await fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data: '4006381333931' });
 
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/gtin/4006381333931');
     expect(screen.queryByTestId('manual-barcode-input')).toBeNull();
   });
 
@@ -213,7 +213,7 @@ describe('ScanScreen', () => {
       });
       await scan('5000112637939');
 
-      expect(mockRouter.push).toHaveBeenNthCalledWith(2, '/(app)/product/5000112637939');
+      expect(mockRouter.push).toHaveBeenNthCalledWith(2, '/(app)/product/gtin/5000112637939');
     });
 
     it('never suppresses the dev injection seam, which is a deliberate request', async () => {
@@ -286,7 +286,7 @@ describe('ScanScreen', () => {
     });
 
     expect(mockRouter.setParams).toHaveBeenCalledWith({ inject: undefined });
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/gtin/4006381333931');
   });
 
   it('consumes the inject param and still completes the scan it started', async () => {

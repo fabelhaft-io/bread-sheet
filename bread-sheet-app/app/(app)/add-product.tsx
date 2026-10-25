@@ -144,7 +144,7 @@ function parseNumeric(v: string): number | null {
 }
 
 export default function AddProductScreen() {
-  const { barcode } = useLocalSearchParams<{ barcode?: string }>();
+  const { gtin } = useLocalSearchParams<{ gtin?: string }>();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
   const router = useRouter();
@@ -167,7 +167,7 @@ export default function AddProductScreen() {
           onPress={() =>
             router.push({
               pathname: '/(auth)/signup',
-              params: barcode ? { returnTo: `/product/${barcode}` } : {},
+              params: gtin ? { returnTo: `/product/gtin/${gtin}` } : {},
             })
           }
         >
@@ -179,11 +179,11 @@ export default function AddProductScreen() {
 
   return (
     <AddProductFlow
-      key={barcode ?? 'no-barcode'}
-      barcode={barcode}
+      key={gtin ?? 'no-gtin'}
+      gtin={gtin}
       colors={colors}
-      onSubmitted={(b) =>
-        router.replace({ pathname: '/(app)/product/[barcode]', params: { barcode: b } })
+      onSubmitted={(id) =>
+        router.replace({ pathname: '/(app)/product/[id]', params: { id } })
       }
     />
   );
@@ -191,18 +191,18 @@ export default function AddProductScreen() {
 
 /**
  * Split from the default export so the anonymous guard short-circuits before
- * any of the form state is initialised. Keeping the `barcode` in a `key`
+ * any of the form state is initialised. Keeping the `gtin` in a `key`
  * above also resets the whole flow if the user navigates here with a
- * different barcode param mid-session.
+ * different gtin param mid-session.
  */
 function AddProductFlow({
-  barcode,
+  gtin,
   colors,
   onSubmitted,
 }: {
-  barcode: string | undefined;
+  gtin: string | undefined;
   colors: (typeof Colors)['light'];
-  onSubmitted: (barcode: string) => void;
+  onSubmitted: (id: string) => void;
 }) {
   // ─── Flow state ───────────────────────────────────────────────────────
   const [step, setStep] = useState<Step>('photos');
@@ -218,7 +218,7 @@ function AddProductFlow({
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [extracted, setExtracted] = useState<ExtractedLabel | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [barcodeInput, setBarcodeInput] = useState(barcode ?? '');
+  const [gtinInput, setGtinInput] = useState(gtin ?? '');
   const [fillMode, setFillMode] = useState<FillMode>('manual');
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof FormState, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -342,9 +342,9 @@ function AddProductFlow({
   const canSubmit = useMemo(() => {
     if (!productPhotoUri) return false;
     if (!form.name.trim()) return false;
-    if (!barcodeInput.trim()) return false;
+    if (!gtinInput.trim()) return false;
     return true;
-  }, [productPhotoUri, form.name, barcodeInput]);
+  }, [productPhotoUri, form.name, gtinInput]);
 
   const handleSubmit = useCallback(async () => {
     if (!productPhotoUri || !canSubmit) return;
@@ -381,7 +381,7 @@ function AddProductFlow({
     setStep('submitting');
     try {
       const payload: ProductSubmission = {
-        barcode: barcodeInput.trim(),
+        gtin: gtinInput.trim(),
         name: form.name.trim(),
         brand: form.brand.trim() || null,
         genericName: form.genericName.trim() || null,
@@ -402,7 +402,7 @@ function AddProductFlow({
       // Alert is used for the "under review" toast — this is a skeleton; a
       // proper toast component is a nice-to-have in a follow-up.
       Alert.alert('Thanks!', 'Your product is under review.');
-      onSubmitted(result.barcode);
+      onSubmitted(result.id);
     } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 422) {
         // Plausibility rejection — surface the reason inline.
@@ -420,7 +420,7 @@ function AddProductFlow({
       }
       setStep('review');
     }
-  }, [productPhotoUri, productImageKey, canSubmit, form, barcodeInput, onSubmitted]);
+  }, [productPhotoUri, productImageKey, canSubmit, form, gtinInput, onSubmitted]);
 
   // ─── Rendering ────────────────────────────────────────────────────────
   if (step === 'extracting') {
@@ -524,8 +524,8 @@ function AddProductFlow({
           <ReviewStep
             form={form}
             setForm={setForm}
-            barcode={barcodeInput}
-            setBarcode={setBarcodeInput}
+            gtin={gtinInput}
+            setGtin={setGtinInput}
             fillMode={fillMode}
             applyFillMode={applyFillMode}
             extracted={extracted}
@@ -654,8 +654,8 @@ function PhotoSlot({
 function ReviewStep({
   form,
   setForm,
-  barcode,
-  setBarcode,
+  gtin,
+  setGtin,
   fillMode,
   applyFillMode,
   extracted,
@@ -668,8 +668,8 @@ function ReviewStep({
 }: {
   form: FormState;
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
-  barcode: string;
-  setBarcode: (v: string) => void;
+  gtin: string;
+  setGtin: (v: string) => void;
   fillMode: FillMode;
   applyFillMode: (m: FillMode) => void;
   extracted: ExtractedLabel | null;
@@ -724,11 +724,13 @@ function ReviewStep({
         </View>
       ) : null}
 
+      {/* Label stays "Barcode" (what users see); testID kept too — this is
+          now the GTIN, submitted as `gtin` on the wire (TICKET-P6-009). */}
       <Field
         label="Barcode"
         testID="field-barcode"
-        value={barcode}
-        onChangeText={setBarcode}
+        value={gtin}
+        onChangeText={setGtin}
         readOnly={readOnly}
         colors={colors}
       />

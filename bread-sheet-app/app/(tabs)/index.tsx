@@ -159,7 +159,7 @@ function RatingCard({
           <ScoreBadge score={entry.score} />
           <Text style={[cardStyles.time, { color: iconColor }]}>{relativeTime(entry.createdAt)}</Text>
           {pendingSync ? (
-            <Text testID={`rating-pending-sync-${entry.product.barcode}`} style={cardStyles.pendingSync}>
+            <Text testID={`rating-pending-sync-${entry.product.id}`} style={cardStyles.pendingSync}>
               ⏳ Not synced yet
             </Text>
           ) : null}
@@ -402,8 +402,8 @@ export default function HomeScreen() {
             bg={colors.background}
             textColor={colors.text}
             iconColor={colors.icon}
-            pendingSync={isQueued(entry.product.barcode)}
-            onPress={() => router.push(`/(app)/product/${entry.product.barcode}`)}
+            pendingSync={isQueued(entry.product.id)}
+            onPress={() => router.push(`/(app)/product/${entry.product.id}`)}
           />
         ))
       )}
@@ -420,12 +420,12 @@ export default function HomeScreen() {
       ) : (
         recentProducts.map((item) => (
           <RecentCard
-            key={item.barcode}
+            key={item.id}
             item={item}
             bg={colors.background}
             textColor={colors.text}
             iconColor={colors.icon}
-            onPress={() => router.push(`/(app)/product/${item.barcode}`)}
+            onPress={() => router.push(`/(app)/product/${item.id}`)}
           />
         ))
       )}

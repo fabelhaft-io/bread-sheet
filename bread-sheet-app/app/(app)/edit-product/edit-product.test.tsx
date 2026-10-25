@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, fireEvent, waitFor } from '@testing-library/react-native';
 
-import EditProductScreen from './[barcode]';
+import EditProductScreen from './[id]';
 
 // ─── Shared mocks (same conventions as add-product.test.tsx) ────────────────
 
@@ -10,7 +10,7 @@ const mockRouter = {
   replace: jest.fn(),
   back: jest.fn(),
 };
-const mockUseLocalSearchParams = jest.fn(() => ({ barcode: '0000000000001' }));
+const mockUseLocalSearchParams = jest.fn(() => ({ id: 'p1' }));
 const mockUseSession = jest.fn();
 
 jest.mock('expo-router', () => ({
@@ -35,6 +35,7 @@ jest.mock('@/lib/supabase', () => ({
 jest.mock('@/lib/api');
 
 jest.mock('@/features/products/api', () => ({
+  getProduct: jest.fn(),
   correctProduct: jest.fn(),
   proposeProductEdit: jest.fn(),
   uploadProductImage: jest
@@ -54,32 +55,35 @@ jest.mock('@/features/products/image-processing', () => ({
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { ApiError, api } = require('@/lib/api') as typeof import('@/lib/api');
-const mockApiGet = api.get as jest.Mock;
+const { ApiError } = require('@/lib/api') as typeof import('@/lib/api');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const productsApi = require('@/features/products/api');
+const mockGetProduct = productsApi.getProduct as jest.Mock;
 const mockCorrectProduct = productsApi.correctProduct as jest.Mock;
 const mockProposeEdit = productsApi.proposeProductEdit as jest.Mock;
 
 const VERIFIED_PRODUCT = {
   id: 'p1',
-  barcode: '0000000000001',
+  kind: 'PACKAGED',
   name: 'Sourdough Loaf',
   brand: 'Artisan',
   image: null,
   description: null,
   status: 'VERIFIED',
   unverified: false,
-  genericName: 'Bread',
-  energyKcal: 250,
-  fat: 3.5,
-  saturatedFat: 1.2,
-  carbohydrates: 45,
-  sugars: 5,
-  protein: 8,
-  salt: 1.2,
-  servingSize: '50g',
-  ingredients: 'Flour, water, salt',
+  packaged: {
+    gtin: '0000000000001',
+    genericName: 'Bread',
+    energyKcal: 250,
+    fat: 3.5,
+    saturatedFat: 1.2,
+    carbohydrates: 45,
+    sugars: 5,
+    protein: 8,
+    salt: 1.2,
+    servingSize: '50g',
+    ingredients: 'Flour, water, salt',
+  },
 };
 
 function signIn(anonymous = false) {
@@ -93,7 +97,7 @@ function signIn(anonymous = false) {
 beforeEach(() => {
   jest.clearAllMocks();
   signIn();
-  mockApiGet.mockResolvedValue(VERIFIED_PRODUCT);
+  mockGetProduct.mockResolvedValue(VERIFIED_PRODUCT);
 });
 
 describe('EditProductScreen — access control', () => {
@@ -101,7 +105,7 @@ describe('EditProductScreen — access control', () => {
     signIn(true);
     const { findByTestId } = await render(<EditProductScreen />);
     await findByTestId('edit-product-anon-gate');
-    expect(mockApiGet).not.toHaveBeenCalled();
+    expect(mockGetProduct).not.toHaveBeenCalled();
   });
 });
 
@@ -121,7 +125,7 @@ describe('EditProductScreen — pre-population & unchanged submits', () => {
     expect(scroll.props.overScrollMode).toBe('never');
   });
 
-  it('renders the barcode read-only', async () => {
+  it('renders the barcode read-only, sourced from product.packaged.gtin', async () => {
     const { findByTestId } = await render(<EditProductScreen />);
     const barcodeField = await findByTestId('field-barcode');
     expect(barcodeField.props.editable).toBe(false);
@@ -141,7 +145,7 @@ describe('EditProductScreen — pre-population & unchanged submits', () => {
 
 describe('EditProductScreen — VERIFIED proposal path', () => {
   it('sends only the changed fields to proposeProductEdit', async () => {
-    mockProposeEdit.mockResolvedValue({ editId: 'e1', barcode: '0000000000001', status: 'PENDING' });
+    mockProposeEdit.mockResolvedValue({ editId: 'e1', productId: 'p1', status: 'PENDING' });
     const { findByTestId } = await render(<EditProductScreen />);
 
     await fireEvent.changeText(await findByTestId('field-name'), 'Sourdough Boule');
@@ -149,15 +153,15 @@ describe('EditProductScreen — VERIFIED proposal path', () => {
     await fireEvent.press(await findByTestId('submit-edit'));
 
     await waitFor(() =>
-      expect(mockProposeEdit).toHaveBeenCalledWith('0000000000001', {
+      expect(mockProposeEdit).toHaveBeenCalledWith('p1', {
         name: 'Sourdough Boule',
         salt: 1.5,
       }),
     );
     expect(mockCorrectProduct).not.toHaveBeenCalled();
     expect(mockRouter.replace).toHaveBeenCalledWith({
-      pathname: '/(app)/product/[barcode]',
-      params: { barcode: '0000000000001' },
+      pathname: '/(app)/product/[id]',
+      params: { id: 'p1' },
     });
   });
 
@@ -184,7 +188,7 @@ describe('EditProductScreen — VERIFIED proposal path', () => {
 
 describe('EditProductScreen — PENDING_REVIEW correction path', () => {
   beforeEach(() => {
-    mockApiGet.mockResolvedValue({
+    mockGetProduct.mockResolvedValue({
       ...VERIFIED_PRODUCT,
       status: 'PENDING_REVIEW',
       unverified: true,
@@ -192,7 +196,7 @@ describe('EditProductScreen — PENDING_REVIEW correction path', () => {
   });
 
   it('labels the intent and PATCHes the full payload via correctProduct', async () => {
-    mockCorrectProduct.mockResolvedValue({ barcode: '0000000000001', status: 'PENDING_REVIEW' });
+    mockCorrectProduct.mockResolvedValue({ id: 'p1', status: 'PENDING_REVIEW' });
     const { findByTestId, findByText } = await render(<EditProductScreen />);
 
     await findByText('Correct this submission');
@@ -200,8 +204,8 @@ describe('EditProductScreen — PENDING_REVIEW correction path', () => {
     await fireEvent.press(await findByTestId('submit-edit'));
 
     await waitFor(() => expect(mockCorrectProduct).toHaveBeenCalled());
-    const [barcode, payload] = mockCorrectProduct.mock.calls[0];
-    expect(barcode).toBe('0000000000001');
+    const [id, payload] = mockCorrectProduct.mock.calls[0];
+    expect(id).toBe('p1');
     // Full payload — unchanged fields are included on the correction path.
     expect(payload).toMatchObject({
       name: 'Fixed Name',

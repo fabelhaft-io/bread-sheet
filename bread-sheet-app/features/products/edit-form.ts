@@ -78,21 +78,28 @@ export function parseNumeric(v: string): number | null {
   return parsed;
 }
 
-/** Pre-populate the form from the current product values. */
+/**
+ * Pre-populate the form from the current product values. Nutrition and
+ * ingredient fields live under `product.packaged` (TICKET-P6-009); a `null`
+ * `packaged` (a `CUSTOM` product) pre-fills those fields empty — this screen
+ * is never reached for a `CUSTOM` product today (P6-007 is out of scope), but
+ * the read is written defensively rather than assuming non-null.
+ */
 export function productToFormValues(product: ProductDetail): EditFormValues {
+  const packaged = product.packaged;
   return {
     name: product.name ?? '',
     brand: product.brand ?? '',
-    genericName: toText(product.genericName),
-    energyKcal: toText(product.energyKcal),
-    fat: toText(product.fat),
-    saturatedFat: toText(product.saturatedFat),
-    carbohydrates: toText(product.carbohydrates),
-    sugars: toText(product.sugars),
-    protein: toText(product.protein),
-    salt: toText(product.salt),
-    servingSize: toText(product.servingSize),
-    ingredients: toText(product.ingredients),
+    genericName: toText(packaged?.genericName),
+    energyKcal: toText(packaged?.energyKcal),
+    fat: toText(packaged?.fat),
+    saturatedFat: toText(packaged?.saturatedFat),
+    carbohydrates: toText(packaged?.carbohydrates),
+    sugars: toText(packaged?.sugars),
+    protein: toText(packaged?.protein),
+    salt: toText(packaged?.salt),
+    servingSize: toText(packaged?.servingSize),
+    ingredients: toText(packaged?.ingredients),
   };
 }
 

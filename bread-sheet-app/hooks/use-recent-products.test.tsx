@@ -46,7 +46,7 @@ const wrapper = ({ children }: { children: React.ReactNode }) => (
   <RecentProductsProvider>{children}</RecentProductsProvider>
 );
 
-const LOAF = { barcode: '111', name: 'Sourdough Loaf', brand: 'Artisan', image: null };
+const LOAF = { id: '111', name: 'Sourdough Loaf', brand: 'Artisan', image: null };
 
 function signedInAs(userId: string | null) {
   mockUseSession.mockReturnValue({
@@ -87,11 +87,11 @@ describe('RecentProductsProvider', () => {
     const { result } = await renderHook(() => useRecentProducts(), { wrapper });
     await act(async () => {
       result.current.addRecentProduct(LOAF);
-      result.current.addRecentProduct({ ...LOAF, barcode: '222', name: 'Rye' });
+      result.current.addRecentProduct({ ...LOAF, id: '222', name: 'Rye' });
       result.current.addRecentProduct(LOAF);
     });
 
-    expect(result.current.recentProducts.map((item) => item.barcode)).toEqual(['111', '222']);
+    expect(result.current.recentProducts.map((item) => item.id)).toEqual(['111', '222']);
   });
 
   // Both effects re-run in the same commit when the account changes, at which

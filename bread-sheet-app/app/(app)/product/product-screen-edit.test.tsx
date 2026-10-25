@@ -2,7 +2,7 @@ import React from 'react';
 import { render, fireEvent } from '@testing-library/react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import ProductScreen from './[barcode]';
+import ProductScreen from './[id]';
 
 // ─── Mocks (same conventions as product-screen.test.tsx) ────────────────────
 
@@ -11,7 +11,7 @@ const mockRouter = {
   replace: jest.fn(),
   back: jest.fn(),
 };
-const mockUseLocalSearchParams = jest.fn(() => ({ barcode: '0000000000001' }));
+const mockUseLocalSearchParams = jest.fn(() => ({ id: 'p1' }));
 const mockUseSession = jest.fn();
 
 jest.mock('expo-router', () => {
@@ -44,7 +44,7 @@ jest.mock('@/features/products/api', () => ({
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { ApiError, api } = require('@/lib/api') as typeof import('@/lib/api');
+const { api } = require('@/lib/api') as typeof import('@/lib/api');
 const mockApiGet = api.get as jest.Mock;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const productsApi = require('@/features/products/api');
@@ -52,18 +52,19 @@ const mockGetPendingEdit = productsApi.getPendingEdit as jest.Mock;
 
 const VERIFIED_PRODUCT = {
   id: 'p1',
-  barcode: '0000000000001',
+  kind: 'PACKAGED',
   name: 'Sourdough Loaf',
   brand: 'Artisan',
   image: null,
   description: null,
   status: 'VERIFIED',
   unverified: false,
+  packaged: { gtin: '0000000000001' },
 };
 
 const PENDING_EDIT = {
   editId: 'edit-1',
-  barcode: '0000000000001',
+  productId: 'p1',
   originalValues: { name: 'Sourdough Loaf' },
   proposedChanges: { name: 'Sourdough Boule' },
   approvals: 0,
@@ -83,7 +84,7 @@ function signIn(anonymous = false, id = 'u1') {
 function mockProduct(product: unknown) {
   mockApiGet.mockImplementation((path: string) => {
     if (path.startsWith('/api/ratings/me/')) {
-      return Promise.reject(new ApiError(404, 'No rating yet', {}));
+      return Promise.reject(new Error('No rating yet'));
     }
     return Promise.resolve(product);
   });
@@ -102,8 +103,8 @@ describe('ProductScreen — edit entry point (P5-006)', () => {
     const btn = await findByTestId('edit-product-button');
     await fireEvent.press(btn);
     expect(mockRouter.push).toHaveBeenCalledWith({
-      pathname: '/(app)/edit-product/[barcode]',
-      params: { barcode: '0000000000001' },
+      pathname: '/(app)/edit-product/[id]',
+      params: { id: 'p1' },
     });
   });
 
@@ -145,7 +146,7 @@ describe('ProductScreen — suggested-change banner (P5-006)', () => {
     await fireEvent.press(banner);
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(app)/review-edit/[editId]',
-      params: { editId: 'edit-1', barcode: '0000000000001' },
+      params: { editId: 'edit-1', productId: 'p1' },
     });
   });
 

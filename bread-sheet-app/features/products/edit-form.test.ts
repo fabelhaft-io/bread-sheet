@@ -10,22 +10,25 @@ import type { ProductDetail } from './types';
 
 const PRODUCT: ProductDetail = {
   id: 'p1',
-  barcode: '0000000000001',
+  kind: 'PACKAGED',
   name: 'Sourdough Loaf',
   brand: 'Artisan',
   image: null,
   description: null,
   status: 'VERIFIED',
-  genericName: 'Bread',
-  energyKcal: 250,
-  fat: 3.5,
-  saturatedFat: null,
-  carbohydrates: 45,
-  sugars: 0,
-  protein: 8,
-  salt: 1.2,
-  servingSize: '50g',
-  ingredients: 'Flour, water, salt',
+  packaged: {
+    gtin: '0000000000001',
+    genericName: 'Bread',
+    energyKcal: 250,
+    fat: 3.5,
+    saturatedFat: null,
+    carbohydrates: 45,
+    sugars: 0,
+    protein: 8,
+    salt: 1.2,
+    servingSize: '50g',
+    ingredients: 'Flour, water, salt',
+  },
 };
 
 const initial = productToFormValues(PRODUCT);

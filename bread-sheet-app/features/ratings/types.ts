@@ -7,7 +7,7 @@
 /** Product summary embedded in a rating-history entry. */
 export interface RatedProduct {
   id: string;
-  barcode: string;
+  kind: 'PACKAGED' | 'CUSTOM';
   name: string;
   brand: string | null;
   image: string | null;

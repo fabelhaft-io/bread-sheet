@@ -194,3 +194,157 @@ implementer's / reviewer's responsibility per the guardrails (backend role only 
   P6-002 still owns its eventual removal.
 - Did not add any legacy/compat shim anywhere — this is a clean break, per the ticket's explicit
   instruction and the "no users yet" project context.
+
+---
+
+## Frontend (bread-sheet-app/)
+
+### Summary
+
+Implemented the plan's work items F1–F10 in full against the backend's actual contract (confirmed by
+reading `productSerializer.ts`, `productRoutes.ts`, `ratingController.ts` and
+`productEditController.ts` directly — no divergence found; the frontend matches `{ id, kind, name,
+brand, image, description, status, unverified, submittedByUserId?, packaged: {...} | null,
+submission? }`, `POST /api/products` taking `gtin` and returning `{ id, gtin, status }`, `POST
+/api/ratings` taking `{ productId, taste, comment? }`, and `PendingEdit.productId`). The product route
+is re-keyed from `product/[barcode]` to `product/[id]`, with a new `product/gtin/[gtin]` resolver that
+owns every code-shaped state (invalid/not-found/offline-uncached) — moved verbatim, `testID`s included,
+from the old barcode-keyed screen. `edit-product` and `review-product` are re-keyed to `[id]`;
+`review-edit` takes `productId` instead of `barcode`. The `products` offline cache is keyed by id with a
+`gtin → id` index; `ratings`, the outbox, `use-my-rating`, `use-recent-products` and `RatedProduct` all
+key by `productId`/`id`. `CACHE_SCHEMA_VERSION` bumped `1 → 2`.
+
+### Files changed
+
+**Types / API client**
+- `features/products/types.ts` — `ProductSubmission.barcode` → `gtin`; new `PackagedDetails`,
+  `ProductKind`; `ProductDetail` now `{ id, kind, ..., packaged: PackagedDetails | null }` (no top-level
+  nutrition); `PendingEdit.barcode` → `productId`.
+- `features/products/api.ts` — new `lookupProductByGtin(gtin)`, `getProduct(id)`; `submitProduct`
+  returns `{ id, gtin, status }`; `approveProduct`/`rejectProduct`/`correctProduct`/
+  `proposeProductEdit`/`getPendingEdit` take `id` instead of `barcode`; `correctProduct`'s return type
+  corrected to `ProductDetail` (the server returns the full serialized product from `PATCH`, not
+  `{ id, status }`).
+- `features/products/edit-form.ts` — `productToFormValues` reads nutrition/ingredient fields from
+  `product.packaged` (null-safe) instead of the top level.
+- `features/ratings/types.ts` — `RatedProduct`: `barcode` dropped, `kind` added.
+
+**Offline layer**
+- `lib/offline/store.ts` — `CACHE_SCHEMA_VERSION` `1 → 2`.
+- `lib/offline/caches.ts` — `products` document is now `{ byId, gtinIndex }`; `productCache(id)`;
+  new `peekProductIdByGtin` / `readProductIdByGtin`; LRU eviction drops an evicted id's index entry
+  with it; `findCachedRating` / `upsertCachedRating` compare `product.id`; `StoredRecentProduct` is
+  `{ id, name, brand, image, viewedAt }`.
+- `lib/offline/outbox.ts` — `OutboxRating`/`OutboxFailure` keyed by `productId`; `enqueueRating`,
+  `runFlush`'s `POST /api/ratings` body and cache-write guard all re-keyed.
+- `hooks/use-outbox.tsx`, `hooks/use-my-rating.ts`, `hooks/use-recent-products.tsx` — re-keyed to
+  `productId`/`id` throughout (`RecentProduct.barcode` → `id`).
+
+**Routes**
+- `app/(app)/product/[barcode].tsx` deleted; new `app/(app)/product/[id].tsx` — fetches by id, drops
+  the invalid/not-found/offline-uncached states (moved to the resolver), adds a plain id-`404` state
+  (testID `product-id-not-found`, "Back to Home", no add-product action — an id has no GTIN to add),
+  reads the barcode chip from `product.packaged?.gtin` (omitted when `packaged` is `null`), and keys
+  every downstream call (`getPendingEdit`, `POST /api/ratings`, `enqueue`, `isQueued`, recents,
+  edit/review navigation) by `product.id`.
+- New `app/(app)/product/gtin/[gtin].tsx` — the resolver described in the plan's decision 3. On mount:
+  cache-index hit → `router.replace` with no network call; miss → `lookupProductByGtin`, write-through
+  the id-keyed cache (populating the index), replace; `400`/`404`/`NetworkError`/other error render the
+  states moved verbatim from the old barcode screen (JSX and `testID`s unchanged: `product-invalid-barcode`,
+  `product-not-found`(-add/-signup), `product-offline`(-retry), `product-error`). A `retry` counter
+  re-runs the resolve effect for the offline/error "Try again" buttons.
+- `app/(app)/_layout.tsx` — registers `product/gtin/[gtin]`, `product/[id]`, `review-product/[id]`,
+  `edit-product/[id]` (and keeps `add-product`, `review-edit/[editId]`).
+- `app/(app)/edit-product/[barcode].tsx` → `edit-product/[id].tsx` (`git mv`) — fetches via
+  `getProduct(id)`; barcode field renders `product.packaged.gtin` and is omitted entirely when
+  `packaged` is `null`; `correctProduct`/`proposeProductEdit` and the post-submit `router.replace` all
+  use `id`.
+- `app/(app)/review-product/[barcode].tsx` → `review-product/[id].tsx` (`git mv`) — same treatment;
+  `approveProduct`/`rejectProduct`/`getProduct` take `id`; the barcode line reads
+  `product.packaged.gtin` and is omitted for a `CUSTOM` product.
+- `app/(app)/review-edit/[editId].tsx` — param renamed `barcode` → `productId`; `getPendingEdit` and
+  the post-action `router.replace` use it.
+- `app/(app)/add-product.tsx` — param `barcode` → `gtin` throughout (local state renamed `gtinInput`/
+  `setGtinInput`, `ReviewStep` prop renamed `gtin`/`setGtin`); submission payload sends `gtin`;
+  `onSubmitted(result.id)` replaces into `product/[id]`. The `field-barcode` `testID` and "Barcode"
+  label are kept verbatim per the plan (that's what the user sees and types).
+- `components/manual-barcode-sheet.tsx` — default `onSubmit` now routes to `/(app)/product/gtin/<code>`
+  (callers that pass their own `onSubmit`, e.g. the resolver's invalid-code retry, are unaffected).
+- `app/(tabs)/scan.tsx` — `processScan`'s success path routes to `/(app)/product/gtin/<code>` instead
+  of `/(app)/product/<code>`.
+- `app/(tabs)/index.tsx` (Home) — rating cards and recents navigate to `/(app)/product/<id>` (not the
+  resolver — these ids are already known, so going through the GTIN resolver would be a pointless
+  extra hop); `rating-pending-sync-<id>` testID; `isQueued`/recents keyed by `id`.
+
+### Tests
+
+- Renamed/rewrote `product-screen.test.tsx`, `product-screen-edit.test.tsx`,
+  `product-screen-offline.test.tsx` for `product/[id]` (the 400/404/offline-uncached cases moved out;
+  new cases: id-`404` plain dead end with no add-product CTA, barcode chip shown for `PACKAGED` /
+  omitted for `CUSTOM`, ratings posted with `productId`).
+- New `app/(app)/product/gtin/product-gtin-resolver.test.tsx`: cached-index hit skips the network;
+  network hit writes the cache (with its gtin index) and redirects; `400`/`404`/offline/generic-error
+  states and their retry buttons; guest-gate `returnTo` carries `/product/gtin/<gtin>`.
+- `lib/offline/caches.test.ts`, `outbox.test.ts`, `hooks/use-recent-products.test.tsx` — re-keyed to
+  `id`/`productId`; added a case asserting the gtin index is written with the product and evicted with
+  it under LRU.
+- `edit-form.test.ts`, `edit-product.test.tsx`, `review-product.test.tsx`, `review-edit.test.tsx`,
+  `add-product.test.tsx`, `home-screen.test.tsx`, `scan-screen.test.tsx`,
+  `manual-barcode-sheet.test.tsx` — all re-keyed to the new shapes/routes. Added: a `CUSTOM`-product
+  case to `review-product.test.tsx` (no barcode chip) mirroring the product screen's.
+- No test file needed new jest-expo shims; `jest.mock('@/lib/api')` continues to keep `ApiError`/
+  `NetworkError` as real classes.
+
+### Scope guard compliance
+
+Per the ticket's explicit scope guard, nothing creates a `CUSTOM` product. The only `CUSTOM` code paths
+added are "`packaged` is null → render no barcode-chip/nutrition UI" on the product, edit-product and
+review-product screens, each with a test. No custom-product creation UI, `nameKey`, search or
+allergens were touched.
+
+### Test / lint / typecheck / e2e results
+
+| Command | Result |
+|---|---|
+| `cd bread-sheet-app && npm test` | **PASS** — 30 suites, 309 tests |
+| `cd bread-sheet-app && npx tsc --noEmit` | **PASS** — 0 errors |
+| `cd bread-sheet-app && npm run lint` | **PASS** — 0 errors/warnings |
+| `cd bread-sheet-app && MAESTRO_PREREQS_ONLY=1 npm run test:maestro` | **BLOCKED (environment gap)** — see below |
+| `cd bread-sheet-app && npx playwright test` | **BLOCKED (environment gap)** — see below |
+
+**Maestro.** `MAESTRO_PREREQS_ONLY=1 npm run test:maestro` exits with: *"No Supabase config. The flows
+sign in as guest and look up a product, so they need a reachable Supabase project... Either export
+EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY in your shell... or copy
+bread-sheet-app/.env.example → .env and fill them in."* This worktree has neither (fresh checkout, no
+`.env`, and the coordinator's instructions block Bash commands touching `.env*` files), so I could not
+supply Supabase credentials to get past this check — it never reached the Android-SDK/emulator/JDK
+checks the prerequisite script also performs, so I have **no evidence either way** about whether an AVD
+is present. This is an environment gap on the ticket's own deliverable (the diff touches `scan.tsx` and
+`manual-barcode-sheet.tsx`), so per the guardrails this is `BLOCKED`, not a footnote under a pass — the
+reviewer (or a run with real Supabase credentials exported) needs to execute this for real.
+
+**Playwright.** Ran `npx playwright test` for real (not just a prereq check) against the installed
+Chromium (`1.64.1`, browsers already present). Both specs failed identically after a 30 s timeout
+waiting for "Continue as Guest"; the captured page snapshot shows Expo's error overlay with `Uncaught
+Error: Supabase URL and Publishable Key are required.` thrown from `lib/supabase.ts:10`, i.e. the exact
+same missing-credentials gap as Maestro, not a regression from this change (neither spec touches a
+product/barcode/gtin route at all — `auth.spec.ts` only reaches the Home tab, `scan-tab.spec.ts` only
+asserts the camera-permission prompt). Also `BLOCKED` for the same reason as above; killed the orphaned
+`expo start --web` process afterward and confirmed port 8081 is clear.
+
+### Divergence noted, not acted on
+
+`docs/architecture/data.md:210` still reads `GET /products/:barcode` in a sentence about
+`submittedByUserId` visibility (backend-owned file, not touched here) — a one-line leftover from before
+the backend's own pass finished updating that file. Flagging for the reviewer; not fixed here because
+`data.md` is outside the frontend docs this run owns per the coordinator's split.
+
+### Left out of scope (per the ticket's scope guards)
+
+- No custom-product creation, `nameKey`, search, allergens, or OFF sync UI.
+- No legacy `{ barcode }` rating payload, no digits-only alias, no client redirect for stale
+  `/product/<gtin>` paths, no outbox carry-over — clean break, per the ticket's explicit instruction.
+- Did not touch `docs/bruno/`, `docs/architecture/backend.md`, `docs/architecture/data.md`, or the ADR
+  0006 status line — backend-owned per the coordinator's split, and already done in this worktree.
+- Did not tick the `FEATURES.md` acceptance boxes — that's the reviewer's job once the full matrix is
+  green, including the two `BLOCKED` e2e rows above.

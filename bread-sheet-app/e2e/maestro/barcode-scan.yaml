@@ -5,7 +5,7 @@
 # link in the scan chain an on-device E2E test cannot drive. The scan tab's
 # dev-only injection seam (app/(tabs)/scan.tsx, __DEV__-gated) feeds the exact
 # same processScan path the camera's onBarcodeScanned callback uses, so
-# validation, navigation to /(app)/product/<barcode>, and every downstream
+# validation, navigation to /(app)/product/gtin/<barcode>, and every downstream
 # product-screen state are exercised for real against the debug build.
 #
 # Prereqs (enforced by scripts/test-maestro.js): a booted emulator with the

@@ -13,7 +13,7 @@ import { type StoredRecentProduct, recentsCache } from '@/lib/offline/caches';
 import { useSession } from './use-session';
 
 export interface RecentProduct {
-  barcode: string;
+  id: string;
   name: string;
   brand: string | null;
   image: string | null;
@@ -90,8 +90,8 @@ export function RecentProductsProvider({ children }: { children: ReactNode }) {
           // A product opened before the disk read resolved must not be
           // clobbered by it — keep it on top and append the stored history.
           if (current.length === 0) return restored;
-          const seen = new Set(current.map((item) => item.barcode));
-          return [...current, ...restored.filter((item) => !seen.has(item.barcode))].slice(
+          const seen = new Set(current.map((item) => item.id));
+          return [...current, ...restored.filter((item) => !seen.has(item.id))].slice(
             0,
             MAX_RECENT,
           );
@@ -110,7 +110,7 @@ export function RecentProductsProvider({ children }: { children: ReactNode }) {
     dirty.current = true;
     setRecentProducts((prev) => {
       // Move to top if already exists, otherwise prepend
-      const filtered = prev.filter((p) => p.barcode !== product.barcode);
+      const filtered = prev.filter((p) => p.id !== product.id);
       return [{ ...product, viewedAt: new Date() }, ...filtered].slice(0, MAX_RECENT);
     });
   }, []);

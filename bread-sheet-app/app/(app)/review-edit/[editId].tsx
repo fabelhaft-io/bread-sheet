@@ -42,7 +42,7 @@ const APPROVALS_NEEDED = 2;
  * (server-side, hides the banner across devices; not a vote).
  */
 export default function ReviewEditScreen() {
-  const { editId, barcode } = useLocalSearchParams<{ editId: string; barcode: string }>();
+  const { editId, productId } = useLocalSearchParams<{ editId: string; productId: string }>();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
   const router = useRouter();
@@ -58,9 +58,9 @@ export default function ReviewEditScreen() {
   const { compact, scrollProps } = useFitToScreen();
 
   useEffect(() => {
-    if (!session || isAnonymous || !barcode) return;
+    if (!session || isAnonymous || !productId) return;
     let cancelled = false;
-    getPendingEdit(barcode)
+    getPendingEdit(productId)
       .then(({ edit: pending }) => {
         if (cancelled) return;
         if (!pending || pending.editId !== editId) {
@@ -80,11 +80,11 @@ export default function ReviewEditScreen() {
     return () => {
       cancelled = true;
     };
-  }, [barcode, editId, session, isAnonymous]);
+  }, [productId, editId, session, isAnonymous]);
 
   const goBackToProduct = useCallback(() => {
-    router.replace({ pathname: '/(app)/product/[barcode]', params: { barcode } });
-  }, [router, barcode]);
+    router.replace({ pathname: '/(app)/product/[id]', params: { id: productId } });
+  }, [router, productId]);
 
   const onVote = useCallback(
     async (vote: EditVote) => {
