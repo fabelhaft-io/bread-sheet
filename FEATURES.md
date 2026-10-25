@@ -423,8 +423,8 @@ User History
 
 ## Phase 6: Social
 
-**Build order (2026-07-30).** Ticket numbers are historical; the dependency order is
-**P6-006 → P6-001 → P6-003 → P6-002 → (P6-007 + P6-008 slice A) → P6-004 → P6-008 slice B → P6-005**.
+**Build order (2026-07-30, amended 2026-10-25).** Ticket numbers are historical; the dependency order is
+**P6-006 → P6-009 → P6-001 → P6-003 → P6-002 → (P6-007 + P6-008 slice A) → P6-004 → P6-008 slice B → P6-005**.
 
 Worth knowing before implementation starts:
 
@@ -436,6 +436,9 @@ Worth knowing before implementation starts:
 - **P6-006 first** because it is small and fixes a live dead end: the only route into the Add Product flow
   today is the 404 branch of a *successfully scanned* barcode, so a damaged label or an unsupported symbology
   leaves the user with nowhere to go.
+- **P6-009 before P6-001** (ADR 0006): the product model split moves nutrition into `PackagedProduct`
+  and re-keys every product route by `Product.id`. Every later ticket adds packaged-only columns
+  (allergens, OFF sync) or new product routes, so the split never gets cheaper than it is now.
 - **P6-003 before P6-002** because the per-group "share only these categories" policy selects over the
   user's own category rows, which do not exist until then. Categories are also the phase's cheapest source
   of product feedback — see the learning loop in P6-003.
@@ -448,6 +451,11 @@ Worth knowing before implementation starts:
 - P6-008 slice B (global name search) and P6-005 (OFF sync) are independent of everything else and can slip.
 
 **Cross-cutting decisions for this phase:**
+- **Products are keyed by `Product.id` from P6-009 on** (ADR 0006). Wherever a later ticket in this
+  phase writes `/api/products/:barcode/...`, read `/api/products/:productId/...`. A GTIN is only ever
+  resolved through `GET /api/products/gtin/:gtin`. Label data (nutrition, ingredients, allergens, OFF
+  sync state) lives on `PackagedProduct`, never on `Product`. Every product read goes through the
+  `productVisibility` helper.
 - **Social features are registered-only.** Every group route sits behind `requireRegistered`, matching
   every other contribution gate. Anonymous users see a sign-up prompt where the group UI would be.
   Allergens (P6-001) and categories (P6-003) are *read* features and stay visible to anonymous users;
@@ -476,7 +484,7 @@ never claims authority, and always tells the user to check the packaging.
 (`server/src/constants/allergens.ts`, mirrored in `bread-sheet-app/features/products/allergens.ts`).
 No free-text allergens — an open vocabulary cannot be matched against a watchlist reliably.
 
-**Schema additions to `Product`:**
+**Schema additions to `PackagedProduct`** (ADR 0006, built in P6-009; never on `Product`):
 - `allergens Allergen[]` — declared contents ("Contains: milk, gluten").
 - `traces Allergen[]` — "may contain" / cross-contamination warnings.
 - `allergensDeclared Boolean @default(false)` — flips to `true` the moment a human (submitter or editor)
@@ -498,6 +506,12 @@ No free-text allergens — an open vocabulary cannot be matched against a watchl
    `allergensDeclared: true` from within the app.
 - No provenance field. Allergens are ordinary product fields and inherit the P5-005 peer-review
   machinery: a correction to a `VERIFIED` product's allergen list needs two approvals like any other.
+
+**Custom items (P6-007) have no allergen data, by design.** Nobody knows the exact ingredients a bar or
+restaurant used, so any allergen list on a cocktail would be a guess. A custom item has no
+`PackagedProduct` row, so it can't hold allergens. The product screen renders **no allergen section at
+all** for it (not even "No allergen information yet", which invites an edit that can't be made
+honestly), and the watchlist check never evaluates it.
 
 **Backfill for already-cached products.** The OFF payload is not persisted and cached products are never
 re-fetched, so existing rows cannot be filled from local data. Add a maintenance script
@@ -530,7 +544,8 @@ neither, per allergen) and a "no allergens in this product" explicit affirmation
 added/removed chips rather than old-value/new-value text.
 
 **Acceptance Criteria:**
-- [ ] `Product` carries `allergens`, `traces`, and `allergensDeclared`; the enum is the EU 14.
+- [ ] `PackagedProduct` carries `allergens`, `traces`, and `allergensDeclared`; the enum is the EU 14.
+- [ ] A custom item (`kind: CUSTOM`) renders no allergen section and never triggers the watchlist card.
 - [ ] OFF-sourced products import `allergens_tags`/`traces_tags`; unmapped tags are dropped, not guessed.
 - [ ] Label extraction returns allergen and trace suggestions from ingredients text (EN + DE) and does
       not set `allergensDeclared`.
@@ -927,7 +942,8 @@ answer that question first and offer the editor second.
     4. Same retry and failure logic as new product sync; failure notification goes to the edit author.
 - Image assets (product photo) are pushed to OFF's image upload endpoint; the label photo is never stored or sent.
 - All sync activity is idempotent — re-running on the same barcode updates the existing OFF entry rather than creating a duplicate.
-  **Schema additions to `Product`:**
+  **Schema additions to `PackagedProduct`** (ADR 0006; custom items have no upstream entry, so the sync
+  query only ever sees `PACKAGED` products and keys OFF by `PackagedProduct.gtin`):
 - `offSyncStatus`: `QUEUED | SYNCING | SYNCED | FAILED`
 - `offSyncAttempts: Int`
 - `offRetryAt: DateTime?`
@@ -996,37 +1012,40 @@ a cigar from an unlabelled humidor. This is the use case that motivated P6-003's
 and it is currently impossible: `Product.barcode` is required, `@unique`, validated `^\d{8,13}$`
 (`productController.ts:37`), and is the routing key for every product endpoint, the FK target for
 `ProductEdit.barcode`, and the key of the Phase 8 `products` cache and the rating outbox.
-**Depends on:** P6-002 (`RatingShare` is what makes an item visible to anyone but its creator),
-P6-003 (a category is the only way to organise items, which have no brand or label to sort by).
-**User-facing name:** "custom item". Internally these are `Product` rows — see below.
+**Depends on:** P6-009 (the product model split this ticket builds on), P6-002 (`RatingShare` is what
+makes an item visible to anyone but its creator), P6-003 (a category is the only way to organise items,
+which have no brand or label to sort by).
+**User-facing name:** "custom item". Internally these are `Product` rows with `kind: CUSTOM` and no
+`PackagedProduct` row (ADR 0006).
 
-**Decision 1 — synthetic identifier, not a nullable barcode.** Barcode-less items get a server-generated
-id in the same column: `x-` + a 26-char ULID (`x-01j9z8...`). `Product.barcode` stays required and
-unique; `Product.identifierType GTIN | INTERNAL` records which kind it is; `BARCODE_RE` becomes "GTIN
-`^\d{8,13}$` **or** internal `^x-[0-9a-hjkmnp-tv-z]{26}$`", and the `x-` prefix cannot collide with a
-digits-only GTIN. The client never types or displays it.
-*Why not `barcode String?`:* it would re-key `/api/products/:barcode` and every nested route, the
-`ProductEdit.barcode` FK, the `products` offline cache, the outbox payload, and `use-my-rating`'s
-barcode index — a wide, purely mechanical refactor with no user-visible benefit. One validator change
-buys the same thing.
+**Decision 1 — a custom item is a slim `Product` with no `PackagedProduct`.** *(Revised 2026-10-25 by
+ADR 0006. The original 2026-07-30 decision stored a synthetic `x-<ULID>` in `Product.barcode` to avoid
+re-keying. It was dropped because it left label-only columns (nutrition, allergens) writable on a
+cocktail, and because a column named `barcode` holding non-barcodes is a misleading name.)* After P6-009,
+`Product.id` is already the key for every product route, cache entry and outbox item. So a custom item
+needs no identifier scheme of its own: it gets a UUID like every other product, and simply has no GTIN.
+There is no `BARCODE_RE` change. Custom items carry **no nutrition and no allergen data**, because
+nobody knows exactly what went into a cocktail. The schema makes that impossible to store, not just
+hidden.
 
 **Decision 2 — items are owner-scoped, and become visible only through sharing.** *(Confirmed 2026-07-30.
 The alternative — a public barcode-less catalogue where one "Negroni" row is rated by everyone — was
 considered and **declined**; see the note at the end of this ticket. The motivating cases are a household
 and a couple sharing a wine tasting, i.e. groups of two to five people who already know each other.)*
-- An item belongs to its creator (`Product.ownerUserId`, set only for `INTERNAL` items).
+- An item belongs to its creator (`Product.ownerUserId`, set only for `CUSTOM` items).
 - Nobody else can see it until a **rating** of it is shared into a group via P6-002's `RatingShare`.
   Group members who can see that rating can open the item and **rate it themselves against the same row**
   — which is exactly the "we went out and tried four cocktails" case, and produces a real group aggregate.
 - **There is therefore no global namespace and no dedup problem.** Two households each having their own
   "Negroni" row is correct, not duplication: a Negroni is not a manufactured article with one identity,
   and each household's row can carry their own photo and notes.
-- Visibility is **derived**, not a new enum. An `INTERNAL` item is readable by:
+- Visibility is **derived**, not a new enum. A `CUSTOM` item is readable by:
   1. its owner;
   2. anyone holding a `RatingShare` on a rating of it;
   3. **anyone who has their own rating on it** — even if the share that introduced them to it is gone.
-  `GET /api/products/:barcode` gains that authorization branch for `INTERNAL` rows only — the first place
-  P7-002's ownership guards are load-bearing rather than defensive.
+  The rule lives in the `productVisibility` helper that P6-009 introduces (ADR 0006). This ticket fills in
+  its `CUSTOM` branch, which until now only had to say "owner only". It is the first place P7-002's
+  ownership guards are load-bearing rather than defensive.
 - **Why rule 3 exists.** Take the couple: A creates the item, rates it, shares it into their group; B taps
   "Rate this too". If A later unshares that rating, leaves the group, or the group is deleted, rules 1–2
   alone would strip B's read access to an item **B has personally rated** — B's own history would contain a
@@ -1038,17 +1057,19 @@ and a couple sharing a wine tasting, i.e. groups of two to five people who alrea
   dedup, a duplicate-merge review flow, and search-by-name (none of which exist). Revisit only if users
   ask for it.
 
-**What does *not* apply to `INTERNAL` items:**
+**What does *not* apply to `CUSTOM` items:**
 - **Peer verification / `PENDING_REVIEW`.** There is no public audience to protect, so an item is
   owner-authoritative on creation: `status: VERIFIED`, no `ProductVerification` rows, no "Needs review"
-  banner. The verify endpoints reject `INTERNAL` barcodes with `409`.
+  banner. The verify endpoints reject `CUSTOM` products with `409`.
 - **The P5-005 edit-proposal flow.** The owner edits their own item directly through `PATCH`; there are
-  no strangers to ask. `POST /products/:barcode/edits` rejects `INTERNAL` with `409`. A group member who
+  no strangers to ask. `POST /products/:productId/edits` rejects `CUSTOM` with `409`. A group member who
   spots a wrong name tells the owner — out of band, deliberately.
-- **OFF sync (P6-005).** Nothing to sync: there is no upstream entry and no barcode to key it on. The
-  sync query filters on `identifierType: GTIN`.
-- **Nutrition as a required shape.** Nutrition fields stay available but collapsed behind "Add nutrition
-  info"; a cocktail has no label to read them off.
+- **OFF sync (P6-005).** Nothing to sync: there is no upstream entry and no GTIN to key it on. Sync
+  state lives on `PackagedProduct`, so a custom item can't be queued at all.
+- **Nutrition and allergens (P6-001).** Not collected, not stored, not displayed. A custom item has no
+  `PackagedProduct` row, and the product screen renders neither a nutrition nor an allergen section for
+  it. There are no "no information yet" placeholders either, since there is nothing the user could
+  honestly fill in.
 
 **What still very much does apply — the abuse gate.** Barcode-less items are the obvious hole: no
 barcode, no peer review, an image upload, and (through sharing) an audience. The
@@ -1063,11 +1084,11 @@ never-return-the-reason rule are unchanged. `mock` mode still accepts everything
   **"Something with no barcode"**.
 - New screen `app/(app)/add-item.tsx` — deliberately short: **name** (required, 1–80 chars), optional
   photo, optional category (P6-003 picker), optional free-text "where/brand" line (bar, restaurant,
-  producer), optional collapsed nutrition. Submit creates the item and goes **straight to the rating
+  producer, stored in `Product.brand`). No nutrition, no allergens. Submit creates the item and goes **straight to the rating
   screen** — the reason someone adds a cocktail is to rate it, so making them navigate again is friction
   for nothing.
-- The product screen renders an `INTERNAL` item with the barcode row hidden, an "Added by you" (or
-  "Added by <member>" within a group) attribution line, and no "Needs review" banner.
+- The product screen renders a `CUSTOM` item with no barcode row, no nutrition or allergen section, an
+  "Added by you" (or "Added by <member>" within a group) attribution line, and no "Needs review" banner.
 - Group members viewing a shared item see a **"Rate this too"** action that creates their own rating
   against the same row.
 - Offline: item *creation* is online-only (it needs the plausibility gate and an id from the server),
@@ -1080,40 +1101,38 @@ never-return-the-reason rule are unchanged. `mock` mode still accepts everything
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/api/items` | `{ name, category?, brand?, imageKey?, nutrition? }` → `201` with the generated `x-…` id; `requireRegistered` |
-| `PATCH` | `/api/products/:barcode` | extended: owner may edit their own `INTERNAL` item in place, at any status, with no verification reset |
-| `DELETE` | `/api/items/:barcode` | owner only; refuses (`409`) while another user has a rating on it, so a shared item cannot be pulled out from under a group |
+| `POST` | `/api/items` | `{ name, category?, brand?, imageKey? }` → `201` with the new `Product.id`; creates a `kind: CUSTOM` row with no `PackagedProduct`; `requireRegistered`. Nutrition/allergen fields in the body are rejected with `400`, not silently dropped |
+| `PATCH` | `/api/products/:productId` | extended: owner may edit their own `CUSTOM` item in place (name, brand, image), at any status, with no verification reset |
+| `DELETE` | `/api/items/:productId` | owner only; refuses (`409`) while another user has a rating on it, so a shared item cannot be pulled out from under a group |
 
-- `GET /api/products/:barcode` for an `INTERNAL` id: `200` for the owner or a user with a `RatingShare`;
-  `404` (not `403`) otherwise — an item id is unguessable and its existence is not public information.
-- `POST /api/ratings` is unchanged in shape but must reject an `INTERNAL` barcode the caller cannot see.
+- `GET /api/products/:productId` for a `CUSTOM` item: `200` for anyone the visibility helper admits;
+  `404` (not `403`) otherwise — a UUID v4 is unguessable and an item's existence is not public information.
+- `GET /api/products/gtin/:gtin` can never return a custom item, because custom items have no GTIN.
+- `POST /api/ratings` is unchanged in shape but must reject a `CUSTOM` product the caller cannot see.
 - `POST /api/products/upload-image` accepts `kind=item`.
 
-**Schema additions:**
-- `Product.identifierType ProductIdentifierType @default(GTIN)` — enum `{ GTIN, INTERNAL }`; existing
-  rows are all `GTIN`.
-- `Product.ownerUserId String?` → `User`, set only for `INTERNAL` items. Distinct from
-  `submittedByUserId`, which is an attribution field on public products; this one is an authorization
-  field.
-- `@@index([ownerUserId])`.
+**Schema:** nothing new. `ProductKind { PACKAGED, CUSTOM }`, `Product.ownerUserId` (authorization field,
+distinct from the `submittedByUserId` attribution field), `@@index([ownerUserId])`, and the
+`kind = CUSTOM ⇔ ownerUserId IS NOT NULL` check constraint all land in P6-009. This ticket is the first
+to create `CUSTOM` rows.
 
 **Acceptance Criteria:**
 - [ ] A registered user can create an item with only a name and rate it, without any barcode.
-- [ ] Creation returns an `x-`-prefixed internal id; the client never displays it.
-- [ ] `BARCODE_RE` accepts GTINs and internal ids and rejects everything else; a GTIN can never collide
-      with an internal id.
+- [ ] Creation returns a `Product.id` for a `kind: CUSTOM` row with `ownerUserId` set and no
+      `PackagedProduct`; the client never displays the id.
+- [ ] `POST /api/items` rejects nutrition or allergen fields with `400`; a custom item can't hold either.
 - [ ] Creating an item lands the user on the rating screen for it.
 - [ ] An item is invisible to every other user until a rating of it is shared into a group.
 - [ ] A group member who can see a shared item can rate it against the same row, and both ratings feed
       that group's aggregate.
-- [ ] A user with no share, no rating and no ownership receives `404` from `GET /api/products/:barcode`.
+- [ ] A user with no share, no rating and no ownership receives `404` from `GET /api/products/:productId`.
 - [ ] A user who has rated an item keeps read access to it after the owner unshares, after either party
       leaves the group, and after the group is deleted — their history still loads and a queued rating
       still replays.
 - [ ] Keeping that read access does **not** expose the owner's rating of the item; that stays governed by
       `RatingShare`.
-- [ ] `INTERNAL` items are excluded from peer verification, the P5-005 edit-proposal flow, and OFF sync;
-      those endpoints return `409`.
+- [ ] `CUSTOM` items are excluded from peer verification and the P5-005 edit-proposal flow (those
+      endpoints return `409`), and from OFF sync (no `PackagedProduct` to queue).
 - [ ] The owner can edit their own item in place with no verification reset and no peer approval.
 - [ ] Deleting an item is refused while another user holds a rating on it.
 - [ ] The image plausibility gate runs on item photos via `kind=item`, accepts a plausible non-packaged
@@ -1177,15 +1196,16 @@ nicety; Slice B is independent and can wait.
 
 #### Slice B — Global product search
 **New endpoint** `GET /api/products/search?q=<query>&cursor=<cursor>` (`requireAuth`):
-- Returns `{ results: [{ barcode, name, brand, image, unverified }], nextCursor }`, images resolved
+- Returns `{ results: [{ id, name, brand, image, unverified }], nextCursor }`, images resolved
   through `resolveImageUrl` like every other product serialisation.
 - **Visibility rules — the part to get right:**
   - `REJECTED` products are excluded entirely (matches P5-007's invariant).
   - `PENDING_REVIEW` products are included for every caller, anonymous included, flagged `unverified`
     (P5-007 already made them individually visible; hiding them from search would be inconsistent).
-  - **`INTERNAL` items (P6-007) are excluded unless the caller owns them, holds a `RatingShare` on a
-    rating of them, or has rated them personally** — the same three-rule visibility test as
-    `GET /api/products/:barcode`, and it must be the same helper, not a second copy of the predicate.
+  - **`CUSTOM` items (P6-007) are excluded unless the caller owns them, holds a `RatingShare` on a
+    rating of them, or has rated them personally**. This is the `productVisibility` helper (P6-009 /
+    ADR 0006) that `GET /api/products/:productId` uses, and it must be the same helper, not a second
+    copy of the predicate.
     This is the easiest place in the system to accidentally leak a private item: an unfiltered `ILIKE`
     over `Product.name` returns every household's custom items to everyone. It needs its own test.
 - **Index:** `pg_trgm` with a GIN index on `name` (and `brand`), ranked by `similarity()`, tie-broken by
@@ -1216,8 +1236,8 @@ nicety; Slice B is independent and can wait.
 - [ ] `GET /api/products/search` returns name/brand matches ranked by similarity, cursor-paginated at 20.
 - [ ] `REJECTED` products never appear.
 - [ ] `PENDING_REVIEW` products appear flagged `unverified`, for anonymous callers too.
-- [ ] Another user's `INTERNAL` item never appears; my own items, items shared with me, and items I have
-      rated do — using the same visibility helper as `GET /api/products/:barcode`, with a dedicated test
+- [ ] Another user's `CUSTOM` item never appears; my own items, items shared with me, and items I have
+      rated do — using the same visibility helper as `GET /api/products/:productId`, with a dedicated test
       for the leak case.
 - [ ] Queries are capped at 100 raw characters (measured before trimming) and rejected below 2 trimmed
       characters; no user input reaches a regex or a raw SQL fragment.
@@ -1226,6 +1246,99 @@ nicety; Slice B is independent and can wait.
 - [ ] The endpoint is rate-limited and covered by integration tests including the visibility matrix.
 - [ ] Input is debounced and superseded requests are cancelled.
 - [ ] The global scope reports being offline and points the user back to the working personal scope.
+
+### [TICKET-P6-009] Product Model Split — Slim `Product` + `PackagedProduct`
+**Goal:** Implement ADR 0006. `Product` becomes the slim, server-identified thing that gets rated.
+Everything that describes a *manufactured article* (the GTIN, nutrition, ingredients, and later allergens
+and OFF sync state) moves to a 1:1 `PackagedProduct`. Every product route, cache and queue re-keys from
+`barcode` to `Product.id`. **No user-visible change**: this is the refactor that lets P6-001 put allergens
+where custom items can't hold them, and lets P6-007 add custom items without a synthetic-barcode scheme.
+**Depends on:** nothing. **Blocks:** P6-001, P6-005, P6-007 (all add to one side of the split).
+
+**Schema** (full sketch in ADR 0006):
+- `enum ProductKind { PACKAGED, CUSTOM }`; `Product.kind` (no default; the migration backfills every
+  existing row as `PACKAGED`).
+- `Product` keeps: `id`, `name`, `brand`, `image`, `description`, `status`, `plausibilityFlag`,
+  `submittedByUserId`, `lastModifiedByUserId`, relations. Adds `ownerUserId String?` → `User`, plus
+  `@@index([ownerUserId])`. It stays null for every row until P6-007.
+- New `PackagedProduct { productId @id → Product (onDelete: Cascade), gtin String @unique, genericName,
+  energyKcal, fat, saturatedFat, carbohydrates, sugars, protein, salt, servingSize, ingredients }`.
+- `Product.barcode` and the moved columns are dropped from `Product`.
+- `ProductEdit.barcode` FK → `ProductEdit.productId` FK. The hand-written `one_pending_edit_per_product`
+  partial unique index is rebuilt on `productId`, and `@@index([barcode, status])` becomes
+  `@@index([productId, status])`.
+- Hand-written `CHECK ((kind = 'CUSTOM') = ("ownerUserId" IS NOT NULL))`.
+- **One migration, data-preserving:** add `kind`; `INSERT INTO "PackagedProduct" SELECT id, barcode, …
+  FROM "Product"`; backfill `ProductEdit.productId` from the barcode join; then drop the old columns.
+  `Product.id`, and with it every `Rating`, `ProductVerification` and `ProductEdit`, is unchanged.
+
+**Backend:**
+- Routes: every `/api/products/:barcode/...` becomes `/api/products/:productId/...` (get, verify, `PATCH`
+  correct, edits, pending edit). Validate `:productId` as a UUID and return `400` otherwise.
+- New `GET /api/products/gtin/:gtin` (`requireAuth`, `userLimiter`). It takes over today's
+  `getProductByBarcode` logic: validate `^\d{8,13}$` (`400`), look up `PackagedProduct.gtin`, fetch from
+  OFF on a miss, and create `Product` + `PackagedProduct` in **one transaction**. It returns the same
+  product body as `GET /api/products/:productId`, `id` included.
+- Product serialisation: `{ id, kind, name, brand, image, …, packaged: { gtin, nutrition…, ingredients }
+  | null }`. Nutrition no longer sits at the top level. `resolveImageUrl` is applied as before.
+- `POST /api/products` (add product) takes `gtin` instead of `barcode` and writes both rows in one
+  transaction. `PATCH` and the P5-005 edit apply update whichever table owns each changed field, in one
+  transaction. `originalValues`/`proposedChanges` stay flat JSON keyed by field name, so already-stored
+  edits keep working.
+- `POST /api/ratings` takes `{ productId, taste, comment? }`. **Transitional:** it also accepts the legacy
+  `{ barcode, … }` (resolved via `PackagedProduct.gtin`) so outbox entries queued before the app update
+  still replay. Remove the legacy shape in a follow-up once no client can hold one.
+- `GET /api/ratings/me/:barcode` (unused by the app since Phase 8) is deleted, not re-keyed.
+  `GET /api/ratings/product/:barcode` is left alone; P6-002 deletes it.
+- New `server/src/services/productVisibility.ts`: `visibleProductWhere(user)` and
+  `assertProductVisible(user, id)`. For now: `PACKAGED` excludes `REJECTED`, and `CUSTOM` is visible to
+  its owner only (P6-007 extends this branch). **Every** product read goes through it. OFF-sync and
+  backfill jobs filter `kind: PACKAGED` explicitly instead.
+- Rating responses that embed a product use the new serialisation.
+
+**Frontend:**
+- `app/(app)/product/[barcode].tsx` → `app/(app)/product/[id].tsx`. New `app/(app)/product/gtin/[gtin].tsx`
+  resolver: it calls the GTIN lookup and `router.replace`s into `product/<id>`. The not-found branch (add
+  product) and the invalid-code branch (P6-006 manual sheet, pre-filled) move to the resolver. Scan,
+  manual entry and every deep link that carries a code navigate to the resolver. Register both routes
+  in `app/(app)/_layout.tsx`.
+- The rate-limit gate, "Rating Submitted!" card and rescan suppression behave exactly as today. Update
+  their tests for the new route.
+- `products` cache: keyed by `Product.id`, plus a `gtin → id` index in the same document, so an
+  **offline scan of a known product still paints** (the resolver checks the index before the network).
+- `ratings` cache, `use-my-rating`, `RatingEntry` and the outbox key by `productId`. The add-product,
+  edit-product and review-edit flows take an id.
+- Bump `CACHE_SCHEMA_VERSION`, but **carry the outbox document across the bump** (read it from the old
+  version directory before pruning, then write it into the new one unchanged). Legacy `{ barcode }`
+  entries then replay through the transitional rating shape. The other caches are wiped and refill
+  normally.
+- The product screen reads nutrition from `product.packaged`, and renders no nutrition section when it is
+  `null`. Nothing produces `null` until P6-007, but the branch and its test land here.
+
+**Docs:** CLAUDE.md (data model, routes, offline cache keys, the `(app)` route list), `backend.md`,
+`frontend.md`, `data.md`, Bruno collection (re-keyed requests + the GTIN lookup). Flip ADR 0006's status
+to implemented.
+
+**Acceptance Criteria:**
+- [ ] `Product` holds no GTIN, nutrition or ingredient columns; `PackagedProduct` holds them, 1:1 by
+      `productId`, with `gtin` unique.
+- [ ] The migration preserves every existing product, rating, verification and edit, and every existing
+      row ends up `kind: PACKAGED` with exactly one `PackagedProduct`.
+- [ ] The `kind`/`ownerUserId` check constraint exists, and a test proves the database rejects a
+      `CUSTOM` row without an owner and a `PACKAGED` row with one.
+- [ ] Creating a packaged product (OFF fetch or user submission) writes both rows in one transaction; a
+      failure leaves neither.
+- [ ] Every product route is keyed by `Product.id`; `GET /api/products/gtin/:gtin` is the only way to
+      resolve a GTIN, and keeps today's `400` / OFF-fetch / `404` behaviour.
+- [ ] `ProductEdit` references `productId`, and the one-pending-edit-per-product rule still holds at the
+      database layer.
+- [ ] Every product read goes through `productVisibility`; a test asserts that a `CUSTOM` row inserted
+      directly into the database is invisible to a non-owner on every product-reading endpoint.
+- [ ] Scanning, manual entry, the add-product 404 path and the P6-006 invalid-code path all work through
+      the GTIN resolver; an offline scan of a cached product paints from cache.
+- [ ] A rating queued before the update (legacy `{ barcode }` entry) survives the cache-version bump and
+      replays successfully.
+- [ ] Backend and frontend suites pass; Playwright and Maestro scan flows pass against the new routes.
 
 ## Phase 7: Auth Enhancements
 
