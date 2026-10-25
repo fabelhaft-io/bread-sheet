@@ -94,63 +94,63 @@ afterEach(() => {
 });
 
 describe('ScanScreen', () => {
-  it('offers manual entry when camera permission has not been granted', () => {
+  it('offers manual entry when camera permission has not been granted', async () => {
     mockPermission.mockReturnValue([{ granted: false }, requestPermission]);
-    render(<ScanScreen />);
+    await render(<ScanScreen />);
 
     expect(screen.getByTestId('scan-manual-entry')).toBeTruthy();
     expect(screen.queryByTestId('camera-view')).toBeNull();
   });
 
-  it('offers manual entry before the permission state is known', () => {
+  it('offers manual entry before the permission state is known', async () => {
     mockPermission.mockReturnValue([null, requestPermission]);
-    render(<ScanScreen />);
+    await render(<ScanScreen />);
 
     expect(screen.getByTestId('scan-manual-entry')).toBeTruthy();
   });
 
-  it('opens the manual sheet and routes to the entered code', () => {
-    render(<ScanScreen />);
+  it('opens the manual sheet and routes to the entered code', async () => {
+    await render(<ScanScreen />);
 
-    fireEvent.press(screen.getByTestId('scan-manual-entry'));
-    fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.press(screen.getByTestId('scan-manual-entry'));
+    await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });
 
-  it('recognises itf14 and code128 alongside the four retail symbologies', () => {
-    render(<ScanScreen />);
+  it('recognises itf14 and code128 alongside the four retail symbologies', async () => {
+    await render(<ScanScreen />);
 
     expect(cameraProps.barcodeScannerSettings.barcodeTypes).toEqual(
       expect.arrayContaining(['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'itf14'])
     );
   });
 
-  it('routes a valid scanned code straight to the product screen', () => {
-    render(<ScanScreen />);
+  it('routes a valid scanned code straight to the product screen', async () => {
+    await render(<ScanScreen />);
 
-    fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data: '4006381333931' });
+    await fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data: '4006381333931' });
 
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
     expect(screen.queryByTestId('manual-barcode-input')).toBeNull();
   });
 
-  it('opens the manual sheet pre-filled when a scan fails server validation', () => {
-    render(<ScanScreen />);
+  it('opens the manual sheet pre-filled when a scan fails server validation', async () => {
+    await render(<ScanScreen />);
 
     // An ITF-14 case code: reads fine, but is 14 digits and would come back as
     // a bare `400 Invalid barcode format`.
-    fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data: '14006381333931' });
+    await fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data: '14006381333931' });
 
     expect(mockRouter.push).not.toHaveBeenCalled();
     expect(screen.getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
   });
 
-  it('stops scanning while the manual sheet is open', () => {
-    render(<ScanScreen />);
+  it('stops scanning while the manual sheet is open', async () => {
+    await render(<ScanScreen />);
 
-    fireEvent.press(screen.getByTestId('scan-manual-entry'));
+    await fireEvent.press(screen.getByTestId('scan-manual-entry'));
 
     expect(cameraProps.onBarcodeScanned).toBeUndefined();
   });
@@ -165,65 +165,65 @@ describe('ScanScreen', () => {
   describe('re-scan suppression', () => {
     const CODE = '4006381333931';
 
-    function scan(data: string) {
-      fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data });
+    async function scan(data: string) {
+      await fireEvent(screen.getByTestId('camera-view'), 'onBarcodeScanned', { data });
     }
 
-    it('ignores the same code for as long as it keeps being seen', () => {
-      render(<ScanScreen />);
+    it('ignores the same code for as long as it keeps being seen', async () => {
+      await render(<ScanScreen />);
 
-      scan(CODE);
+      await scan(CODE);
       expect(mockRouter.push).toHaveBeenCalledTimes(1);
 
       // Each sighting refreshes the suppression window, so a code parked in
       // front of the camera never re-fires — not even once the 2 s burst lock
       // that used to be the only guard has expired.
       for (let i = 0; i < 5; i++) {
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(1000);
         });
-        scan(CODE);
+        await scan(CODE);
       }
 
       expect(mockRouter.push).toHaveBeenCalledTimes(1);
     });
 
-    it('re-arms the same code once it has been out of frame', () => {
-      render(<ScanScreen />);
+    it('re-arms the same code once it has been out of frame', async () => {
+      await render(<ScanScreen />);
 
-      scan(CODE);
+      await scan(CODE);
       expect(mockRouter.push).toHaveBeenCalledTimes(1);
 
       // No sightings for longer than the re-arm gap: the user took the camera
       // off the label and put it back, which is a deliberate re-scan.
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(2000);
       });
-      scan(CODE);
+      await scan(CODE);
 
       expect(mockRouter.push).toHaveBeenCalledTimes(2);
     });
 
-    it('never delays a different code', () => {
-      render(<ScanScreen />);
+    it('never delays a different code', async () => {
+      await render(<ScanScreen />);
 
-      scan(CODE);
-      act(() => {
+      await scan(CODE);
+      await act(() => {
         jest.advanceTimersByTime(2000);
       });
-      scan('5000112637939');
+      await scan('5000112637939');
 
       expect(mockRouter.push).toHaveBeenNthCalledWith(2, '/(app)/product/5000112637939');
     });
 
-    it('never suppresses the dev injection seam, which is a deliberate request', () => {
+    it('never suppresses the dev injection seam, which is a deliberate request', async () => {
       // The Maestro flows drive `breadsheet://scan?inject=<barcode>`; asking for
       // a code by name is not the camera re-reporting a label that never left
       // the frame, so it must go through even while that code is suppressed.
       mockParamsState = { inject: CODE };
-      render(<ScanScreen />);
+      await render(<ScanScreen />);
       // The seam defers past the router's deep-link update via setTimeout(0).
-      act(() => {
+      await act(() => {
         jest.advanceTimersByTime(0);
       });
       expect(mockRouter.push).toHaveBeenCalledTimes(1);
@@ -232,37 +232,37 @@ describe('ScanScreen', () => {
       // swallowed and refreshes the suppression window, so by the time the
       // burst lock expires the code is still very much suppressed.
       for (let i = 0; i < 5; i++) {
-        act(() => {
+        await act(() => {
           jest.advanceTimersByTime(500);
         });
-        scan(CODE);
+        await scan(CODE);
       }
       expect(mockRouter.push).toHaveBeenCalledTimes(1);
 
-      act(() => {
+      await act(() => {
         applyMockParams({ inject: CODE });
       });
-      act(() => {
+      await act(() => {
         jest.runAllTimers();
       });
 
       expect(mockRouter.push).toHaveBeenCalledTimes(2);
     });
 
-    it('does not re-open the manual sheet for the code that opened it', () => {
-      render(<ScanScreen />);
+    it('does not re-open the manual sheet for the code that opened it', async () => {
+      await render(<ScanScreen />);
 
       // An ITF-14 case code: the sheet opens pre-filled instead of navigating.
-      scan('14006381333931');
+      await scan('14006381333931');
       expect(screen.getByTestId('manual-barcode-input')).toBeTruthy();
 
       // Dismissing it re-enables the camera, which is still looking at that
       // same unreadable code.
-      fireEvent.press(screen.getByTestId('manual-barcode-backdrop'));
-      act(() => {
+      await fireEvent.press(screen.getByTestId('manual-barcode-backdrop'));
+      await act(() => {
         jest.advanceTimersByTime(1000);
       });
-      scan('14006381333931');
+      await scan('14006381333931');
 
       expect(screen.queryByTestId('manual-barcode-input')).toBeNull();
       expect(mockRouter.push).not.toHaveBeenCalled();
@@ -276,12 +276,12 @@ describe('ScanScreen', () => {
   // These run against a router mock whose `setParams` really mutates the params
   // and re-renders (see the top of this file). That re-render is the seam's own
   // doing, and it must not cancel the scan it just started.
-  it('injects a scanned barcode from the dev ?inject= param straight to the product screen', () => {
+  it('injects a scanned barcode from the dev ?inject= param straight to the product screen', async () => {
     mockParamsState = { inject: '4006381333931' };
-    render(<ScanScreen />);
+    await render(<ScanScreen />);
 
     // The seam defers past the router's deep-link update via setTimeout(0).
-    act(() => {
+    await act(() => {
       jest.runAllTimers();
     });
 
@@ -289,11 +289,11 @@ describe('ScanScreen', () => {
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });
 
-  it('consumes the inject param and still completes the scan it started', () => {
+  it('consumes the inject param and still completes the scan it started', async () => {
     mockParamsState = { inject: '4006381333931' };
-    render(<ScanScreen />);
+    await render(<ScanScreen />);
 
-    act(() => {
+    await act(() => {
       jest.runAllTimers();
     });
 
@@ -306,11 +306,11 @@ describe('ScanScreen', () => {
     expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
   });
 
-  it('routes a dev-injected non-lookupable code to the manual sheet, like a real scan', () => {
+  it('routes a dev-injected non-lookupable code to the manual sheet, like a real scan', async () => {
     mockParamsState = { inject: '14006381333931' };
-    render(<ScanScreen />);
+    await render(<ScanScreen />);
 
-    act(() => {
+    await act(() => {
       jest.runAllTimers();
     });
 
@@ -318,10 +318,10 @@ describe('ScanScreen', () => {
     expect(screen.getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
   });
 
-  it('stays inert when no inject param is present', () => {
-    render(<ScanScreen />);
+  it('stays inert when no inject param is present', async () => {
+    await render(<ScanScreen />);
 
-    act(() => {
+    await act(() => {
       jest.runAllTimers();
     });
 

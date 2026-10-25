@@ -32,17 +32,17 @@ describe('useSession', () => {
     });
   });
 
-  it('starts in loading state with a null session', () => {
+  it('starts in loading state with a null session', async () => {
     // getSession never resolves — simulates the loading window
     mockGetSession.mockReturnValue(new Promise(() => {}));
-    const { result } = renderHook(() => useSession(), { wrapper });
+    const { result } = await renderHook(() => useSession(), { wrapper });
     expect(result.current.isLoading).toBe(true);
     expect(result.current.session).toBeNull();
   });
 
   it('resolves to null session and isLoading=false when not signed in', async () => {
     mockGetSession.mockResolvedValue({ data: { session: null } });
-    const { result } = renderHook(() => useSession(), { wrapper });
+    const { result } = await renderHook(() => useSession(), { wrapper });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.session).toBeNull();
     expect(result.current.isAnonymous).toBe(false);
@@ -54,7 +54,7 @@ describe('useSession', () => {
       user: { id: 'u1', is_anonymous: true },
     };
     mockGetSession.mockResolvedValue({ data: { session } });
-    const { result } = renderHook(() => useSession(), { wrapper });
+    const { result } = await renderHook(() => useSession(), { wrapper });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.session).toEqual(session);
     expect(result.current.isAnonymous).toBe(true);
@@ -66,7 +66,7 @@ describe('useSession', () => {
       user: { id: 'u2', is_anonymous: false },
     };
     mockGetSession.mockResolvedValue({ data: { session } });
-    const { result } = renderHook(() => useSession(), { wrapper });
+    const { result } = await renderHook(() => useSession(), { wrapper });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.isAnonymous).toBe(false);
   });
@@ -79,12 +79,12 @@ describe('useSession', () => {
     });
     mockGetSession.mockResolvedValue({ data: { session: null } });
 
-    const { result } = renderHook(() => useSession(), { wrapper });
+    const { result } = await renderHook(() => useSession(), { wrapper });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(result.current.session).toBeNull();
 
     const newSession = { access_token: 'tok', user: { id: 'u1', is_anonymous: false } };
-    act(() => authCallback('SIGNED_IN', newSession));
+    await act(() => authCallback('SIGNED_IN', newSession));
 
     await waitFor(() => expect(result.current.session).toEqual(newSession));
     expect(result.current.isAnonymous).toBe(false);
@@ -94,9 +94,9 @@ describe('useSession', () => {
     const unsubscribe = jest.fn();
     mockOnAuthStateChange.mockReturnValue({ data: { subscription: { unsubscribe } } });
     mockGetSession.mockResolvedValue({ data: { session: null } });
-    const { unmount } = renderHook(() => useSession(), { wrapper });
+    const { unmount } = await renderHook(() => useSession(), { wrapper });
     await waitFor(() => {}); // let effects settle
-    unmount();
+    await unmount();
     expect(unsubscribe).toHaveBeenCalled();
   });
 });

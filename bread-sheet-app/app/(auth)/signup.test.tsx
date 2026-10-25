@@ -13,7 +13,12 @@ const mockPush = jest.fn();
 const mockUseLocalSearchParams = jest.fn(() => ({}));
 
 jest.mock('expo-router', () => ({
-  Link: ({ children }: { children: React.ReactNode }) => children,
+  // The real Link renders a <Text>; returning bare string children trips
+  // test-renderer's "text must be inside <Text>" invariant (RNTL 14).
+  Link: ({ children }: { children: React.ReactNode }) => {
+    const { Text } = jest.requireActual('react-native');
+    return <Text>{children}</Text>;
+  },
   useRouter: () => ({ replace: mockReplace, push: mockPush }),
   useLocalSearchParams: () => mockUseLocalSearchParams(),
 }));
@@ -48,16 +53,16 @@ describe('SignUpScreen — returnTo handling', () => {
     mockUseLocalSearchParams.mockReturnValue({ returnTo: '/product/0000000000001' });
     mockedSignUp.mockResolvedValue({ data: { session: null }, error: null });
 
-    const { getByPlaceholderText, getByText } = render(<SignUpScreen />);
-    fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
-    fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
+    const { getByPlaceholderText, getByText } = await render(<SignUpScreen />);
+    await fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
+    await fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
 
     // Use async act() so the full signUpWithEmail chain (including the
     // await setPendingReturnTo → await signUp sequence) completes before
     // we assert. A sync fireEvent.press + waitFor races with microtask
     // resolution in CI environments and causes intermittent 5s timeouts.
     await act(async () => {
-      fireEvent.press(getByText('Sign Up'));
+      await fireEvent.press(getByText('Sign Up'));
     });
 
     // Order: persist returnTo, THEN call signUp.
@@ -71,10 +76,10 @@ describe('SignUpScreen — returnTo handling', () => {
   it('does not persist anything when no returnTo is present', async () => {
     mockedSignUp.mockResolvedValue({ data: { session: null }, error: null });
 
-    const { getByPlaceholderText, getByText } = render(<SignUpScreen />);
-    fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
-    fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
-    fireEvent.press(getByText('Sign Up'));
+    const { getByPlaceholderText, getByText } = await render(<SignUpScreen />);
+    await fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
+    await fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
+    await fireEvent.press(getByText('Sign Up'));
 
     await waitFor(() => expect(mockedSignUp).toHaveBeenCalled());
     expect(mockSetPending).not.toHaveBeenCalled();
@@ -88,10 +93,10 @@ describe('SignUpScreen — returnTo handling', () => {
       error: { message: 'weak password' },
     });
 
-    const { getByPlaceholderText, getByText } = render(<SignUpScreen />);
-    fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
-    fireEvent.changeText(getByPlaceholderText('Password'), '123');
-    fireEvent.press(getByText('Sign Up'));
+    const { getByPlaceholderText, getByText } = await render(<SignUpScreen />);
+    await fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
+    await fireEvent.changeText(getByPlaceholderText('Password'), '123');
+    await fireEvent.press(getByText('Sign Up'));
 
     await waitFor(() => expect(mockClearPending).toHaveBeenCalled());
     expect(Alert.alert).toHaveBeenCalledWith('Sign up failed', 'weak password');
@@ -100,10 +105,10 @@ describe('SignUpScreen — returnTo handling', () => {
   it('navigates to verify-email when signUp succeeds without an immediate session', async () => {
     mockedSignUp.mockResolvedValue({ data: { session: null }, error: null });
 
-    const { getByPlaceholderText, getByText } = render(<SignUpScreen />);
-    fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
-    fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
-    fireEvent.press(getByText('Sign Up'));
+    const { getByPlaceholderText, getByText } = await render(<SignUpScreen />);
+    await fireEvent.changeText(getByPlaceholderText('Email'), 'a@b.com');
+    await fireEvent.changeText(getByPlaceholderText('Password'), 'secret');
+    await fireEvent.press(getByText('Sign Up'));
 
     await waitFor(() =>
       expect(mockReplace).toHaveBeenCalledWith({

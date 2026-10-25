@@ -43,15 +43,15 @@ describe('ReviewProductScreen', () => {
     });
   });
 
-  it('redirects anonymous users to the signup screen with returnTo', () => {
+  it('redirects anonymous users to the signup screen with returnTo', async () => {
     mockUseSession.mockReturnValue({
       session: { user: { id: 'guest', is_anonymous: true } },
       isAnonymous: true,
       isLoading: false,
     });
-    const { getByTestId, getByText } = render(<ReviewProductScreen />);
+    const { getByTestId, getByText } = await render(<ReviewProductScreen />);
     expect(getByTestId('review-product-anon-gate')).toBeTruthy();
-    fireEvent.press(getByText('Sign up'));
+    await fireEvent.press(getByText('Sign up'));
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(auth)/signup',
       params: { returnTo: '/product/0000000000001' },
@@ -72,9 +72,9 @@ describe('ReviewProductScreen', () => {
     });
     productsApi.approveProduct.mockResolvedValue({ verifications: 1 });
 
-    const { findByTestId } = render(<ReviewProductScreen />);
+    const { findByTestId } = await render(<ReviewProductScreen />);
     const btn = await findByTestId('review-approve');
-    fireEvent.press(btn);
+    await fireEvent.press(btn);
     await waitFor(() =>
       expect(productsApi.approveProduct).toHaveBeenCalledWith('0000000000001'),
     );
@@ -96,7 +96,7 @@ describe('ReviewProductScreen', () => {
       submittedByUserId: 'reviewer',
       submission: { name: 'My bread' },
     });
-    const { findByTestId, queryByTestId } = render(<ReviewProductScreen />);
+    const { findByTestId, queryByTestId } = await render(<ReviewProductScreen />);
     await findByTestId('own-submission-note');
     expect(queryByTestId('review-approve')).toBeNull();
     expect(queryByTestId('review-reject')).toBeNull();
@@ -127,7 +127,7 @@ describe('ReviewProductScreen', () => {
         ingredients: null,
       },
     });
-    const { findByTestId, getAllByText } = render(<ReviewProductScreen />);
+    const { findByTestId, getAllByText } = await render(<ReviewProductScreen />);
     await findByTestId('review-details');
     expect(getAllByText('Not provided').length).toBeGreaterThanOrEqual(9);
   });
@@ -143,7 +143,7 @@ describe('ReviewProductScreen', () => {
       unverified: true,
       submission: { submittedByUserId: 'submitter' },
     });
-    const { findByTestId } = render(<ReviewProductScreen />);
+    const { findByTestId } = await render(<ReviewProductScreen />);
     const scroll = await findByTestId('review-product-screen');
     expect(scroll.props.alwaysBounceVertical).toBe(false);
     expect(scroll.props.overScrollMode).toBe('never');

@@ -1,5 +1,6 @@
 import React from 'react';
 import { fireEvent, render } from '@testing-library/react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { ApiError, NetworkError } from '@/lib/api';
 import { productCache, ratingsCache } from '@/lib/offline/caches';
@@ -116,7 +117,7 @@ describe('ProductScreen — offline (P8-002)', () => {
     await ratingsCache.write([]);
     mockApiGet.mockRejectedValue(new NetworkError());
 
-    const { findByText, findByTestId, queryByTestId } = render(<ProductScreen />);
+    const { findByText, findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByText('Sourdough Loaf');
     await findByTestId('product-offline-indicator');
@@ -126,7 +127,7 @@ describe('ProductScreen — offline (P8-002)', () => {
   it('shows the offline state — not "add this product" — for an uncached barcode', async () => {
     mockApiGet.mockRejectedValue(new NetworkError());
 
-    const { findByTestId, queryByTestId } = render(<ProductScreen />);
+    const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByTestId('product-offline');
     expect(queryByTestId('product-not-found')).toBeNull();
@@ -136,7 +137,7 @@ describe('ProductScreen — offline (P8-002)', () => {
   it('still shows the not-found state when the server genuinely answers 404', async () => {
     mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
 
-    const { findByTestId, queryByTestId } = render(<ProductScreen />);
+    const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByTestId('product-not-found');
     expect(queryByTestId('product-offline')).toBeNull();
@@ -156,7 +157,7 @@ describe('ProductScreen — offline (P8-002)', () => {
     ]);
     mockApiGet.mockRejectedValue(new NetworkError());
 
-    const { findByText } = render(<ProductScreen />);
+    const { findByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByText('Update Rating');
     await findByText('9.0');
@@ -183,9 +184,9 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
   it('queues the rating and confirms success rather than showing an error', async () => {
     mockApiPost.mockRejectedValue(new NetworkError());
 
-    const { findByText, findByTestId, getByText } = render(<ProductScreen />);
+    const { findByText, findByTestId, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
-    fireEvent.press(getByText('Submit Rating'));
+    await fireEvent.press(getByText('Submit Rating'));
 
     await findByTestId('rating-queued-offline');
     expect(mockEnqueue).toHaveBeenCalledWith({
@@ -198,9 +199,9 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
   it('writes the queued rating into the cache so the Home tab shows it immediately', async () => {
     mockApiPost.mockRejectedValue(new NetworkError());
 
-    const { findByText, findByTestId, getByText } = render(<ProductScreen />);
+    const { findByText, findByTestId, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
-    fireEvent.press(getByText('Submit Rating'));
+    await fireEvent.press(getByText('Submit Rating'));
     await findByTestId('rating-queued-offline');
 
     expect(await ratingsCache.read()).toMatchObject([
@@ -218,9 +219,9 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
       product: { id: 'p1', barcode: PRODUCT.barcode, name: PRODUCT.name, brand: null, image: null },
     });
 
-    const { findByText, getByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, getByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
-    fireEvent.press(getByText('Submit Rating'));
+    await fireEvent.press(getByText('Submit Rating'));
 
     await findByText(/Rating Submitted!/i);
     expect(mockEnqueue).not.toHaveBeenCalled();
@@ -230,9 +231,9 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
   it('reports a server rejection as an error instead of queueing it', async () => {
     mockApiPost.mockRejectedValue(new ApiError(400, 'taste must be between 0 and 10', {}));
 
-    const { findByText, getByText } = render(<ProductScreen />);
+    const { findByText, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
-    fireEvent.press(getByText('Submit Rating'));
+    await fireEvent.press(getByText('Submit Rating'));
 
     await findByText(/taste must be between 0 and 10/);
     expect(mockEnqueue).not.toHaveBeenCalled();
@@ -241,7 +242,7 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
   it('marks the product as awaiting sync while its rating sits in the queue', async () => {
     mockIsQueued.mockReturnValue(true);
 
-    const { findByTestId } = render(<ProductScreen />);
+    const { findByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByTestId('product-pending-sync');
   });

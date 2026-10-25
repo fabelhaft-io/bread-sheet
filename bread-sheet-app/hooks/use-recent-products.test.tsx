@@ -66,25 +66,25 @@ describe('RecentProductsProvider', () => {
   });
 
   it('persists an opened product and restores it after a cold start', async () => {
-    const first = renderHook(() => useRecentProducts(), { wrapper });
+    const first = await renderHook(() => useRecentProducts(), { wrapper });
     await act(async () => {
       first.result.current.addRecentProduct(LOAF);
     });
     await waitFor(() => expect(recentsCache.peek()).toHaveLength(1));
 
     // Simulate a fresh process: memory mirror gone, disk intact.
-    first.unmount();
+    await first.unmount();
     __resetOfflineStoreForTests();
     setActiveCacheUser('u1');
 
-    const second = renderHook(() => useRecentProducts(), { wrapper });
+    const second = await renderHook(() => useRecentProducts(), { wrapper });
     await waitFor(() => expect(second.result.current.recentProducts).toHaveLength(1));
     expect(second.result.current.recentProducts[0].name).toBe('Sourdough Loaf');
     expect(second.result.current.recentProducts[0].viewedAt).toBeInstanceOf(Date);
   });
 
   it('moves an already-listed product back to the top instead of duplicating it', async () => {
-    const { result } = renderHook(() => useRecentProducts(), { wrapper });
+    const { result } = await renderHook(() => useRecentProducts(), { wrapper });
     await act(async () => {
       result.current.addRecentProduct(LOAF);
       result.current.addRecentProduct({ ...LOAF, barcode: '222', name: 'Rye' });
@@ -97,7 +97,7 @@ describe('RecentProductsProvider', () => {
   // Both effects re-run in the same commit when the account changes, at which
   // point state still holds the previous user's list.
   it('never writes one account’s recents into another account’s namespace', async () => {
-    const { result, rerender } = renderHook(() => useRecentProducts(), { wrapper });
+    const { result, rerender } = await renderHook(() => useRecentProducts(), { wrapper });
     await act(async () => {
       result.current.addRecentProduct(LOAF);
     });
@@ -105,7 +105,7 @@ describe('RecentProductsProvider', () => {
 
     setActiveCacheUser('u2');
     signedInAs('u2');
-    rerender(undefined);
+    await rerender(undefined);
 
     await waitFor(() => expect(result.current.recentProducts).toHaveLength(0));
     expect(await recentsCache.read()).toBeNull();
