@@ -424,7 +424,7 @@ User History
 ## Phase 6: Social
 
 **Build order (2026-07-30, amended 2026-10-25).** Ticket numbers are historical; the dependency order is
-**P6-006 → P6-009 → P6-001 → P6-003 → P6-002 → (P6-007 + P6-008 slice A) → P6-004 → P6-008 slice B → P6-005**.
+**P6-006 → P6-009 → P6-001 → P6-003 → P6-008 slice B → (P6-007 + P6-008 slice A) → P6-002 → P6-004 → P6-005**.
 
 Worth knowing before implementation starts:
 
@@ -442,13 +442,16 @@ Worth knowing before implementation starts:
 - **P6-003 before P6-002** because the per-group "share only these categories" policy selects over the
   user's own category rows, which do not exist until then. Categories are also the phase's cheapest source
   of product feedback — see the learning loop in P6-003.
-- **P6-007 and P6-008 slice A ship together.** Barcode-less items with no way to search for them by name
-  are close to write-only once they fall off the recents list; a barcoded product can always be re-found by
-  scanning, an item cannot.
-- **P6-007 after P6-002** because an item only becomes visible to anyone but its creator through
-  `RatingShare`.
+- **P6-008 slice B before P6-007** (revised 2026-10-25). Custom products are public, and the only thing
+  standing between a public, name-identified catalogue and a pile of duplicate "Negroni" rows is
+  search-before-create, which is built on the global search endpoint.
+- **P6-007 and P6-008 slice A ship together.** A custom product has no physical handle: once it falls off
+  the recents list, searching your own ratings by name is how you get back to it. A barcoded product can
+  always be re-found by scanning.
+- P6-007 no longer depends on P6-002. Custom products are visible because they are public, not because a
+  rating was shared.
 - P6-004 is a presentation layer over the aggregate endpoint that P6-002 introduces.
-- P6-008 slice B (global name search) and P6-005 (OFF sync) are independent of everything else and can slip.
+- P6-005 (OFF sync) is independent of everything else and can slip.
 
 **Cross-cutting decisions for this phase:**
 - **Products are keyed by `Product.id` from P6-009 on** (ADR 0006). Wherever a later ticket in this
@@ -456,6 +459,9 @@ Worth knowing before implementation starts:
   resolved through `GET /api/products/gtin/:gtin`. Label data (nutrition, ingredients, allergens, OFF
   sync state) lives on `PackagedProduct`, never on `Product`. Every product read goes through the
   `productVisibility` helper.
+- **There is one public catalogue** (revised 2026-10-25). Custom products (P6-007) are public, peer
+  reviewed and editable exactly like barcoded ones. The only private things in the app are a user's
+  categories (P6-003) and, through P6-002, who can see whose ratings.
 - **Social features are registered-only.** Every group route sits behind `requireRegistered`, matching
   every other contribution gate. Anonymous users see a sign-up prompt where the group UI would be.
   Allergens (P6-001) and categories (P6-003) are *read* features and stay visible to anonymous users;
@@ -1006,165 +1012,148 @@ mounted from `app/(tabs)/scan.tsx`, `app/(tabs)/index.tsx` and the `400` branch 
 the sign-up gate criterion is satisfied by the existing P5-001 branch rather than by new code. See
 `docs/architecture/frontend.md#manual-barcode-entry-ticket-p6-006`.
 
-### [TICKET-P6-007] Barcode-Less Items — Rate Things With No Code
-**Goal:** Let a user rate something that has no barcode — a cocktail, a restaurant dish, loose-leaf tea,
-a cigar from an unlabelled humidor. This is the use case that motivated P6-003's user-owned categories,
-and it is currently impossible: `Product.barcode` is required, `@unique`, validated `^\d{8,13}$`
-(`productController.ts:37`), and is the routing key for every product endpoint, the FK target for
-`ProductEdit.barcode`, and the key of the Phase 8 `products` cache and the rating outbox.
-**Depends on:** P6-009 (the product model split this ticket builds on), P6-002 (`RatingShare` is what
-makes an item visible to anyone but its creator), P6-003 (a category is the only way to organise items,
-which have no brand or label to sort by).
-**User-facing name:** "custom item". Internally these are `Product` rows with `kind: CUSTOM` and no
+### [TICKET-P6-007] Custom Products — Rate Things With No Barcode
+**Goal:** Let a user rate something that has no barcode, such as a cocktail, a dish, loose-leaf tea or a
+homemade lasagne, and let everyone else **find and rate that same thing** instead of adding it again.
+This is impossible today: after P6-009, every product needs a `PackagedProduct` with a GTIN.
+**Depends on:** P6-009 (slim `Product` with `kind: CUSTOM`), P6-008 slice B (global name search, which
+the duplicate check is built on), P6-003 (categories, the main way to organise ratings of things that
+have no brand or label).
+**User-facing name:** "custom product". Internally these are `Product` rows with `kind: CUSTOM` and no
 `PackagedProduct` row (ADR 0006).
 
-**Decision 1 — a custom item is a slim `Product` with no `PackagedProduct`.** *(Revised 2026-10-25 by
-ADR 0006. The original 2026-07-30 decision stored a synthetic `x-<ULID>` in `Product.barcode` to avoid
-re-keying. It was dropped because it left label-only columns (nutrition, allergens) writable on a
-cocktail, and because a column named `barcode` holding non-barcodes is a misleading name.)* After P6-009,
-`Product.id` is already the key for every product route, cache entry and outbox item. So a custom item
-needs no identifier scheme of its own: it gets a UUID like every other product, and simply has no GTIN.
-There is no `BARCODE_RE` change. Custom items carry **no nutrition and no allergen data**, because
-nobody knows exactly what went into a cocktail. The schema makes that impossible to store, not just
-hidden.
+**Decision history.** The 2026-07-30 draft made these *owner-scoped private items*, visible to others
+only by sharing a rating into a group, and it explicitly declined a public catalogue. **That was
+reversed on 2026-10-25: custom products are public, exactly like barcoded ones.** Reason: re-adding
+"Negroni" for every user is overhead that defeats the point, and the cost the earlier draft feared
+(name-based duplicates) is handled by search-before-create (Decision 3). There is no private option.
+Something personal like "Mom's lasagne" being public, and rated by someone else's mom's lasagne fans,
+is fine.
 
-**Decision 2 — items are owner-scoped, and become visible only through sharing.** *(Confirmed 2026-07-30.
-The alternative — a public barcode-less catalogue where one "Negroni" row is rated by everyone — was
-considered and **declined**; see the note at the end of this ticket. The motivating cases are a household
-and a couple sharing a wine tasting, i.e. groups of two to five people who already know each other.)*
-- An item belongs to its creator (`Product.ownerUserId`, set only for `CUSTOM` items).
-- Nobody else can see it until a **rating** of it is shared into a group via P6-002's `RatingShare`.
-  Group members who can see that rating can open the item and **rate it themselves against the same row**
-  — which is exactly the "we went out and tried four cocktails" case, and produces a real group aggregate.
-- **There is therefore no global namespace and no dedup problem.** Two households each having their own
-  "Negroni" row is correct, not duplication: a Negroni is not a manufactured article with one identity,
-  and each household's row can carry their own photo and notes.
-- Visibility is **derived**, not a new enum. A `CUSTOM` item is readable by:
-  1. its owner;
-  2. anyone holding a `RatingShare` on a rating of it;
-  3. **anyone who has their own rating on it** — even if the share that introduced them to it is gone.
-  The rule lives in the `productVisibility` helper that P6-009 introduces (ADR 0006). This ticket fills in
-  its `CUSTOM` branch, which until now only had to say "owner only". It is the first place P7-002's
-  ownership guards are load-bearing rather than defensive.
-- **Why rule 3 exists.** Take the couple: A creates the item, rates it, shares it into their group; B taps
-  "Rate this too". If A later unshares that rating, leaves the group, or the group is deleted, rules 1–2
-  alone would strip B's read access to an item **B has personally rated** — B's own history would contain a
-  row that fails to load, and the outbox could not replay a queued rating against it. Access follows one's
-  own rating; it does not evaporate when someone else changes their mind about sharing. Note the deliberate
-  asymmetry: this grants read access to the item, never to A's rating of it, which stays governed by
-  `RatingShare` alone.
-- **Public promotion is deliberately out of scope.** A public barcode-less catalogue needs fuzzy-name
-  dedup, a duplicate-merge review flow, and search-by-name (none of which exist). Revisit only if users
-  ask for it.
+**Decision 1 — a custom product is a slim `Product` with no `PackagedProduct`** (ADR 0006). It gets a
+UUID like every other product, and it carries **no nutrition and no allergen data**: nobody knows
+exactly what went into a cocktail, so the schema makes that data impossible to store, not just hidden.
+Its identity is the **name alone**. A producer or venue qualifier ("Negroni — Bar X") was considered and
+deferred. It can be added later as an optional field without invalidating anything here.
 
-**What does *not* apply to `CUSTOM` items:**
-- **Peer verification / `PENDING_REVIEW`.** There is no public audience to protect, so an item is
-  owner-authoritative on creation: `status: VERIFIED`, no `ProductVerification` rows, no "Needs review"
-  banner. The verify endpoints reject `CUSTOM` products with `409`.
-- **The P5-005 edit-proposal flow.** The owner edits their own item directly through `PATCH`; there are
-  no strangers to ask. `POST /products/:productId/edits` rejects `CUSTOM` with `409`. A group member who
-  spots a wrong name tells the owner — out of band, deliberately.
-- **OFF sync (P6-005).** Nothing to sync: there is no upstream entry and no GTIN to key it on. Sync
-  state lives on `PackagedProduct`, so a custom item can't be queued at all.
-- **Nutrition and allergens (P6-001).** Not collected, not stored, not displayed. A custom item has no
-  `PackagedProduct` row, and the product screen renders neither a nutrition nor an allergen section for
-  it. There are no "no information yet" placeholders either, since there is nothing the user could
-  honestly fill in.
+**Decision 2 — the same lifecycle as a user-submitted packaged product.** No special cases:
+- **Creation** → `status: PENDING_REVIEW`, with `submittedByUserId` set to the creator. Visible to every
+  caller under the P5-007 rules, with the "Needs review" banner. Anyone signed in can rate it straight
+  away, including the creator.
+- **Peer verification** (P5-004) applies unchanged: 2 net approvals → `VERIFIED`, 2 net rejections →
+  `REJECTED` (hidden from everyone). The same `/verify` endpoints are used, and a self-vote is still `403`.
+- **Editing** (P5-006) applies unchanged. A `PENDING_REVIEW` custom product can be corrected in place
+  with `PATCH` (verifications reset, the corrector becomes the submitter). A change to a `VERIFIED` one
+  is proposed with `POST /products/:productId/edits` and needs 2 peer approvals. The **editable fields**
+  for a custom product are `name` and the photo. A nutrition or allergen field in an edit or correction
+  payload for a `CUSTOM` product is rejected with `400`, not silently dropped.
+- **OFF sync** (P6-005) never applies: there is no `PackagedProduct` to queue.
 
-**What still very much does apply — the abuse gate.** Barcode-less items are the obvious hole: no
-barcode, no peer review, an image upload, and (through sharing) an audience. The
-`imagePlausibilityService` gate stays mandatory on every upload. It needs one addition: today's
-`kind=product` prompt asks "is this a photo of a packaged product", which would reject a cocktail in a
-glass as `not_a_product`. Add `kind=item` with a prompt tuned to "is this a real thing a person could
-have consumed, photographed in good faith" — the `abuse` verdict, the `UserAbuseFlag` record, and the
-never-return-the-reason rule are unchanged. `mock` mode still accepts everything.
+**Decision 3 — duplicates: search before create, and exact names are unique.**
+- The add-custom-product screen **opens as a search box**, backed by P6-008 slice B's
+  `GET /api/products/search`. Results appear as the user types and include *both* kinds, so typing
+  "Coca-Cola" finds the barcoded product too. Tapping a result opens that product to rate it.
+- A **"Create '<query>'"** action appears only once the query is at least 2 trimmed characters and the
+  results have loaded. If any result's trigram similarity to the query is ≥ `0.6`, creating needs one
+  extra confirmation: *"Did you mean **Negroni**?"* → [Open Negroni] / [No, create "Negroni Sbagliato"].
+  This soft gate lives on the client.
+- **The hard gate lives on the server.** `Product.nameKey` is the normalised name: Unicode NFKD,
+  diacritics stripped, lowercased, whitespace collapsed and trimmed, computed in one shared helper. It is
+  set for `CUSTOM` rows only. A hand-written partial unique index `custom_product_name_unique ON
+  "Product"("nameKey") WHERE kind = 'CUSTOM' AND status <> 'REJECTED'` makes "Negroni", "negroni" and
+  "Négroni " the same product. This is also race-safe: two people creating "Negroni" at the same moment
+  get one row and one `409`. A `REJECTED` row does not block the name, so a bad first attempt can be
+  replaced.
+- `POST /api/custom-products` hitting that index → `409 { code: 'duplicate_name', productId }`, and the
+  client navigates to the existing product. A **rename** through `PATCH` or an edit proposal is checked
+  the same way when submitted (`409 duplicate_name`). If a name collides only at apply time (someone
+  created it in between), the edit is marked `REJECTED` and a warning is logged. That case is rare and
+  acceptable.
+- **Merging duplicates is out of scope.** Near-duplicates that slip past the soft gate ("Negroni" /
+  "Classic Negroni") stay separate rows for now. A peer-voted merge flow is a backlog idea; see *Merge
+  duplicate custom products* below.
+
+**The abuse gate still applies.** A public, user-named product with a photo is exactly what
+`imagePlausibilityService` exists for. Today's `kind=product` prompt asks "is this a photo of a packaged
+product", which would reject a cocktail in a glass as `not_a_product`. Add `kind=item`, with a prompt
+tuned to "is this a real thing a person could have consumed, photographed in good faith". The `abuse`
+verdict, the `UserAbuseFlag` record and the never-return-the-reason rule are unchanged, and `mock` mode
+still accepts everything. Names get the same protection as user-submitted product names today: peer
+review plus edits.
 
 **Frontend:**
-- The P6-006 Home-tab "+" becomes a two-choice sheet: **"Scan or enter a barcode"** /
-  **"Something with no barcode"**.
-- New screen `app/(app)/add-item.tsx` — deliberately short: **name** (required, 1–80 chars), optional
-  photo, optional category (P6-003 picker), optional free-text "where/brand" line (bar, restaurant,
-  producer, stored in `Product.brand`). No nutrition, no allergens. Submit creates the item and goes **straight to the rating
-  screen** — the reason someone adds a cocktail is to rate it, so making them navigate again is friction
-  for nothing.
-- The product screen renders a `CUSTOM` item with no barcode row, no nutrition or allergen section, an
-  "Added by you" (or "Added by <member>" within a group) attribution line, and no "Needs review" banner.
-- Group members viewing a shared item see a **"Rate this too"** action that creates their own rating
-  against the same row.
-- Offline: item *creation* is online-only (it needs the plausibility gate and an id from the server),
-  consistent with every other contribution flow. Once created, an item reads from the `products` cache
-  like any other product, and rating it offline goes through the existing outbox unchanged.
-- Anonymous users: items are `requireRegistered`, matching every other creation path. A guest sees the
-  P5-001 sign-up gate.
+- The P6-006 Home-tab "+" becomes a two-choice sheet: **"Scan or enter a barcode"** / **"Something with
+  no barcode"**.
+- New screen `app/(app)/add-custom-product.tsx`: search first (Decision 3), then a deliberately short
+  create form with **name** (pre-filled from the query, required, 1–80 chars) and an optional **photo**.
+  Submit creates the product and goes **straight to its product screen with the rating control focused**.
+  The reason someone adds a cocktail is to rate it, so making them navigate again is pointless friction.
+- The product screen renders a `CUSTOM` product with no barcode chip and no nutrition or allergen
+  section. The "Needs review" banner, reviewer screen and edit affordances behave as they do for a
+  packaged product.
+- The edit and review screens show only name and photo for a `CUSTOM` product.
+- Offline: creation is online-only, because it needs search, the plausibility gate and a server id. That
+  matches every other contribution flow. Once created, a custom product reads from the `products` cache
+  like any other, and rating it offline goes through the existing outbox unchanged.
+- Anonymous users can search, open and rate custom products, as with packaged ones. Creating one is
+  `requireRegistered`, and a guest sees the P5-001 sign-up gate on the create action.
 
 **Backend:**
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/api/items` | `{ name, category?, brand?, imageKey? }` → `201` with the new `Product.id`; creates a `kind: CUSTOM` row with no `PackagedProduct`; `requireRegistered`. Nutrition/allergen fields in the body are rejected with `400`, not silently dropped |
-| `PATCH` | `/api/products/:productId` | extended: owner may edit their own `CUSTOM` item in place (name, brand, image), at any status, with no verification reset |
-| `DELETE` | `/api/items/:productId` | owner only; refuses (`409`) while another user has a rating on it, so a shared item cannot be pulled out from under a group |
+| `POST` | `/api/custom-products` | `{ name, imageKey? }` → `201 { id, status: 'PENDING_REVIEW' }`; `409 duplicate_name { productId }`; `400` for any packaged-only field; `requireRegistered`. Name is capped at 80 chars measured on the **raw** string before trimming |
+| `GET` | `/api/products/search` | P6-008 slice B, unchanged; results carry `kind` |
+| `PATCH` | `/api/products/:productId` | existing correction path; `CUSTOM`-aware field set + rename uniqueness check |
+| `POST` | `/api/products/:productId/edits` | existing proposal path; `CUSTOM`-aware field set + rename uniqueness check |
+| `POST` | `/api/products/upload-image` | accepts `kind=item` |
 
-- `GET /api/products/:productId` for a `CUSTOM` item: `200` for anyone the visibility helper admits;
-  `404` (not `403`) otherwise — a UUID v4 is unguessable and an item's existence is not public information.
-- `GET /api/products/gtin/:gtin` can never return a custom item, because custom items have no GTIN.
-- `POST /api/ratings` is unchanged in shape but must reject a `CUSTOM` product the caller cannot see.
-- `POST /api/products/upload-image` accepts `kind=item`.
-
-**Schema:** nothing new. `ProductKind { PACKAGED, CUSTOM }`, `Product.ownerUserId` (authorization field,
-distinct from the `submittedByUserId` attribution field), `@@index([ownerUserId])`, and the
-`kind = CUSTOM ⇔ ownerUserId IS NOT NULL` check constraint all land in P6-009. This ticket is the first
-to create `CUSTOM` rows.
+**Schema additions (this ticket's migration):**
+- `Product.nameKey String?`, set for `CUSTOM` rows only and recomputed on every applied rename.
+- The hand-written partial unique index `custom_product_name_unique` described above.
 
 **Acceptance Criteria:**
-- [ ] A registered user can create an item with only a name and rate it, without any barcode.
-- [ ] Creation returns a `Product.id` for a `kind: CUSTOM` row with `ownerUserId` set and no
-      `PackagedProduct`; the client never displays the id.
-- [ ] `POST /api/items` rejects nutrition or allergen fields with `400`; a custom item can't hold either.
-- [ ] Creating an item lands the user on the rating screen for it.
-- [ ] An item is invisible to every other user until a rating of it is shared into a group.
-- [ ] A group member who can see a shared item can rate it against the same row, and both ratings feed
-      that group's aggregate.
-- [ ] A user with no share, no rating and no ownership receives `404` from `GET /api/products/:productId`.
-- [ ] A user who has rated an item keeps read access to it after the owner unshares, after either party
-      leaves the group, and after the group is deleted — their history still loads and a queued rating
-      still replays.
-- [ ] Keeping that read access does **not** expose the owner's rating of the item; that stays governed by
-      `RatingShare`.
-- [ ] `CUSTOM` items are excluded from peer verification and the P5-005 edit-proposal flow (those
-      endpoints return `409`), and from OFF sync (no `PackagedProduct` to queue).
-- [ ] The owner can edit their own item in place with no verification reset and no peer approval.
-- [ ] Deleting an item is refused while another user holds a rating on it.
-- [ ] The image plausibility gate runs on item photos via `kind=item`, accepts a plausible non-packaged
-      subject (a cocktail in a glass), and still flags abusive uploads with a `UserAbuseFlag`.
-- [ ] Item creation is online-only and reports being offline via `formatApiError`; rating an existing
-      item offline still queues in the outbox.
-- [ ] Anonymous users receive `403` from `POST /api/items` and see the sign-up gate on the add-item
-      screen.
-- [ ] The product screen hides the barcode row for items and shows no "Needs review" banner.
-
-**Declined alternative: a public barcode-less catalogue** (decided 2026-07-30). One "Negroni" row that
-everyone rates would give better aggregates and a "best cocktails" view, at the cost of name-based
-identity — fuzzy dedup, a merge-duplicates review flow, and moderation of a namespace anyone can write to,
-with search-by-name as a hard prerequisite. That is a phase of work rather than a ticket, and it is
-**not the direction this product is taking**: barcode-less things exist here to be shared between people
-who already know each other, not to build a crowd-sourced catalogue of un-identified items. Do not
-re-propose it as a slice of P6-007. If it is ever wanted, it is additive — promoting an owned item to a
-public row does not invalidate this design.
+- [ ] A registered user can create a custom product with only a name and rate it straight away.
+- [ ] A new custom product is `PENDING_REVIEW`, visible to every caller (anonymous included) with the
+      "Needs review" banner, and ratable by anyone signed in.
+- [ ] Two net peer approvals verify it; two net rejections hide it.
+- [ ] A `PENDING_REVIEW` custom product can be corrected in place; a change to a `VERIFIED` one goes
+      through the P5-006 proposal flow with two approvals.
+- [ ] Only name and photo are editable; nutrition or allergen fields in a create, correction or edit
+      payload for a `CUSTOM` product return `400`.
+- [ ] The add-custom-product screen searches before it offers creation, and its results include
+      barcoded products.
+- [ ] A query whose top match has similarity ≥ 0.6 requires a "Did you mean …?" confirmation before
+      creating.
+- [ ] Creating a name that normalises to an existing non-rejected custom product returns `409
+      duplicate_name` with the existing `productId`, and the app opens that product. Concurrent creates
+      of the same name produce exactly one row.
+- [ ] A rejected custom product does not block its name.
+- [ ] Renaming a custom product to an existing name is refused with `409 duplicate_name`.
+- [ ] The product, edit and review screens render no barcode, nutrition or allergen UI for a `CUSTOM`
+      product.
+- [ ] The image plausibility gate runs on custom-product photos via `kind=item`, accepts a plausible
+      non-packaged subject (a cocktail in a glass), and still flags abusive uploads with a `UserAbuseFlag`.
+- [ ] Creation is online-only and reports being offline via `formatApiError`; rating an existing custom
+      product offline still queues in the outbox.
+- [ ] Anonymous users get `403` from `POST /api/custom-products` and see the sign-up gate on the create
+      action; searching and rating work for them as for packaged products.
 
 ### [TICKET-P6-008] Search by Name — Personal Scope, then Global
 **Goal:** Find a product or item by typing its name. **There is no search bar today** — nothing in
 `bread-sheet-app/app/` renders a search input and no `/api` endpoint accepts a name query (every "search"
 symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket builds it.
 
-**Why it is coupled to P6-007.** A barcoded product always has a physical handle: you can re-find it by
-scanning the thing in your hand. A barcode-less item has none — once it falls off "Recently Opened", the
-only route back is scrolling "My Ratings" or filtering by category (P6-003). That works for the first
-weeks and stops working as history grows. So **Slice A below is a co-requirement of P6-007**, not a later
-nicety; Slice B is independent and can wait.
+**Why it is coupled to P6-007, in both directions** (revised 2026-10-25):
+- **Slice B is a prerequisite of P6-007.** Custom products are public and identified by name, so P6-007's
+  add screen is a search box first. Without global search, every user would create their own "Negroni".
+- **Slice A ships with P6-007.** A barcoded product has a physical handle: you can re-find it by scanning
+  the thing in your hand. A custom product has none. Once it falls off "Recently Opened", the only route
+  back is scrolling "My Ratings" or filtering by category (P6-003), which works for the first weeks and
+  stops working as history grows.
 
 **One bar, two scopes.** The same input serves both, with a scope toggle that defaults to **Mine**:
-- **Mine** — my ratings and my items. Instant, client-side, works offline.
+- **Mine** — my ratings. Instant, client-side, works offline.
 - **All products** — the shared catalogue. Server-backed, needs network.
 
 ---
@@ -1196,18 +1185,19 @@ nicety; Slice B is independent and can wait.
 
 #### Slice B — Global product search
 **New endpoint** `GET /api/products/search?q=<query>&cursor=<cursor>` (`requireAuth`):
-- Returns `{ results: [{ id, name, brand, image, unverified }], nextCursor }`, images resolved
-  through `resolveImageUrl` like every other product serialisation.
+- Returns `{ results: [{ id, kind, name, brand, image, unverified, similarity }], nextCursor }`, images
+  resolved through `resolveImageUrl` like every other product serialisation. `similarity` is the
+  `pg_trgm` score of the name against the query (0–1). P6-007's "Did you mean …?" gate uses it, so it is
+  part of the contract, not a debug field.
 - **Visibility rules — the part to get right:**
   - `REJECTED` products are excluded entirely (matches P5-007's invariant).
   - `PENDING_REVIEW` products are included for every caller, anonymous included, flagged `unverified`
     (P5-007 already made them individually visible; hiding them from search would be inconsistent).
-  - **`CUSTOM` items (P6-007) are excluded unless the caller owns them, holds a `RatingShare` on a
-    rating of them, or has rated them personally**. This is the `productVisibility` helper (P6-009 /
-    ADR 0006) that `GET /api/products/:productId` uses, and it must be the same helper, not a second
-    copy of the predicate.
-    This is the easiest place in the system to accidentally leak a private item: an unfiltered `ILIKE`
-    over `Product.name` returns every household's custom items to everyone. It needs its own test.
+  - Both kinds are searched. `CUSTOM` products (P6-007) are public and follow exactly the same status
+    rules as packaged ones.
+  - The filter is the `productVisibility` helper (P6-009 / ADR 0006) that `GET /api/products/:productId`
+    uses, not a second copy of the predicate. A raw `ILIKE` that forgets it would surface `REJECTED`
+    rows, so the exclusion gets its own test.
 - **Index:** `pg_trgm` with a GIN index on `name` (and `brand`), ranked by `similarity()`, tie-broken by
   rating count so well-known products surface first. Chosen over Postgres full-text (`tsvector`) because
   it tolerates typos and partial words on brand names — "nutela" finds "Nutella", which `tsvector` will
@@ -1236,9 +1226,8 @@ nicety; Slice B is independent and can wait.
 - [ ] `GET /api/products/search` returns name/brand matches ranked by similarity, cursor-paginated at 20.
 - [ ] `REJECTED` products never appear.
 - [ ] `PENDING_REVIEW` products appear flagged `unverified`, for anonymous callers too.
-- [ ] Another user's `CUSTOM` item never appears; my own items, items shared with me, and items I have
-      rated do — using the same visibility helper as `GET /api/products/:productId`, with a dedicated test
-      for the leak case.
+- [ ] Results include both `PACKAGED` and `CUSTOM` products, each carrying `kind` and `similarity`, filtered
+      by the same visibility helper as `GET /api/products/:productId`.
 - [ ] Queries are capped at 100 raw characters (measured before trimming) and rejected below 2 trimmed
       characters; no user input reaches a regex or a raw SQL fragment.
 - [ ] A `pg_trgm` GIN index backs the query; the migration creates the extension and the index.
@@ -1259,15 +1248,14 @@ where custom items can't hold them, and lets P6-007 add custom items without a s
 - `enum ProductKind { PACKAGED, CUSTOM }`; `Product.kind` (no default; the migration backfills every
   existing row as `PACKAGED`).
 - `Product` keeps: `id`, `name`, `brand`, `image`, `description`, `status`, `plausibilityFlag`,
-  `submittedByUserId`, `lastModifiedByUserId`, relations. Adds `ownerUserId String?` → `User`, plus
-  `@@index([ownerUserId])`. It stays null for every row until P6-007.
+  `submittedByUserId`, `lastModifiedByUserId`, relations. There is no owner column: custom products are
+  public (P6-007, revised 2026-10-25) and use `submittedByUserId` like any submission.
 - New `PackagedProduct { productId @id → Product (onDelete: Cascade), gtin String @unique, genericName,
   energyKcal, fat, saturatedFat, carbohydrates, sugars, protein, salt, servingSize, ingredients }`.
 - `Product.barcode` and the moved columns are dropped from `Product`.
 - `ProductEdit.barcode` FK → `ProductEdit.productId` FK. The hand-written `one_pending_edit_per_product`
   partial unique index is rebuilt on `productId`, and `@@index([barcode, status])` becomes
   `@@index([productId, status])`.
-- Hand-written `CHECK ((kind = 'CUSTOM') = ("ownerUserId" IS NOT NULL))`.
 - **One migration, data-preserving:** add `kind`; `INSERT INTO "PackagedProduct" SELECT id, barcode, …
   FROM "Product"`; backfill `ProductEdit.productId` from the barcode join; then drop the old columns.
   `Product.id`, and with it every `Rating`, `ProductVerification` and `ProductEdit`, is unchanged.
@@ -1290,9 +1278,10 @@ where custom items can't hold them, and lets P6-007 add custom items without a s
 - `GET /api/ratings/me/:barcode` (unused by the app since Phase 8) is deleted, not re-keyed.
   `GET /api/ratings/product/:barcode` is left alone; P6-002 deletes it.
 - New `server/src/services/productVisibility.ts`: `visibleProductWhere(user)` and
-  `assertProductVisible(user, id)`. For now: `PACKAGED` excludes `REJECTED`, and `CUSTOM` is visible to
-  its owner only (P6-007 extends this branch). **Every** product read goes through it. OFF-sync and
-  backfill jobs filter `kind: PACKAGED` explicitly instead.
+  `assertProductVisible(user, id)`. The rule is the P5-007 one, for both kinds: `REJECTED` is invisible
+  (`404`), and everything else is visible to every caller. **Every** product read goes through it, so the
+  rule is never re-typed as a `where` clause. OFF-sync and backfill jobs filter `kind: PACKAGED`
+  explicitly instead.
 - Rating responses that embed a product use the new serialisation.
 
 **Frontend:**
@@ -1321,16 +1310,14 @@ to implemented.
       `productId`, with `gtin` unique.
 - [ ] The migration preserves every existing product, rating, verification and edit, and every existing
       row ends up `kind: PACKAGED` with exactly one `PackagedProduct`.
-- [ ] The `kind`/`ownerUserId` check constraint exists, and a verification script run against Postgres
-      proves the database rejects a `CUSTOM` row without an owner and a `PACKAGED` row with one.
 - [ ] Creating a packaged product (OFF fetch or user submission) writes both rows in one transaction; a
       failure leaves neither.
 - [ ] Every product route is keyed by `Product.id`; `GET /api/products/gtin/:gtin` is the only way to
       resolve a GTIN, and keeps today's `400` / OFF-fetch / `404` behaviour.
 - [ ] `ProductEdit` references `productId`, and the one-pending-edit-per-product rule still holds at the
       database layer.
-- [ ] Every product read goes through `productVisibility`; a test asserts that a `CUSTOM` row inserted
-      directly into the database is invisible to a non-owner on every product-reading endpoint.
+- [ ] Every product read goes through `productVisibility`; a test asserts that a `REJECTED` product is
+      `404` on every product-reading endpoint, for both kinds.
 - [ ] Scanning, manual entry, the add-product 404 path and the P6-006 invalid-code path all work through
       the GTIN resolver; an offline scan of a cached product paints from cache.
 - [ ] Backend and frontend suites pass; Playwright and Maestro scan flows pass against the new routes.
@@ -1581,9 +1568,16 @@ in Pipeline and Security of the Pipeline (Static Code analysis SAST, Dynamic DAS
 - Create User Role "Moderator" which (together with ADMIN) can review multiple products in a row and their vote (or that of an admin) finalizes review (so a single vote is enough to accept/decline)
 
 ## Non-ISBN Products
-- *Promoted to **[TICKET-P6-007]** (2026-07-30)* as owner-scoped custom items, visible to a group through
-  sharing. The **public** barcode-less catalogue variant (one "Negroni" row everyone rates) was considered
-  and **declined** the same day — it is not the direction of the product. Nothing is left open here.
+- *Promoted to **[TICKET-P6-007]** (2026-07-30)* as owner-scoped private items shared through groups. *Revised
+  2026-10-25* to **public custom products**, with one "Negroni" row that everyone rates and duplicates
+  handled by search-before-create plus a unique normalised name.
+
+## Merge duplicate custom products
+- Near-duplicates that slip past P6-007's "Did you mean …?" gate ("Negroni" / "Classic Negroni") stay
+  separate rows. Idea: a peer-voted merge proposal (same two-approval rule as P5-006 edits) that moves all
+  ratings to the surviving row. `Rating` is `@@unique([userId, productId])`, so a user who rated both keeps
+  their most recently updated rating, and the other is deleted. Build it only once duplicates actually show
+  up in real usage.
 
 ## Search by name
 - *Promoted to **[TICKET-P6-008]** (2026-07-30).* Still an idea here: querying Open Food Facts by name for

@@ -23,7 +23,7 @@
 `Rating` and `ProductVerification` already reference `Product.id`, so no rating or vote is re-pointed.
 
 Server tests mock Prisma (`vi.mock('../db.js')`, colocated `*.test.ts`), and **no test runs against a real
-database**. The migration and the check constraint are therefore verified with a SQL script against local
+database**. The migration is therefore verified with a SQL script against local
 Postgres (see step B1). That is a deliberate scope choice, not an oversight.
 
 ---
@@ -41,9 +41,9 @@ still data-preserving, because `dev` runs it on deploy and keeping the existing 
 ### 2. Product serialisation becomes an explicit allowlist
 
 `getProductByBarcode` currently spreads the whole row (`...cached`), so every new column is public by
-default. That was harmless while every row was public. After the split, `ownerUserId` (from P6-007 on)
-is an authorization field that must never reach a client by accident. A new `serializeProduct(product,
-user)` in `services/productSerializer.ts` emits:
+default. That means internal columns, such as P6-007's `nameKey` or P6-005's sync state, reach clients
+by accident and then become an API contract nobody chose. A new `serializeProduct(product, user)` in
+`services/productSerializer.ts` emits:
 
 ```ts
 { id, kind, name, brand, image /* resolved */, description, status, unverified,
@@ -71,7 +71,7 @@ The 1,148-line `product/[barcode].tsx` currently renders five states: found, inv
 | Offline, GTIN not in the local index | resolver |
 | Found → `router.replace('/(app)/product/<id>')` | resolver (redirect only) |
 | Found / pending / rated / success card | `product/[id].tsx` |
-| `404` by id (rejected, deleted, not visible) | `product/[id].tsx`, plain "not found" with **no** add-product action (an id has no GTIN to add) |
+| `404` by id (rejected or deleted) | `product/[id].tsx`, plain "not found" with **no** add-product action (an id has no GTIN to add) |
 
 The resolver uses `router.replace`, so the stack is the same as today: back from the product goes to
 wherever the scan came from. The `RESCAN_GAP_MS` suppression in `scan.tsx` is keyed on the scanned code
@@ -93,13 +93,14 @@ Bump `CACHE_SCHEMA_VERSION` and let the existing wipe-on-mismatch behaviour drop
 the outbox included. With no users, nobody can lose a queued rating that matters. `OutboxItem.barcode`
 becomes `productId`, with no union type and no legacy replay path.
 
-### 6. `productVisibility` lands now, with the minimal rule
+### 6. `productVisibility` lands now
 
-`visibleProductWhere(user)` returns `{ OR: [{ kind: PACKAGED, status: { not: REJECTED } }, { kind: CUSTOM,
-ownerUserId: user.id }] }`. `assertProductVisible(user, id)` throws the existing `ProductNotFoundError`
-(→ `404`). Every read in `productController`, `productEditController`, `productVerificationService`,
-`productEditService` and `ratingController` goes through it. P6-007 extends the `CUSTOM` branch. Writing
-it now means P6-007 changes one function rather than auditing every query.
+`visibleProductWhere(user)` returns `{ status: { not: REJECTED } }`, the P5-007 rule, for both kinds
+(custom products are public, see the revised P6-007). `assertProductVisible(user, id)` throws the existing
+`ProductNotFoundError` (→ `404`). Every read in `productController`, `productEditController`,
+`productVerificationService`, `productEditService` and `ratingController` goes through it. The rule is
+trivial today. The point is that it has exactly one implementation, and P6-008's search reuses it instead
+of re-typing a `where` clause.
 
 ---
 
@@ -113,10 +114,6 @@ CREATE TYPE "ProductKind" AS ENUM ('PACKAGED', 'CUSTOM');
 ALTER TABLE "Product" ADD COLUMN "kind" "ProductKind";
 UPDATE "Product" SET "kind" = 'PACKAGED';
 ALTER TABLE "Product" ALTER COLUMN "kind" SET NOT NULL;
-ALTER TABLE "Product" ADD COLUMN "ownerUserId" TEXT REFERENCES "User"("id");
-CREATE INDEX "Product_ownerUserId_idx" ON "Product"("ownerUserId");
-ALTER TABLE "Product" ADD CONSTRAINT "product_kind_owner_consistent"
-  CHECK (("kind" = 'CUSTOM') = ("ownerUserId" IS NOT NULL));          -- hand-written
 
 CREATE TABLE "PackagedProduct" (
   "productId" TEXT PRIMARY KEY REFERENCES "Product"("id") ON DELETE CASCADE,
@@ -155,8 +152,9 @@ Order matters: each step leaves the server compiling and its tests green before 
 **B1 — Schema + migration.** Prisma schema per ADR 0006. Hand-edit the migration as above. Add
 `server/scripts/verify-product-split.sql`, a read-only script run against local Postgres before and after
 `migrate dev`. It asserts row counts match (`Product` = `PackagedProduct`, `ProductEdit` unchanged, zero
-`ProductEdit.productId` nulls) and tries the four `kind`/`ownerUserId` combinations inside a rolled-back
-transaction to prove the `CHECK` constraint. Run it against the local database (podman:
+`ProductEdit.productId` nulls, every `Product` is `PACKAGED`, and the rebuilt
+`one_pending_edit_per_product` index rejects a second pending edit inside a rolled-back transaction). Run
+it against the local database (podman:
 `podman compose up -d`) with some seeded products, ratings, verifications and a pending edit.
 
 **B2 — `productSerializer.ts` + `productVisibility.ts`** (new), each with unit tests. The serializer
@@ -174,8 +172,8 @@ classes keep a `gtin` field for log messages.
 **B4 — `productEditService.ts` + `productVerificationService.ts`.** Re-key every function from `barcode`
 to `productId`. Partition the edit fields (decision 4). `castVote(productId, …)`. `createEdit`,
 `getPendingEdit`, `correctPendingProduct` and `castEditVote` read through `include: { packaged: true }`.
-`PendingEditView.barcode` → `productId`. `CUSTOM` products: the verify and edit paths throw a new
-`ProductIsCustomError` (`409 custom_item`), which is unreachable until P6-007 but tested now.
+`PendingEditView.barcode` → `productId`. Verification and editing stay kind-agnostic: custom products go
+through the same flows (P6-007), and only P6-007 adds the `CUSTOM` field set.
 
 **B5 — Controllers + routes.**
 - `productRoutes.ts`: add `router.param('productId', validateProductId)` (UUID → else `400 { code:
@@ -198,8 +196,8 @@ to `productId`. Partition the edit fields (decision 4). `castVote(productId, …
 - GTIN lookup concurrent-create race (`P2002` → re-read → `200`)
 - a rating without `productId` → `400`
 - non-UUID `:productId` → `400`
-- **visibility leak test:** a mocked `CUSTOM` row owned by someone else → `404` on `GET /:productId`,
-  `POST /ratings`, `/verify`, `/edits`, `/edits/pending`
+- **visibility test:** a `REJECTED` product → `404` on `GET /:productId`, `POST /ratings`, `/verify`,
+  `/edits`, `/edits/pending`, for both kinds
 - an edit spanning both tables applies both updates in one transaction
 
 **B7 — Bruno.** Re-key `docs/bruno/` product requests. Add **Products › Lookup by GTIN**, and update
@@ -301,7 +299,7 @@ mentioning `/(app)/product/<barcode>`. Run `npm run test:maestro` and `npm run t
 | Risk | Mitigation |
 |---|---|
 | Hand-edited migration loses or mismatches data on `dev` | B1 verification script run locally before merging; `migrate deploy` runs in `start.sh`, so a failed migration stops the task from starting rather than serving half-migrated data |
-| A product read path skips `productVisibility` | B6 leak test hits every product-reading route; P6-007 adds `CUSTOM` rows and re-runs the same test |
+| A product read path skips `productVisibility` | B6 visibility test hits every product-reading route; P6-008's search reuses the helper |
 | Moving the not-found UI breaks Maestro landing assertions | Move JSX and `testID`s verbatim; run both flows before merging |
 | Two users scanning the same new GTIN at once | `P2002` on `gtin` → re-read, tested |
 

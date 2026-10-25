@@ -3,6 +3,16 @@
 * Status: **Accepted — not yet implemented** (implemented by [TICKET-P6-009], which is scheduled before P6-001)
 * Date: 2026-10-25
 * Supersedes: Decision 1 of [TICKET-P6-007] as drafted on 2026-07-30 (synthetic `x-` id in `Product.barcode`)
+* Amended: 2026-10-25, same day. Custom products became **public** (P6-007 revised). See the amendment below.
+
+> **Amendment (2026-10-25).** This ADR was first written against P6-007's private, owner-scoped custom
+> items. Later the same day, P6-007 was revised so that custom products are a public catalogue, peer
+> reviewed and editable exactly like barcoded products, with duplicates handled by search-before-create
+> and a unique normalised name. The split itself is unaffected: a custom product still has no
+> `PackagedProduct`, so it still can't hold label data. What was dropped is the private-item machinery:
+> `Product.ownerUserId`, the `kind`/owner `CHECK` constraint, and the three-rule visibility test. The text
+> below describes the amended decision. The "public and private rows in one table" problem is kept in
+> the context as the reason the visibility helper exists at all.
 
 ## Context and Problem Statement
 
@@ -13,8 +23,9 @@ by barcode. `Rating` and `ProductVerification` already reference `Product.id` (a
 
 Phase 6 adds two things that don't fit this shape:
 
-1. **Barcode-less custom items** (P6-007): cocktails, restaurant dishes, loose-leaf tea. These have no
-   GTIN, they are private to their owner until shared into a group, and they skip peer review.
+1. **Barcode-less custom products** (P6-007): cocktails, dishes, loose-leaf tea. These have no GTIN and
+   no label to read nutrition or allergens from. (In the 2026-07-30 draft they were also private to their
+   owner; since 2026-10-25 they are public.)
 2. **More packaged-only data.** P6-001 adds `allergens`, `traces` and `allergensDeclared`. P6-005 adds
    four OFF-sync columns. That comes on top of the nine nutrition and ingredient columns already there.
 
@@ -26,12 +37,13 @@ but it left three problems:
   because nobody knows the exact ingredients or quantities a bar used. A `barcode` column holding a
   non-barcode is a misleading name that every future reader has to learn about.
 * **Allergens are safety data.** P6-001 is careful to tell "nobody has said" apart from "declared none".
-  On a custom item, any allergen statement would be a guess by the owner, made without peer review, and
-  shared with a group. The right amount of allergen data for a cocktail is none, and the schema should
-  make that impossible to get wrong rather than leave it to UI discipline.
-* **Public and private rows in one table, told apart only by a filter column.** Barcoded products are a
-  public catalogue. Custom items are private. Every query over the table (P6-008 slice B's name search,
-  P6-002 and P6-004 aggregates) has to remember the filter, or it leaks one household's items to everyone.
+  On a custom product, any allergen statement would be a guess, because no one can know what a bar put
+  in a cocktail. The right amount of allergen data for a cocktail is none, and the schema should make
+  that impossible to get wrong rather than leave it to UI discipline.
+* **Public and private rows in one table, told apart only by a filter column** (2026-07-30 draft only).
+  Every query over the table would have had to remember the filter, or it would leak one household's
+  items to everyone. The amendment removed private rows, but the lesson stays: the visibility rule
+  (today, "`REJECTED` is invisible") belongs in one helper, not re-typed in every query.
 
 The question: should rateable things share one model, use two independent models, or use something in
 between?
@@ -45,8 +57,7 @@ between?
   This applies to allergens above all.
 * **A barcode is an attribute of a manufactured article, not the identity of a rateable thing.** The
   identifier should be ours, so it exists for everything we can rate.
-* **The visibility rule for private items lives in one place**, not in a filter every query has to
-  remember.
+* **The visibility rule lives in one place**, not in a filter every query has to remember.
 * **Cost grows with every ticket that adds packaged-only columns.** Doing the split before P6-001 and
   P6-005 is the cheapest time it will ever be.
 
@@ -71,22 +82,20 @@ model Product {
   id                   String        @id @default(uuid())
   kind                 ProductKind
   name                 String
-  brand                String?       // for CUSTOM: the free-text "where / producer" line
+  brand                String?       // null for CUSTOM today (identity is the name alone)
   image                String?
   description          String?
-  status               ProductStatus @default(VERIFIED)  // peer review is about the public row; CUSTOM is always VERIFIED
+  status               ProductStatus @default(VERIFIED)  // peer review applies to both kinds; CUSTOM starts PENDING_REVIEW
   plausibilityFlag     Boolean       @default(false)
   suggestedCategory    String?       // P6-003
-  submittedByUserId    String?       // attribution on public products
+  submittedByUserId    String?       // attribution, both kinds
   lastModifiedByUserId String?
-  ownerUserId          String?       // authorization; set iff kind = CUSTOM (P6-007)
+  nameKey              String?       // P6-007: normalised name, CUSTOM only; partial unique index (hand-written SQL)
 
   packaged             PackagedProduct?
   ratings              Rating[]
   verifications        ProductVerification[]
   edits                ProductEdit[]
-
-  @@index([ownerUserId])
 }
 
 // The manufactured article behind a PACKAGED product: what the label and the GS1 registry say.
@@ -119,26 +128,25 @@ model PackagedProduct {
 * **Identity is `Product.id`.** Every product route is keyed by it (`/api/products/:productId/...`),
   and so are `ProductEdit` (FK moves from `barcode` to `productId`; the `one_pending_edit_per_product`
   partial index is rebuilt on `productId`), the `products` offline cache, the outbox payload and
-  `POST /api/ratings`. A UUID v4 can't be guessed, which P6-007's "404, not 403" rule for private items
-  depends on.
+  `POST /api/ratings`.
 * **A GTIN is a lookup, not a key.** `GET /api/products/gtin/:gtin` resolves a scanned or typed code to a
   product. On a miss it fetches from Open Food Facts, as `GET /api/products/:barcode` does today, and
   creates the `Product` and `PackagedProduct` rows in one transaction. Scan, manual entry (P6-006) and
   the add-product 404 branch all go through it.
-* **Invariants.** `kind = CUSTOM ⇔ ownerUserId IS NOT NULL` is a `CHECK` constraint in hand-written
-  migration SQL. `kind = PACKAGED ⇔ exactly one PackagedProduct row` can't be expressed as a `CHECK`.
+* **Invariant.** `kind = PACKAGED ⇔ exactly one PackagedProduct row` can't be expressed as a `CHECK`.
   The creation service enforces it by writing both rows in one transaction, and a test covers it.
+* **Both kinds share one lifecycle.** Peer verification, the P5-006 correction/edit flow and P5-007
+  visibility apply to custom products unchanged. Only the set of editable fields differs: no label fields
+  for `CUSTOM`.
 * **Custom items carry no nutrition and no allergens.** They have no `PackagedProduct` row, so there is
   nothing to store and nothing to display. The product screen renders **no** nutrition section and
   **no** allergen section for them. That means not even "No allergen information yet", because that copy
   invites an edit that can't be made honestly. The P6-001 watchlist check only ever evaluates
   `PackagedProduct.allergens`.
 * **One visibility helper.** Every read of `Product` goes through `server/src/services/productVisibility.ts`
-  (`visibleProductWhere(user)`). For `PACKAGED` rows the helper excludes `REJECTED`. For `CUSTOM` rows it
-  applies P6-007's three-rule test (owner, holds a share, has rated it). Queries that are
-  catalogue-only by construction (OFF sync, OFF backfill) filter on `kind: PACKAGED` explicitly. Each
-  endpoint that reads products gets a leak test: create another user's custom item, then assert it
-  never appears.
+  (`visibleProductWhere(user)`). Today the rule is P5-007's, for both kinds: `REJECTED` is invisible.
+  Queries that are catalogue-only by construction (OFF sync, OFF backfill) filter on `kind: PACKAGED`
+  explicitly. Each endpoint that reads products gets a test asserting `REJECTED` rows never appear.
 
 ### Why not option 1
 
@@ -151,10 +159,10 @@ the split would cost more than it does now.
 ### Why not option 2
 
 A rating, a share, a category label and a queued offline rating would each need to point at one of two
-tables: either two nullable FKs plus a `CHECK`, or a polymorphic key with no referential integrity. The
-sharing machinery that is the whole reason custom items exist (P6-002 / P6-007) would be built twice.
-The declined public barcode-less catalogue (see P6-007) gives no reason to make custom items a parallel
-universe.
+tables: either two nullable FKs plus a `CHECK`, or a polymorphic key with no referential integrity. Peer
+review, editing, search and group sharing (P5-004, P5-006, P6-008, P6-002) would each be built twice. And
+since custom products are public and go through the same lifecycle as packaged ones, there is no
+behaviour that justifies a parallel model.
 
 ### Positive Consequences
 
@@ -164,7 +172,7 @@ universe.
 * P6-001 and P6-005 add their columns to a table that only ever describes manufactured articles.
 * P6-007 shrinks. There is no synthetic id format, no `BARCODE_RE` alternation, and no "nutrition
   collapsed for items" UI.
-* The private-item visibility rule has one implementation and a test per reader.
+* The visibility rule has one implementation and a test per reader.
 
 ### Negative Consequences
 
