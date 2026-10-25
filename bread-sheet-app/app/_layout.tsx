@@ -15,7 +15,7 @@ import {
 } from '@/lib/pending-return-to';
 
 export const unstable_settings = {
-  initialRouteName: '(tabs)',
+  anchor: '(tabs)',
 };
 
 const AUTHENTICATED_GROUPS = ['(tabs)', '(account)', '(app)'];
