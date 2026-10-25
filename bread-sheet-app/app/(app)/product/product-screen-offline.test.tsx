@@ -95,7 +95,19 @@ const PRODUCT = {
   image: null,
   description: null,
   status: 'VERIFIED' as const,
-  packaged: { gtin: '0000000000001' },
+  packaged: {
+    gtin: '0000000000001',
+    genericName: null,
+    energyKcal: null,
+    fat: null,
+    saturatedFat: null,
+    carbohydrates: null,
+    sugars: null,
+    protein: null,
+    salt: null,
+    servingSize: null,
+    ingredients: null,
+  },
 };
 
 describe('ProductScreen — offline (P8-002)', () => {
