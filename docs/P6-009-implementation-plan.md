@@ -30,20 +30,13 @@ Postgres (see step B1). That is a deliberate scope choice, not an oversight.
 
 ## Key Decisions (open points the ticket left to implementation)
 
-### 1. Deployment: lockstep, with a narrow compatibility window
+### 1. Deployment: clean break, no compatibility layer
 
-The API change breaks old clients. There is one developer, and no app-store build exists yet, so server
-and app ship together from one PR. Two things must keep working for an *old* install while it is offline
-or not yet updated, because they run with no user present:
-
-- **`POST /api/ratings` accepts legacy `{ barcode }`**, resolved via `PackagedProduct.gtin`. The outbox
-  replays it.
-- **`GET /api/products/:param` with a digits-only param** is answered as a GTIN lookup (a deprecated alias
-  of `/gtin/:gtin`). This covers stale `pendingReturnTo` paths and old deep links.
-
-Every *write* route (verify, `PATCH`, edits) moves to `:productId` with no alias. An old client gets a
-`400` on those, which is acceptable for a dev-only population. Both shims sit behind a single
-`// TODO(P6-009-legacy)` marker, and a follow-up removes them.
+There are no users and no app-store build, so there is no install base to protect. Server and app ship
+together from one PR, and the old API shapes go away in it: no digits-only alias on `GET
+/api/products/:productId`, no legacy `{ barcode }` rating payload, and no client-side redirect for stale
+`/product/<gtin>` paths. A developer device with an older build simply gets reinstalled. The migration is
+still data-preserving, because `dev` runs it on deploy and keeping the existing rows costs nothing extra.
 
 ### 2. Product serialisation becomes an explicit allowlist
 
@@ -84,8 +77,6 @@ The resolver uses `router.replace`, so the stack is the same as today: back from
 wherever the scan came from. The `RESCAN_GAP_MS` suppression in `scan.tsx` is keyed on the scanned code
 and is unaffected.
 
-`product/[id].tsx` also gets a one-line shim: a param matching `^\d{8,13}$` redirects to
-`product/gtin/<param>`. That catches any stale `/product/<gtin>` path still on disk or in a link.
 
 ### 4. Edit fields are partitioned; stored JSON stays flat
 
@@ -96,14 +87,11 @@ a `tx.product.update` and a `tx.packagedProduct.update` in the same transaction.
 `originalValues`/`proposedChanges` stay flat JSON keyed by field name, so already-stored edits remain valid
 with no data migration.
 
-### 5. Outbox carry-over across the cache-version bump
+### 5. The cache-version bump just wipes
 
-`store.ts` `prune()` deletes every `offline/v*` directory except the current one. The plan adds a
-`CARRY_OVER_DOCUMENTS = [OUTBOX_DOC]` list, which `prune()` honours: for each user directory under an old
-version, it copies those documents into the current version's user directory **if not already present**,
-then deletes the old directory. The AsyncStorage fallback (web/tests) does the same over its key prefix.
-`OutboxItem` becomes `{ productId?: string; barcode?: string; … }` (exactly one set). Legacy items replay
-as `{ barcode }`, and new items as `{ productId }`. Collapsing "same product" compares `productId ?? barcode`.
+Bump `CACHE_SCHEMA_VERSION` and let the existing wipe-on-mismatch behaviour drop every cached document,
+the outbox included. With no users, nobody can lose a queued rating that matters. `OutboxItem.barcode`
+becomes `productId`, with no union type and no legacy replay path.
 
 ### 6. `productVisibility` lands now, with the minimal rule
 
@@ -168,8 +156,8 @@ Order matters: each step leaves the server compiling and its tests green before 
 `server/scripts/verify-product-split.sql`, a read-only script run against local Postgres before and after
 `migrate dev`. It asserts row counts match (`Product` = `PackagedProduct`, `ProductEdit` unchanged, zero
 `ProductEdit.productId` nulls) and tries the four `kind`/`ownerUserId` combinations inside a rolled-back
-transaction to prove the `CHECK` constraint. Run it against a DB seeded from a `pg_dump` of `dev`
-(podman: `podman compose up -d`).
+transaction to prove the `CHECK` constraint. Run it against the local database (podman:
+`podman compose up -d`) with some seeded products, ratings, verifications and a pending edit.
 
 **B2 — `productSerializer.ts` + `productVisibility.ts`** (new), each with unit tests. The serializer
 tests cover: anonymous caller has no `submittedByUserId`; `packaged: null` for a `CUSTOM` row; image
@@ -197,11 +185,10 @@ to `productId`. Partition the edit fields (decision 4). `castVote(productId, …
 - `getProductByGtin` (renamed from `getProductByBarcode`, same `BARCODE_RE`, OFF fetch, `404`) writes both
   rows in one `$transaction`. A concurrent first scan of the same GTIN hits `P2002` on `gtin`; catch it and
   re-read instead of returning `409`, because two people scanning the same new product is normal.
-- `getProductById`: visibility check → serialize. Legacy digits-only alias (decision 1).
+- `getProductById`: visibility check → serialize.
 - `submitProduct`: the validator field `barcode` → `gtin` (`productSubmissionValidator.ts` + its 46 test
   references).
-- `ratingController.createRating`: `{ productId | barcode(legacy), taste, comment? }`, with exactly one of
-  the two (`400` otherwise), plus the visibility check. **Delete** `getMyRatingForProduct` and its
+- `ratingController.createRating`: `{ productId, taste, comment? }`, plus the visibility check. **Delete** `getMyRatingForProduct` and its
   `/me/:barcode` route (unused since Phase 8). Leave `getRatingsForProduct` for P6-002 to delete.
 - `productEditController`: `req.params.productId`.
 
@@ -209,8 +196,7 @@ to `productId`. Partition the edit fields (decision 4). `castVote(productId, …
 `productEditService`, `verifyProduct`, `productVerificationService`, `ratingController` and
 `productSubmissionValidator` tests to the new keys and shapes. New cases:
 - GTIN lookup concurrent-create race (`P2002` → re-read → `200`)
-- the legacy GTIN alias on `GET /:param`
-- legacy `{ barcode }` rating, and a rating with both or neither key → `400`
+- a rating without `productId` → `400`
 - non-UUID `:productId` → `400`
 - **visibility leak test:** a mocked `CUSTOM` row owned by someone else → `404` on `GET /:productId`,
   `POST /ratings`, `/verify`, `/edits`, `/edits/pending`
@@ -239,10 +225,9 @@ Update `edit-form.test.ts`.
   Record<gtin, id> }`, and LRU eviction drops index entries pointing at evicted ids. New
   `peekProductIdByGtin(gtin)` / `readProductIdByGtin(gtin)`. `findCachedRating(ratings, productId)` and
   `upsertCachedRating` compare `product.id`. Recents store `{ id, name, brand, image }`.
-- `store.ts`: bump `CACHE_SCHEMA_VERSION` to 2, plus the `CARRY_OVER_DOCUMENTS` mechanism (decision 5) on
-  both the filesystem and AsyncStorage paths.
-- `outbox.ts` / `use-outbox.tsx`: `enqueue({ productId, … })`, `isQueued(productId)`, legacy-item replay,
-  and the `upsertCachedRating(saved)` guard checks `saved?.product?.id`.
+- `store.ts`: bump `CACHE_SCHEMA_VERSION` to 2 (decision 5); no other change.
+- `outbox.ts` / `use-outbox.tsx`: `enqueue({ productId, … })`, `isQueued(productId)`, and the
+  `upsertCachedRating(saved)` guard checks `saved?.product?.id`.
 - `use-my-rating.ts`: `useMyRating(userId, productId)`.
 
 **F5 — GTIN resolver `app/(app)/product/gtin/[gtin].tsx`** (new, decision 3). Flow on mount:
@@ -261,7 +246,7 @@ Move these states' JSX, styles and `testID`s (`product-invalid-barcode`, `produc
 route in `app/(app)/_layout.tsx`.
 
 **F6 — `product/[barcode].tsx` → `product/[id].tsx`.**
-- Fetch by id, and add the legacy-GTIN redirect shim.
+- Fetch by id.
 - Remove the states moved to the resolver.
 - An id-`404` renders a plain not-found screen with a "Back to Home" action.
 - The barcode chip shows `product.packaged?.gtin` and is hidden when `packaged` is null.
@@ -289,12 +274,10 @@ Update `_layout.tsx` registrations and the CLAUDE.md route list.
 - Rename and move test files with their screens.
 - New `product-gtin-resolver.test.tsx` covers: cached-index hit replaces without a request; network hit
   writes the cache and index; `400`/`404`/offline states; guest gate `returnTo`.
-- `product-screen.test.tsx` loses the 400/404 cases (they move to the resolver) and gains id-`404`, the
-  legacy-GTIN shim, and "no nutrition section when `packaged` is null".
-- `caches.test.ts`: the GTIN index survives and evicts with LRU.
-- `outbox.test.ts`: a legacy `{ barcode }` item replays and collapses correctly.
-- New `store.test.ts` case: an outbox document under `v1/<user>/` is present under `v2/<user>/` after
-  prune, and other v1 documents are gone.
+- `product-screen.test.tsx` loses the 400/404 cases (they move to the resolver) and gains id-`404` and
+  "no nutrition section when `packaged` is null".
+- `caches.test.ts`: the GTIN index is written with the product and evicted with it under LRU.
+- `outbox.test.ts`: re-keyed to `productId`; repeated ratings of one product still collapse.
 - Mocks in `lib/__mocks__/api.ts` are unchanged, because `ApiError`/`NetworkError` stay real classes.
 
 **F10 — E2E.** `barcode-scan.yaml` and `manual-entry.yaml` go through the resolver. Their landing
@@ -304,7 +287,7 @@ mentioning `/(app)/product/<barcode>`. Run `npm run test:maestro` and `npm run t
 ### Docs (same PR)
 
 - `CLAUDE.md`: data model (`Product` / `PackagedProduct`, `ProductEdit.productId`), `(app)` route list,
-  offline cache section (id-keyed products + GTIN index, outbox carry-over), the "Manual barcode entry"
+  offline cache section (id-keyed products + GTIN index), the "Manual barcode entry"
   and "Leaving the rating flow" paragraphs (destination is now the resolver), and the ADR 0006 status line.
 - `docs/architecture/backend.md` (endpoints, serializer allowlist, visibility helper), `frontend.md`
   (resolver, route table, offline cache), `data.md` (where label data lives).
@@ -317,16 +300,11 @@ mentioning `/(app)/product/<barcode>`. Run `npm run test:maestro` and `npm run t
 
 | Risk | Mitigation |
 |---|---|
-| Hand-edited migration loses or mismatches data on `dev` | B1 verification script run against a `pg_dump` of `dev` before merging; `migrate deploy` runs in `start.sh`, so a failed migration stops the task from starting rather than serving half-migrated data |
+| Hand-edited migration loses or mismatches data on `dev` | B1 verification script run locally before merging; `migrate deploy` runs in `start.sh`, so a failed migration stops the task from starting rather than serving half-migrated data |
 | A product read path skips `productVisibility` | B6 leak test hits every product-reading route; P6-007 adds `CUSTOM` rows and re-runs the same test |
-| The `CACHE_SCHEMA_VERSION` bump drops a user's queued ratings | Decision 5 + the F9 store test; legacy `{ barcode }` replay accepted server-side |
-| Stale `/product/<gtin>` paths (pendingReturnTo, links) open a broken screen | Legacy-GTIN shim on `product/[id]` plus the server-side digits alias |
 | Moving the not-found UI breaks Maestro landing assertions | Move JSX and `testID`s verbatim; run both flows before merging |
 | Two users scanning the same new GTIN at once | `P2002` on `gtin` → re-read, tested |
 
 ## Follow-ups (not in this PR)
 
-- Remove the `TODO(P6-009-legacy)` shims (digits alias on `GET /:param`, legacy `{ barcode }` ratings,
-  the client GTIN redirect) once no pre-P6-009 install can exist. That is at the latest before the first
-  store build.
 - `Product.description` vs `PackagedProduct.genericName` duplication for OFF-sourced rows.

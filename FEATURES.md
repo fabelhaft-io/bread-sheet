@@ -1285,9 +1285,8 @@ where custom items can't hold them, and lets P6-007 add custom items without a s
   transaction. `PATCH` and the P5-005 edit apply update whichever table owns each changed field, in one
   transaction. `originalValues`/`proposedChanges` stay flat JSON keyed by field name, so already-stored
   edits keep working.
-- `POST /api/ratings` takes `{ productId, taste, comment? }`. **Transitional:** it also accepts the legacy
-  `{ barcode, … }` (resolved via `PackagedProduct.gtin`) so outbox entries queued before the app update
-  still replay. Remove the legacy shape in a follow-up once no client can hold one.
+- `POST /api/ratings` takes `{ productId, taste, comment? }`. There is no legacy `{ barcode }` shape: there
+  are no users yet, so this is a clean break with no compatibility layer anywhere.
 - `GET /api/ratings/me/:barcode` (unused by the app since Phase 8) is deleted, not re-keyed.
   `GET /api/ratings/product/:barcode` is left alone; P6-002 deletes it.
 - New `server/src/services/productVisibility.ts`: `visibleProductWhere(user)` and
@@ -1308,10 +1307,8 @@ where custom items can't hold them, and lets P6-007 add custom items without a s
   **offline scan of a known product still paints** (the resolver checks the index before the network).
 - `ratings` cache, `use-my-rating`, `RatingEntry` and the outbox key by `productId`. The add-product,
   edit-product and review-edit flows take an id.
-- Bump `CACHE_SCHEMA_VERSION`, but **carry the outbox document across the bump** (read it from the old
-  version directory before pruning, then write it into the new one unchanged). Legacy `{ barcode }`
-  entries then replay through the transitional rating shape. The other caches are wiped and refill
-  normally.
+- Bump `CACHE_SCHEMA_VERSION`; the existing wipe-on-mismatch drops every cached document, including the
+  outbox. That's acceptable with no users.
 - The product screen reads nutrition from `product.packaged`, and renders no nutrition section when it is
   `null`. Nothing produces `null` until P6-007, but the branch and its test land here.
 
@@ -1324,8 +1321,8 @@ to implemented.
       `productId`, with `gtin` unique.
 - [ ] The migration preserves every existing product, rating, verification and edit, and every existing
       row ends up `kind: PACKAGED` with exactly one `PackagedProduct`.
-- [ ] The `kind`/`ownerUserId` check constraint exists, and a test proves the database rejects a
-      `CUSTOM` row without an owner and a `PACKAGED` row with one.
+- [ ] The `kind`/`ownerUserId` check constraint exists, and a verification script run against Postgres
+      proves the database rejects a `CUSTOM` row without an owner and a `PACKAGED` row with one.
 - [ ] Creating a packaged product (OFF fetch or user submission) writes both rows in one transaction; a
       failure leaves neither.
 - [ ] Every product route is keyed by `Product.id`; `GET /api/products/gtin/:gtin` is the only way to
@@ -1336,8 +1333,6 @@ to implemented.
       directly into the database is invisible to a non-owner on every product-reading endpoint.
 - [ ] Scanning, manual entry, the add-product 404 path and the P6-006 invalid-code path all work through
       the GTIN resolver; an offline scan of a cached product paints from cache.
-- [ ] A rating queued before the update (legacy `{ barcode }` entry) survives the cache-version bump and
-      replays successfully.
 - [ ] Backend and frontend suites pass; Playwright and Maestro scan flows pass against the new routes.
 
 ## Phase 7: Auth Enhancements

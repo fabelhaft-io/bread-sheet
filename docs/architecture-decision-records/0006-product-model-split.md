@@ -171,11 +171,10 @@ universe.
 * **A wide mechanical re-key, done up front** ([TICKET-P6-009]). Server routes, `ProductEdit` FK,
   the frontend product route (`product/[barcode]` → `product/[id]`, with a `product/gtin/[gtin]` resolver
   screen for scans), the `products` cache (keyed by id, with a GTIN → id index so an offline scan of a
-  known product still paints), the outbox and `use-my-rating`. It ships no user-visible feature.
-* **The offline store schema version must be bumped**, and that bump wipes queued ratings unless it is
-  handled. P6-009 carries the outbox document across the bump, and `POST /api/ratings` accepts the
-  legacy `{ barcode }` payload (GTIN only) alongside `{ productId }` until no queued legacy entries can
-  remain.
+  known product still paints), the outbox and `use-my-rating`. It ships no user-visible feature. The
+  breaking API change is cheap only because there are no users yet: server and app ship together, with
+  no compatibility layer, and the offline-cache version bump simply wipes local caches, queued ratings
+  included. This ADR is easy to act on now and would not be later.
 * Reads of a packaged product's details need a join (`include: { packaged: true }`). That cost is
   negligible at this scale.
 * A P5-005 edit can change fields on both tables, so applying it writes both in one transaction.
