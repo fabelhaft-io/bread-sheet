@@ -16,9 +16,9 @@ jobs:
         working-directory: bread-sheet-app
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -57,7 +57,7 @@ jobs:
           curl -L -o bread-sheet.apk "$BUILD_URL"
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bread-sheet-apk
           path: bread-sheet-app/bread-sheet.apk

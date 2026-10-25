@@ -67,22 +67,22 @@ describe('Tab screens — scroll host (P5-006)', () => {
   });
 
   it('suppresses the rubber-band bounce on the home screen', async () => {
-    const { getByTestId } = render(<HomeScreen />);
+    const { getByTestId } = await render(<HomeScreen />);
     await waitFor(() => expect(api.get).toHaveBeenCalled());
     const scroll = getByTestId('home-screen');
     expect(scroll.props.alwaysBounceVertical).toBe(false);
     expect(scroll.props.overScrollMode).toBe('never');
   });
 
-  it('suppresses the rubber-band bounce on the profile screen', () => {
-    const { getByTestId } = render(<ProfileScreen />);
+  it('suppresses the rubber-band bounce on the profile screen', async () => {
+    const { getByTestId } = await render(<ProfileScreen />);
     const scroll = getByTestId('profile-screen');
     expect(scroll.props.alwaysBounceVertical).toBe(false);
     expect(scroll.props.overScrollMode).toBe('never');
   });
 
-  it('tightens the profile card only once a marginal overflow is measured', () => {
-    const { getByTestId } = render(<ProfileScreen />);
+  it('tightens the profile card only once a marginal overflow is measured', async () => {
+    const { getByTestId } = await render(<ProfileScreen />);
     const card = () => StyleSheet.flatten(getByTestId('profile-account-card').props.style);
 
     // Nothing measured yet — the screen renders with its relaxed spacing.
@@ -90,7 +90,7 @@ describe('Tab screens — scroll host (P5-006)', () => {
     expect(card().paddingVertical).toBeUndefined();
 
     const scroll = getByTestId('profile-screen');
-    act(() => {
+    await act(() => {
       scroll.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 800 } } });
       scroll.props.onContentSizeChange(390, 820);
     });
@@ -102,10 +102,10 @@ describe('Tab screens — scroll host (P5-006)', () => {
     expect(card().marginHorizontal).toBe(16);
   });
 
-  it('leaves the profile screen untouched when the content overflows well past the threshold', () => {
-    const { getByTestId } = render(<ProfileScreen />);
+  it('leaves the profile screen untouched when the content overflows well past the threshold', async () => {
+    const { getByTestId } = await render(<ProfileScreen />);
     const scroll = getByTestId('profile-screen');
-    act(() => {
+    await act(() => {
       scroll.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 800 } } });
       scroll.props.onContentSizeChange(390, 1400);
     });

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert } from 'react-native';
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import AddProductScreen from './add-product';
 
@@ -86,39 +86,39 @@ describe('AddProductScreen — access control', () => {
     mockUseLocalSearchParams.mockReturnValue({ barcode: '0000000000001' });
   });
 
-  it('shows the sign-up gate for anonymous users and carries barcode into returnTo', () => {
+  it('shows the sign-up gate for anonymous users and carries barcode into returnTo', async () => {
     mockUseSession.mockReturnValue({
       session: { user: { id: 'g1', is_anonymous: true } },
       isAnonymous: true,
       isLoading: false,
     });
-    const { getByTestId } = render(<AddProductScreen />);
-    fireEvent.press(getByTestId('add-product-signup'));
+    const { getByTestId } = await render(<AddProductScreen />);
+    await fireEvent.press(getByTestId('add-product-signup'));
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(auth)/signup',
       params: { returnTo: '/product/0000000000001' },
     });
   });
 
-  it('renders the full form for registered users (photos step)', () => {
+  it('renders the full form for registered users (photos step)', async () => {
     mockUseSession.mockReturnValue({
       session: { user: { id: 'u1', is_anonymous: false } },
       isAnonymous: false,
       isLoading: false,
     });
-    const { getByTestId } = render(<AddProductScreen />);
+    const { getByTestId } = await render(<AddProductScreen />);
     expect(getByTestId('add-product-screen')).toBeTruthy();
     expect(getByTestId('product-photo-slot')).toBeTruthy();
     expect(getByTestId('label-photo-slot')).toBeTruthy();
   });
 
-  it('suppresses the rubber-band bounce on the scroll host (P5-006)', () => {
+  it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
     mockUseSession.mockReturnValue({
       session: { user: { id: 'u1', is_anonymous: false } },
       isAnonymous: false,
       isLoading: false,
     });
-    const { getByTestId } = render(<AddProductScreen />);
+    const { getByTestId } = await render(<AddProductScreen />);
     const scroll = getByTestId('add-product-screen');
     expect(scroll.props.alwaysBounceVertical).toBe(false);
     expect(scroll.props.overScrollMode).toBe('never');
@@ -142,8 +142,8 @@ describe('AddProductScreen — flow progression', () => {
   });
 
   it('skipping extraction lands on the review step with an empty form', async () => {
-    const { getByTestId, queryByTestId } = render(<AddProductScreen />);
-    fireEvent.press(getByTestId('photos-skip'));
+    const { getByTestId, queryByTestId } = await render(<AddProductScreen />);
+    await fireEvent.press(getByTestId('photos-skip'));
     await waitFor(() => expect(getByTestId('field-name')).toBeTruthy());
     // No "mode" switcher when we skipped extraction (nothing to pre-fill).
     expect(queryByTestId('fill-mode-row')).toBeNull();
@@ -159,20 +159,22 @@ describe('AddProductScreen — flow progression', () => {
         }),
     );
 
-    const { getByTestId, queryByTestId, findByTestId } = render(<AddProductScreen />);
-    fireEvent.press(getByTestId('product-photo-slot-camera'));
+    const { getByTestId, queryByTestId, findByTestId } = await render(<AddProductScreen />);
+    // Not awaited yet: RNTL 14's fireEvent waits for the press handler, which
+    // is parked on the resize promise this test deliberately holds open.
+    const pressed = fireEvent.press(getByTestId('product-photo-slot-camera'));
 
     // Spinner + text appear while processCaptureForUpload is pending.
     await findByTestId('product-photo-slot-processing');
     // The other slot is unaffected.
     expect(queryByTestId('label-photo-slot-processing')).toBeNull();
 
-    // Resolving the resize clears the indicator. Wrap in act so the state
-    // update from the awaited continuation is flushed before we assert.
-    await act(async () => {
-      resolveProcessing({ uri: 'file:///tmp/processed.jpg', size: 1024 });
-    });
-    expect(queryByTestId('product-photo-slot-processing')).toBeNull();
+    // Resolving the resize clears the indicator — in the handler's `finally`,
+    // several awaits (session, upload) later, so wait for it rather than
+    // asserting on the next tick.
+    resolveProcessing({ uri: 'file:///tmp/processed.jpg', size: 1024 });
+    await waitFor(() => expect(queryByTestId('product-photo-slot-processing')).toBeNull());
+    await pressed;
   });
 
   it('pre-fills the form when extraction succeeds with medium+ confidence', async () => {
@@ -196,15 +198,15 @@ describe('AddProductScreen — flow progression', () => {
       },
     });
 
-    const { getByTestId, findByTestId } = render(<AddProductScreen />);
+    const { getByTestId, findByTestId } = await render(<AddProductScreen />);
     // Simulate the label photo being present so "Read the label" is enabled.
-    fireEvent.press(getByTestId('label-photo-slot-camera'));
+    await fireEvent.press(getByTestId('label-photo-slot-camera'));
     await waitFor(() =>
       expect(getByTestId('photos-continue').props.accessibilityState?.disabled).not.toBe(
         true,
       ),
     );
-    fireEvent.press(getByTestId('photos-continue'));
+    await fireEvent.press(getByTestId('photos-continue'));
 
     const nameField = await findByTestId('field-name');
     expect(nameField.props.value).toBe('Sourdough');
@@ -235,14 +237,14 @@ describe('AddProductScreen — flow progression', () => {
       },
     });
 
-    const { getByTestId, findByTestId } = render(<AddProductScreen />);
-    fireEvent.press(getByTestId('label-photo-slot-camera'));
+    const { getByTestId, findByTestId } = await render(<AddProductScreen />);
+    await fireEvent.press(getByTestId('label-photo-slot-camera'));
     await waitFor(() =>
       expect(getByTestId('photos-continue').props.accessibilityState?.disabled).not.toBe(
         true,
       ),
     );
-    fireEvent.press(getByTestId('photos-continue'));
+    await fireEvent.press(getByTestId('photos-continue'));
 
     // Ingredients are pre-filled despite low confidence...
     const ingredientsField = await findByTestId('field-ingredients');
@@ -262,8 +264,8 @@ describe('AddProductScreen — flow progression', () => {
       }),
     );
 
-    const { getByTestId, findByTestId } = render(<AddProductScreen />);
-    fireEvent.press(getByTestId('product-photo-slot-camera'));
+    const { getByTestId, findByTestId } = await render(<AddProductScreen />);
+    await fireEvent.press(getByTestId('product-photo-slot-camera'));
 
     const err = await findByTestId('capture-error');
     expect(err.props.children).toMatch(/food product/i);
@@ -277,11 +279,11 @@ describe('AddProductScreen — flow progression', () => {
       genericName: 'Soft drink',
     });
 
-    const { getByTestId, findByTestId } = render(<AddProductScreen />);
-    fireEvent.press(getByTestId('product-photo-slot-camera'));
+    const { getByTestId, findByTestId } = await render(<AddProductScreen />);
+    await fireEvent.press(getByTestId('product-photo-slot-camera'));
     await waitFor(() => expect(productsApi.uploadProductImage).toHaveBeenCalled());
 
-    fireEvent.press(getByTestId('photos-skip'));
+    await fireEvent.press(getByTestId('photos-skip'));
 
     const nameField = await findByTestId('field-name');
     expect(nameField.props.value).toBe('Cola');
@@ -296,10 +298,10 @@ describe('AddProductScreen — flow progression', () => {
       }),
     );
 
-    const { getByTestId } = render(<AddProductScreen />);
+    const { getByTestId } = await render(<AddProductScreen />);
     // Capture the product photo *while still on the photos step* — it's a
     // submit prerequisite and the slot disappears once we leave this step.
-    fireEvent.press(getByTestId('product-photo-slot-library'));
+    await fireEvent.press(getByTestId('product-photo-slot-library'));
     // Give the async capture+process chain a beat to resolve so the
     // productPhotoUri state is set before we advance.
     await waitFor(() => {
@@ -307,11 +309,11 @@ describe('AddProductScreen — flow progression', () => {
       const picker = require('@/features/products/image-picker');
       expect(picker.captureImage).toHaveBeenCalled();
     });
-    fireEvent.press(getByTestId('photos-skip'));
+    await fireEvent.press(getByTestId('photos-skip'));
     await waitFor(() => expect(getByTestId('field-name')).toBeTruthy());
-    fireEvent.changeText(getByTestId('field-name'), 'Mystery bread');
-    fireEvent.changeText(getByTestId('field-energyKcal'), '9999');
-    fireEvent.press(getByTestId('submit-product'));
+    await fireEvent.changeText(getByTestId('field-name'), 'Mystery bread');
+    await fireEvent.changeText(getByTestId('field-energyKcal'), '9999');
+    await fireEvent.press(getByTestId('submit-product'));
 
     await waitFor(() => expect(getByTestId('field-energyKcal-error')).toBeTruthy());
   });

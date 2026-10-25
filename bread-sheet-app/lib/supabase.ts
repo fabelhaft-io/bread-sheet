@@ -39,7 +39,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
  * pause it and resume — which also refreshes immediately if the token expired
  * while away — on the next foreground.
  */
-function handleAppStateChange(state: AppStateStatus): void {
+// RN 0.88 types `AppState.currentState` as `string | null | undefined`, not AppStateStatus.
+function handleAppStateChange(state: AppStateStatus | string | null | undefined): void {
   if (state === 'active') {
     supabase.auth.startAutoRefresh();
   } else {

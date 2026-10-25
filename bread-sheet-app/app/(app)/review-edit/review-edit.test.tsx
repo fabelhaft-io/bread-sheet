@@ -74,37 +74,37 @@ beforeEach(() => {
 
 describe('ReviewEditScreen — diff rendering', () => {
   it('shows old vs new for every changed field', async () => {
-    const { findByTestId, findByText } = render(<ReviewEditScreen />);
+    const { findByTestId, findByText } = await render(<ReviewEditScreen />);
     await findByTestId('diff-name');
     await findByText('Sourdough Loaf'); // original, struck through
     await findByText('Sourdough Boule'); // proposed
   });
 
   it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
-    const { findByTestId } = render(<ReviewEditScreen />);
+    const { findByTestId } = await render(<ReviewEditScreen />);
     const scroll = await findByTestId('review-edit-screen');
     expect(scroll.props.alwaysBounceVertical).toBe(false);
     expect(scroll.props.overScrollMode).toBe('never');
   });
 
   it('shows the vote tally', async () => {
-    const { findByTestId } = render(<ReviewEditScreen />);
+    const { findByTestId } = await render(<ReviewEditScreen />);
     const tally = await findByTestId('vote-tally');
     expect(tally.props.children.join('')).toContain('1 of 2 approvals needed');
   });
 
   it('collapses unchanged fields behind a toggle', async () => {
-    const { findByTestId, queryByTestId } = render(<ReviewEditScreen />);
+    const { findByTestId, queryByTestId } = await render(<ReviewEditScreen />);
     await findByTestId('diff-name');
     expect(queryByTestId('unchanged-brand')).toBeNull();
-    fireEvent.press(await findByTestId('toggle-unchanged'));
+    await fireEvent.press(await findByTestId('toggle-unchanged'));
     await findByTestId('unchanged-brand');
     await findByTestId('unchanged-salt');
   });
 
   it('errors when the edit is no longer pending (stale deep link)', async () => {
     mockGetPendingEdit.mockResolvedValue({ edit: null });
-    const { findByText } = render(<ReviewEditScreen />);
+    const { findByText } = await render(<ReviewEditScreen />);
     await findByText(/no longer under review/i);
   });
 });
@@ -112,8 +112,8 @@ describe('ReviewEditScreen — diff rendering', () => {
 describe('ReviewEditScreen — actions', () => {
   it('"Looks correct" casts an APPROVE vote and returns to the product', async () => {
     mockVote.mockResolvedValue({ approvals: 2, rejections: 0, status: 'APPLIED' });
-    const { findByTestId } = render(<ReviewEditScreen />);
-    fireEvent.press(await findByTestId('edit-approve'));
+    const { findByTestId } = await render(<ReviewEditScreen />);
+    await fireEvent.press(await findByTestId('edit-approve'));
     await waitFor(() => expect(mockVote).toHaveBeenCalledWith('edit-1', 'APPROVE'));
     expect(mockRouter.replace).toHaveBeenCalledWith({
       pathname: '/(app)/product/[barcode]',
@@ -123,15 +123,15 @@ describe('ReviewEditScreen — actions', () => {
 
   it('"Something\'s wrong" casts a REJECT vote', async () => {
     mockVote.mockResolvedValue({ approvals: 1, rejections: 1, status: 'PENDING' });
-    const { findByTestId } = render(<ReviewEditScreen />);
-    fireEvent.press(await findByTestId('edit-reject'));
+    const { findByTestId } = await render(<ReviewEditScreen />);
+    await fireEvent.press(await findByTestId('edit-reject'));
     await waitFor(() => expect(mockVote).toHaveBeenCalledWith('edit-1', 'REJECT'));
   });
 
   it('"Dismiss" records a server-side dismissal, not a vote', async () => {
     mockDismiss.mockResolvedValue({ dismissed: true });
-    const { findByTestId } = render(<ReviewEditScreen />);
-    fireEvent.press(await findByTestId('edit-dismiss'));
+    const { findByTestId } = await render(<ReviewEditScreen />);
+    await fireEvent.press(await findByTestId('edit-dismiss'));
     await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('edit-1'));
     expect(mockVote).not.toHaveBeenCalled();
   });
@@ -140,7 +140,7 @@ describe('ReviewEditScreen — actions', () => {
     mockGetPendingEdit.mockResolvedValue({
       edit: { ...PENDING_EDIT, viewer: { isAuthor: true, vote: null, dismissed: false } },
     });
-    const { findByTestId, queryByTestId } = render(<ReviewEditScreen />);
+    const { findByTestId, queryByTestId } = await render(<ReviewEditScreen />);
     await findByTestId('own-edit-note');
     expect(queryByTestId('edit-approve')).toBeNull();
     expect(queryByTestId('edit-reject')).toBeNull();
@@ -150,7 +150,7 @@ describe('ReviewEditScreen — actions', () => {
     mockGetPendingEdit.mockResolvedValue({
       edit: { ...PENDING_EDIT, viewer: { isAuthor: false, vote: 'APPROVE', dismissed: false } },
     });
-    const { findByTestId, queryByTestId } = render(<ReviewEditScreen />);
+    const { findByTestId, queryByTestId } = await render(<ReviewEditScreen />);
     await findByTestId('already-voted-note');
     expect(queryByTestId('edit-approve')).toBeNull();
   });
@@ -159,7 +159,7 @@ describe('ReviewEditScreen — actions', () => {
 describe('ReviewEditScreen — access control', () => {
   it('gates anonymous users', async () => {
     signIn(true);
-    const { findByTestId } = render(<ReviewEditScreen />);
+    const { findByTestId } = await render(<ReviewEditScreen />);
     await findByTestId('review-edit-anon-gate');
     expect(mockGetPendingEdit).not.toHaveBeenCalled();
   });

@@ -20,69 +20,69 @@ beforeEach(() => {
 });
 
 describe('ManualBarcodeSheet', () => {
-  it('navigates to the product screen for the entered code', () => {
-    render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
+  it('navigates to the product screen for the entered code', async () => {
+    await render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
 
-    fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });
 
-  it('closes itself once it has navigated', () => {
+  it('closes itself once it has navigated', async () => {
     const onClose = jest.fn();
-    render(<ManualBarcodeSheet visible onClose={onClose} />);
+    await render(<ManualBarcodeSheet visible onClose={onClose} />);
 
-    fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('reports too-short and non-digit input with distinguishable copy', () => {
-    render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
+  it('reports too-short and non-digit input with distinguishable copy', async () => {
+    await render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
     const input = screen.getByTestId('manual-barcode-input');
 
-    fireEvent.changeText(input, '1234567');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(input, '1234567');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(screen.getByTestId('manual-barcode-error')).toHaveTextContent(/Too short/);
     expect(mockRouter.push).not.toHaveBeenCalled();
 
     // A letter is a different mistake from a wrong length and says so — the
     // field keeps letters precisely so this error can be shown.
-    fireEvent.changeText(input, '40063813A3931');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(input, '40063813A3931');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(screen.getByTestId('manual-barcode-error')).toHaveTextContent(/digits only/);
     expect(mockRouter.push).not.toHaveBeenCalled();
 
-    fireEvent.changeText(input, '12345678901234');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(input, '12345678901234');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(screen.getByTestId('manual-barcode-error')).toHaveTextContent(/Too long/);
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
-  it('does not complain before the first submit', () => {
-    render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
+  it('does not complain before the first submit', async () => {
+    await render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
 
-    fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '123');
+    await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '123');
 
     expect(screen.queryByTestId('manual-barcode-error')).toBeNull();
   });
 
-  it('strips separators from typed or pasted input', () => {
-    render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
+  it('strips separators from typed or pasted input', async () => {
+    await render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
 
-    fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006 381-333931');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006 381-333931');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });
 
-  it('pre-fills from initialValue so a bad scan is corrected, not retyped', () => {
-    render(
+  it('pre-fills from initialValue so a bad scan is corrected, not retyped', async () => {
+    await render(
       <ManualBarcodeSheet visible onClose={jest.fn()} initialValue="00040063813339311" />
     );
 
@@ -90,19 +90,19 @@ describe('ManualBarcodeSheet', () => {
     expect(screen.getByTestId('manual-barcode-input').props.value).toBe('0004006381333');
   });
 
-  it('uses the onSubmit override instead of navigating when one is given', () => {
+  it('uses the onSubmit override instead of navigating when one is given', async () => {
     const onSubmit = jest.fn();
-    render(<ManualBarcodeSheet visible onClose={jest.fn()} onSubmit={onSubmit} />);
+    await render(<ManualBarcodeSheet visible onClose={jest.fn()} onSubmit={onSubmit} />);
 
-    fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '12345678');
-    fireEvent.press(screen.getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '12345678');
+    await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
     expect(onSubmit).toHaveBeenCalledWith('12345678');
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
-  it('renders nothing while closed', () => {
-    render(<ManualBarcodeSheet visible={false} onClose={jest.fn()} />);
+  it('renders nothing while closed', async () => {
+    await render(<ManualBarcodeSheet visible={false} onClose={jest.fn()} />);
 
     expect(screen.queryByTestId('manual-barcode-input')).toBeNull();
   });

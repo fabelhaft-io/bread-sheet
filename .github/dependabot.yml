@@ -18,7 +18,32 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Both deployed functions drifted the same way the agent-team did: the image-resizer
+  # Lambda carried a sharp/libvips advisory, and the billing killswitch (ADR 0005 L4)
+  # has no lockfile, so its ranges are the only thing a version update can move.
+  - package-ecosystem: "npm"
+    directory: "/server/lambda/imageResizer"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/terraform/functions/billing-killswitch"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "terraform"
     directory: "/terraform"
+    schedule:
+      interval: "weekly"
+
+  # Workflow actions sat 2-3 majors behind (still on the deprecated Node 20 runtime).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # server/Dockerfile's node base image.
+  - package-ecosystem: "docker"
+    directory: "/server"
     schedule:
       interval: "weekly"

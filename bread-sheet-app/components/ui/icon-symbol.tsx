@@ -3,7 +3,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { SymbolWeight } from 'expo-symbols';
 import { ComponentProps } from 'react';
-import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
+import { type ColorValue, OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
 
 type IconSymbolName = keyof typeof MAPPING;
 
@@ -38,9 +38,12 @@ export function IconSymbol({
 }: {
   name: IconSymbolName;
   size?: number;
-  color: string | OpaqueColorValue;
+  color: ColorValue;
   style?: StyleProp<TextStyle>;
   weight?: SymbolWeight;
 }) {
-  return <MaterialIcons color={color} size={size} name={MAPPING[name]} style={style} />;
+  // @expo/vector-icons still types `color` as the pre-RN-0.88 `string | OpaqueColorValue`;
+  // RN 0.88's ColorValue (what tabBarIcon hands us) also admits null/number.
+  const iconColor = color as string | OpaqueColorValue;
+  return <MaterialIcons color={iconColor} size={size} name={MAPPING[name]} style={style} />;
 }

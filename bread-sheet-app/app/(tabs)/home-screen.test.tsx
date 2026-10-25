@@ -109,7 +109,7 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
 
   it('renders the fetched ratings', async () => {
     mockApiGet.mockResolvedValue([rating('111', 'Sourdough Loaf', 8)]);
-    const { findByText } = render(<HomeScreen />);
+    const { findByText } = await render(<HomeScreen />);
     await findByText('Sourdough Loaf');
   });
 
@@ -117,7 +117,7 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     await ratingsCache.write([rating('111', 'Sourdough Loaf', 8)]);
     mockApiGet.mockRejectedValue(new NetworkError());
 
-    const { findByText, findByTestId } = render(<HomeScreen />);
+    const { findByText, findByTestId } = await render(<HomeScreen />);
 
     await findByText('Sourdough Loaf');
     await findByTestId('offline-indicator');
@@ -127,14 +127,14 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     await ratingsCache.write([rating('111', 'Sourdough Loaf', 8)]);
     mockApiGet.mockRejectedValue(new NetworkError());
 
-    const { findByTestId, getByText } = render(<HomeScreen />);
+    const { findByTestId, getByText } = await render(<HomeScreen />);
     await findByTestId('offline-indicator');
     expect(getByText('Sourdough Loaf')).toBeTruthy();
   });
 
   it('shows an offline empty state, not "you haven’t rated anything", with no cache', async () => {
     mockApiGet.mockRejectedValue(new NetworkError());
-    const { findByText, queryByText } = render(<HomeScreen />);
+    const { findByText, queryByText } = await render(<HomeScreen />);
     await findByText(/offline and haven't opened this list/i);
     expect(queryByText(/haven't rated anything yet/i)).toBeNull();
   });
@@ -147,7 +147,7 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     });
     mockApiGet.mockResolvedValue([rating('111', 'Sourdough Loaf', 8)]);
 
-    const { findByText, queryByText } = render(<HomeScreen />);
+    const { findByText, queryByText } = await render(<HomeScreen />);
 
     await findByText('Sourdough Loaf');
     expect(queryByText(/Sign in or create an account to see your rating history/i)).toBeNull();
@@ -161,7 +161,7 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     });
     mockApiGet.mockResolvedValue([rating('111', 'Sourdough Loaf', 8)]);
 
-    const { findByText, getByTestId } = render(<HomeScreen />);
+    const { findByText, getByTestId } = await render(<HomeScreen />);
 
     await findByText('Sourdough Loaf');
     expect(getByTestId('guest-upgrade-banner')).toBeTruthy();
@@ -171,7 +171,7 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     mockUseOutbox.mockReturnValue(outbox(['111']));
     mockApiGet.mockResolvedValue([rating('111', 'Sourdough Loaf', 8), rating('222', 'Rye', 5)]);
 
-    const { findByTestId, queryByTestId } = render(<HomeScreen />);
+    const { findByTestId, queryByTestId } = await render(<HomeScreen />);
 
     await findByTestId('rating-pending-sync-111');
     expect(queryByTestId('rating-pending-sync-222')).toBeNull();
@@ -181,7 +181,7 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     mockUseOutbox.mockReturnValue(outbox([], [{ barcode: '111', message: 'taste must be 0–10' }]));
     mockApiGet.mockResolvedValue([]);
 
-    const { findByTestId, getByText } = render(<HomeScreen />);
+    const { findByTestId, getByText } = await render(<HomeScreen />);
 
     await findByTestId('outbox-failures');
     expect(getByText(/taste must be 0–10/)).toBeTruthy();
@@ -189,18 +189,18 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
 
   it('does not fetch ratings when there is no session', async () => {
     mockUseSession.mockReturnValue({ session: null, isAnonymous: false, isLoading: false });
-    render(<HomeScreen />);
+    await render(<HomeScreen />);
     await waitFor(() => expect(mockApiGet).not.toHaveBeenCalled());
   });
 
   // P6-006: adding a product must not require the camera tab.
   it('offers a manual add entry point that routes to the product screen', async () => {
     mockApiGet.mockResolvedValue([]);
-    const { findByTestId, getByTestId } = render(<HomeScreen />);
+    const { findByTestId, getByTestId } = await render(<HomeScreen />);
 
-    fireEvent.press(await findByTestId('home-add-product'));
-    fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
-    fireEvent.press(getByTestId('manual-barcode-submit'));
+    await fireEvent.press(await findByTestId('home-add-product'));
+    await fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
+    await fireEvent.press(getByTestId('manual-barcode-submit'));
 
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
   });

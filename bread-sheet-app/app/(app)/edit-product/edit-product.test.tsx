@@ -99,7 +99,7 @@ beforeEach(() => {
 describe('EditProductScreen — access control', () => {
   it('shows the signup gate for anonymous users and never fetches the product', async () => {
     signIn(true);
-    const { findByTestId } = render(<EditProductScreen />);
+    const { findByTestId } = await render(<EditProductScreen />);
     await findByTestId('edit-product-anon-gate');
     expect(mockApiGet).not.toHaveBeenCalled();
   });
@@ -107,7 +107,7 @@ describe('EditProductScreen — access control', () => {
 
 describe('EditProductScreen — pre-population & unchanged submits', () => {
   it('pre-fills every field from the current product values', async () => {
-    const { findByTestId } = render(<EditProductScreen />);
+    const { findByTestId } = await render(<EditProductScreen />);
     expect((await findByTestId('field-name')).props.value).toBe('Sourdough Loaf');
     expect((await findByTestId('field-brand')).props.value).toBe('Artisan');
     expect((await findByTestId('field-energyKcal')).props.value).toBe('250');
@@ -115,25 +115,25 @@ describe('EditProductScreen — pre-population & unchanged submits', () => {
   });
 
   it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
-    const { findByTestId } = render(<EditProductScreen />);
+    const { findByTestId } = await render(<EditProductScreen />);
     const scroll = await findByTestId('edit-product-screen');
     expect(scroll.props.alwaysBounceVertical).toBe(false);
     expect(scroll.props.overScrollMode).toBe('never');
   });
 
   it('renders the barcode read-only', async () => {
-    const { findByTestId } = render(<EditProductScreen />);
+    const { findByTestId } = await render(<EditProductScreen />);
     const barcodeField = await findByTestId('field-barcode');
     expect(barcodeField.props.editable).toBe(false);
     expect(barcodeField.props.value).toBe('0000000000001');
   });
 
   it('disables submit while nothing changed and shows the hint', async () => {
-    const { findByTestId } = render(<EditProductScreen />);
+    const { findByTestId } = await render(<EditProductScreen />);
     const submit = await findByTestId('submit-edit');
     expect(submit.props.accessibilityState?.disabled).toBe(true);
     await findByTestId('no-changes-hint');
-    fireEvent.press(submit);
+    await fireEvent.press(submit);
     expect(mockProposeEdit).not.toHaveBeenCalled();
     expect(mockCorrectProduct).not.toHaveBeenCalled();
   });
@@ -142,11 +142,11 @@ describe('EditProductScreen — pre-population & unchanged submits', () => {
 describe('EditProductScreen — VERIFIED proposal path', () => {
   it('sends only the changed fields to proposeProductEdit', async () => {
     mockProposeEdit.mockResolvedValue({ editId: 'e1', barcode: '0000000000001', status: 'PENDING' });
-    const { findByTestId } = render(<EditProductScreen />);
+    const { findByTestId } = await render(<EditProductScreen />);
 
-    fireEvent.changeText(await findByTestId('field-name'), 'Sourdough Boule');
-    fireEvent.changeText(await findByTestId('field-salt'), '1.5');
-    fireEvent.press(await findByTestId('submit-edit'));
+    await fireEvent.changeText(await findByTestId('field-name'), 'Sourdough Boule');
+    await fireEvent.changeText(await findByTestId('field-salt'), '1.5');
+    await fireEvent.press(await findByTestId('submit-edit'));
 
     await waitFor(() =>
       expect(mockProposeEdit).toHaveBeenCalledWith('0000000000001', {
@@ -163,19 +163,19 @@ describe('EditProductScreen — VERIFIED proposal path', () => {
 
   it('surfaces the 409 edit_pending conflict inline', async () => {
     mockProposeEdit.mockRejectedValue(new ApiError(409, 'edit_pending', { error: 'edit_pending' }));
-    const { findByTestId, findByText } = render(<EditProductScreen />);
+    const { findByTestId, findByText } = await render(<EditProductScreen />);
 
-    fireEvent.changeText(await findByTestId('field-name'), 'Sourdough Boule');
-    fireEvent.press(await findByTestId('submit-edit'));
+    await fireEvent.changeText(await findByTestId('field-name'), 'Sourdough Boule');
+    await fireEvent.press(await findByTestId('submit-edit'));
 
     await findByText(/already under review/i);
   });
 
   it('blocks submit-side validation errors (bad number) client-side', async () => {
-    const { findByTestId } = render(<EditProductScreen />);
+    const { findByTestId } = await render(<EditProductScreen />);
 
-    fireEvent.changeText(await findByTestId('field-energyKcal'), 'lots');
-    fireEvent.press(await findByTestId('submit-edit'));
+    await fireEvent.changeText(await findByTestId('field-energyKcal'), 'lots');
+    await fireEvent.press(await findByTestId('submit-edit'));
 
     await findByTestId('field-energyKcal-error');
     expect(mockProposeEdit).not.toHaveBeenCalled();
@@ -193,11 +193,11 @@ describe('EditProductScreen — PENDING_REVIEW correction path', () => {
 
   it('labels the intent and PATCHes the full payload via correctProduct', async () => {
     mockCorrectProduct.mockResolvedValue({ barcode: '0000000000001', status: 'PENDING_REVIEW' });
-    const { findByTestId, findByText } = render(<EditProductScreen />);
+    const { findByTestId, findByText } = await render(<EditProductScreen />);
 
     await findByText('Correct this submission');
-    fireEvent.changeText(await findByTestId('field-name'), 'Fixed Name');
-    fireEvent.press(await findByTestId('submit-edit'));
+    await fireEvent.changeText(await findByTestId('field-name'), 'Fixed Name');
+    await fireEvent.press(await findByTestId('submit-edit'));
 
     await waitFor(() => expect(mockCorrectProduct).toHaveBeenCalled());
     const [barcode, payload] = mockCorrectProduct.mock.calls[0];

@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, waitFor, fireEvent } from '@testing-library/react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import ProductScreen from './[barcode]';
 
@@ -111,17 +112,17 @@ describe('ProductScreen — product-not-found state', () => {
 
   it('renders the not-found screen on a 404 response', async () => {
     mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
-    const { findByTestId, getByText } = render(<ProductScreen />);
+    const { findByTestId, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByTestId('product-not-found');
     expect(getByText(/isn't in the database yet/i)).toBeTruthy();
   });
 
   it('shows the "Add this product" CTA for registered users and navigates with the barcode', async () => {
     mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
-    const { findByTestId, queryByTestId } = render(<ProductScreen />);
+    const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     const btn = await findByTestId('product-not-found-add');
     expect(queryByTestId('product-not-found-signup')).toBeNull();
-    fireEvent.press(btn);
+    await fireEvent.press(btn);
     // replace (not push) so the "not-found" screen is removed from the stack —
     // prevents the user landing back on it after adding the product and rating it.
     expect(mockRouter.replace).toHaveBeenCalledWith({
@@ -137,10 +138,10 @@ describe('ProductScreen — product-not-found state', () => {
       isLoading: false,
     });
     mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
-    const { findByTestId, queryByTestId } = render(<ProductScreen />);
+    const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     const btn = await findByTestId('product-not-found-signup');
     expect(queryByTestId('product-not-found-add')).toBeNull();
-    fireEvent.press(btn);
+    await fireEvent.press(btn);
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(auth)/signup',
       params: { returnTo: '/product/0000000000001' },
@@ -153,7 +154,7 @@ describe('ProductScreen — product-not-found state', () => {
     mockApiGet.mockRejectedValue(
       new ApiError(500, 'PrismaClientKnownRequestError: FK constraint Rating_userId_fkey', {}),
     );
-    const { findByText, queryByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText(/Could not load this product/i);
     expect(queryByText(/Prisma|FK constraint|userId/i)).toBeNull();
     expect(queryByTestId('product-not-found')).toBeNull();
@@ -165,14 +166,14 @@ describe('ProductScreen — product-not-found state', () => {
     mockUseLocalSearchParams.mockReturnValue({ barcode: '14006381333931' });
     mockApiGet.mockRejectedValue(new ApiError(400, 'Invalid barcode format', {}));
 
-    const { findByTestId, getByTestId, queryByText } = render(<ProductScreen />);
+    const { findByTestId, getByTestId, queryByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByTestId('product-invalid-barcode');
     expect(queryByText(/Invalid barcode format/i)).toBeNull();
     expect(getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
 
-    fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
-    fireEvent.press(getByTestId('manual-barcode-submit'));
+    await fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
+    await fireEvent.press(getByTestId('manual-barcode-submit'));
 
     // `replace`: the corrected code takes the place of the broken screen.
     expect(mockRouter.replace).toHaveBeenCalledWith('/(app)/product/4006381333931');
@@ -187,7 +188,7 @@ describe('ProductScreen — product-not-found state', () => {
       image: null,
       description: null,
     });
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     await waitFor(() => expect(queryByTestId('product-not-found')).toBeNull());
   });
@@ -201,7 +202,7 @@ describe('ProductScreen — product-not-found state', () => {
       image: null,
       description: null,
     });
-    const { findByText, getByTestId } = render(<ProductScreen />);
+    const { findByText, getByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     const scroll = getByTestId('product-screen');
     expect(scroll.props.alwaysBounceVertical).toBe(false);
@@ -231,9 +232,9 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       unverified: true,
       submittedByUserId: 'someone-else',
     });
-    const { findByTestId } = render(<ProductScreen />);
+    const { findByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     const banner = await findByTestId('review-product-banner');
-    fireEvent.press(banner);
+    await fireEvent.press(banner);
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(app)/review-product/[barcode]',
       params: { barcode: '0000000000001' },
@@ -256,7 +257,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       unverified: true,
       submittedByUserId: 'submitter',
     });
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('My bread');
     expect(queryByTestId('review-product-banner')).toBeNull();
   });
@@ -279,7 +280,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       description: null,
       unverified: true,
     });
-    const { findByTestId, getByText } = render(<ProductScreen />);
+    const { findByTestId, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     const banner = await findByTestId('review-product-banner');
 
     // Same title and explanation a registered reviewer reads…
@@ -288,7 +289,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     // …plus the guest note, and no way to reach the reviewer screen.
     expect(getByText('Log in to review this product.')).toBeTruthy();
     expect(banner.props.onPress).toBeUndefined();
-    fireEvent.press(banner);
+    await fireEvent.press(banner);
     expect(mockRouter.push).not.toHaveBeenCalled();
   });
 
@@ -308,7 +309,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       unverified: true,
       submittedByUserId: 'someone-else',
     });
-    const { findByTestId, queryByTestId } = render(<ProductScreen />);
+    const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByTestId('review-product-banner');
     expect(queryByTestId('review-product-banner-guest-note')).toBeNull();
   });
@@ -327,7 +328,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
       image: null,
       description: null,
     });
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough');
     expect(queryByTestId('review-product-banner')).toBeNull();
   });
@@ -361,9 +362,9 @@ describe('ProductScreen — rating submission errors', () => {
         {},
       ),
     );
-    const { findByText, queryByText, getByText } = render(<ProductScreen />);
+    const { findByText, queryByText, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
-    fireEvent.press(getByText('Submit Rating'));
+    await fireEvent.press(getByText('Submit Rating'));
     await findByText(/Could not submit your rating/i);
     expect(queryByText(/Prisma|Rating_userId_fkey|Foreign key/i)).toBeNull();
   });
@@ -372,9 +373,9 @@ describe('ProductScreen — rating submission errors', () => {
     mockApiPost.mockRejectedValue(
       new ApiError(400, 'taste must be between 0 and 10 in 0.5 increments', {}),
     );
-    const { findByText, getByText } = render(<ProductScreen />);
+    const { findByText, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
-    fireEvent.press(getByText('Submit Rating'));
+    await fireEvent.press(getByText('Submit Rating'));
     await findByText(/taste must be between/i);
   });
 });
@@ -408,7 +409,7 @@ describe('ProductScreen — existing rating pre-fill', () => {
       return Promise.resolve(PRODUCT);
     });
 
-    const { findByText, queryByText } = render(<ProductScreen />);
+    const { findByText, queryByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByText('Sourdough Loaf');
     // Submit-button copy reflects the update intent
@@ -420,7 +421,7 @@ describe('ProductScreen — existing rating pre-fill', () => {
 
   it('shows the "Submit Rating" button when the user has no existing rating', async () => {
     mockProductAndNoExistingRating(PRODUCT);
-    const { findByText, queryByText } = render(<ProductScreen />);
+    const { findByText, queryByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Submit Rating');
     expect(queryByText('Update Rating')).toBeNull();
   });
@@ -434,15 +435,15 @@ describe('ProductScreen — existing rating pre-fill', () => {
     });
     mockApiPost.mockResolvedValue(ratingEntry(PRODUCT, 6, null));
 
-    const { findByText, getByText } = render(<ProductScreen />);
+    const { findByText, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Update Rating');
-    fireEvent.press(getByText('Update Rating'));
+    await fireEvent.press(getByText('Update Rating'));
     await findByText(/Rating Updated!/i);
   });
 
   it('never issues the per-product /api/ratings/me/:barcode lookup (P8-002)', async () => {
     mockProductAndNoExistingRating(PRODUCT);
-    const { findByText } = render(<ProductScreen />);
+    const { findByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Submit Rating');
     const meCalls = mockApiGet.mock.calls.filter(
       (args) => typeof args[0] === 'string' && args[0].startsWith('/api/ratings/me/'),
@@ -463,7 +464,7 @@ describe('ProductScreen — existing rating pre-fill', () => {
       return Promise.resolve(PRODUCT);
     });
 
-    const { findByText } = render(<ProductScreen />);
+    const { findByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Update Rating');
     await findByText('7.0');
   });
@@ -505,9 +506,9 @@ describe('ProductScreen — leaving the success card', () => {
   });
 
   async function submitRating() {
-    const view = render(<ProductScreen />);
+    const view = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await view.findByText('Sourdough Loaf');
-    fireEvent.press(view.getByText('Submit Rating'));
+    await fireEvent.press(view.getByText('Submit Rating'));
     await view.findByTestId('rating-submitted');
     return view;
   }
@@ -515,7 +516,7 @@ describe('ProductScreen — leaving the success card', () => {
   it('sends the user to the Home tab instead of popping back to the scanner', async () => {
     const { getByTestId } = await submitRating();
 
-    fireEvent.press(getByTestId('rating-submitted-home'));
+    await fireEvent.press(getByTestId('rating-submitted-home'));
 
     expect(mockRouter.navigate).toHaveBeenCalledWith('/(tabs)');
     expect(mockRouter.back).not.toHaveBeenCalled();
@@ -524,7 +525,7 @@ describe('ProductScreen — leaving the success card', () => {
   it('offers a way back to the product itself, which returns the rating form', async () => {
     const { getByTestId, findByTestId, queryByTestId } = await submitRating();
 
-    fireEvent.press(getByTestId('rating-submitted-back-to-product'));
+    await fireEvent.press(getByTestId('rating-submitted-back-to-product'));
 
     await findByTestId('product-screen');
     expect(queryByTestId('rating-submitted')).toBeNull();
@@ -538,9 +539,9 @@ describe('ProductScreen — leaving the success card', () => {
     // `useFocusEffect` exposes it as the effect cleanup, so unmounting is how a
     // unit test reaches it. It must not throw, and re-rendering the screen has
     // to land on the form.
-    unmount();
+    await unmount();
 
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     expect(queryByTestId('rating-submitted')).toBeNull();
   });

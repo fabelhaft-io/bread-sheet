@@ -1052,43 +1052,55 @@ keeps the brief two-task rolling-deploy overlap safe — no separate migration J
 ## Dependency Hygiene
 
 Dependabot is configured in [`.github/dependabot.yml`](../../.github/dependabot.yml) with a weekly
-schedule for **four** manifests: `/bread-sheet-app`, `/server`, `/agent-team` and `/terraform`.
-`/agent-team` was added late — note that Dependabot *security* updates run against every manifest it
-detects regardless of this file, but *version* updates only run for the directories listed here, so a
-missing entry produces a directory that looks covered (security PRs arrive) while silently drifting
-behind on routine releases.
+schedule for every manifest in the repo: the npm projects `/bread-sheet-app`, `/server`,
+`/server/lambda/imageResizer`, `/agent-team` and `/terraform/functions/billing-killswitch`, plus
+`/terraform` (providers), `github-actions` (workflow actions) and `docker` (`server/Dockerfile`).
+Dependabot *security* updates run against every manifest it detects regardless of this file, but
+*version* updates only run for the directories listed here, so a missing entry produces a directory
+that looks covered (security PRs arrive) while silently drifting behind on routine releases. That
+happened three times: `/agent-team` (`@mastra/core` 7 minors stale), the image-resizer Lambda
+(carrying a `sharp`/libvips advisory) and the workflow actions (2–3 majors behind, still on the
+deprecated Node 20 runtime) — all three entries were added after the fact.
 
 Merging is gated by a repo **ruleset on `main` requiring 1 approving review**, so Dependabot PRs need
 a human approval even when every check is green.
 
-Routine remediation is a **two-pass** `npm audit fix --package-lock-only` in each of the three npm
-projects. Two passes are required: the first leaves nested duplicate copies (e.g. `brace-expansion`
-under `glob/`, `@expo/fingerprint/` and `@typescript-eslint/`) at the vulnerable version, and the
-second collapses them.
+Routine remediation is `npm update` (in-range bumps) in each npm project, then `npm audit`; where
+nested duplicates survive, a **two-pass** `npm audit fix --package-lock-only` collapses them (the first
+pass leaves nested copies such as `brace-expansion` under `glob/` at the vulnerable version). Watch
+for duplicated libraries whose types are nominal — see the `google-auth-library` pin in
+[`backend.md`](backend.md).
+
+The billing killswitch has **no lockfile**: Cloud Functions installs from `package.json` ranges at
+deploy time, so its ranges are the only thing that can be bumped, and any change to the directory
+changes the zip's hash and redeploys the function on the next `terraform apply`.
 
 ### Accepted, un-remediable advisories
 
-Two findings survive `npm audit fix` and are accepted rather than force-fixed. In both cases npm's
-suggested "fix" is a **major downgrade**, which would cost more than the advisory does.
+These survive `npm audit fix` and are accepted rather than force-fixed — in each case npm's suggested
+"fix" is a downgrade, and none of the affected code ships to users or handles untrusted input.
 
-- **`mysql2` (high, `server/`).** `prisma` pins `mysql2` to an exact version, so npm's only offer was
-  `prisma@6.19.3` — a major downgrade from 7.x. Resolved instead with an `overrides` entry in
-  `server/package.json` pinning `mysql2` to a patched release. This is safe because the package is
-  never loaded: BreadSheet is Postgres-only (`@prisma/adapter-pg`) and `mysql2` reaches the tree only
-  as part of Prisma's multi-driver bundle. Verified after the override with `prisma validate`,
-  `prisma generate` and the full server suite.
-- **`deepmerge-ts` (high, `server/`).** Reaches the tree via `prisma → @prisma/config`. The patched
-  release is a major (`8.x`) that `@prisma/config` does not declare support for, and the Prisma CLI
-  runs on the deploy path (`scripts/start.sh` → `npm run db:deploy`), so an override here risks a
-  deploy-time outage to fix a stack-exhaustion bug whose only input is our own `prisma.config.ts`.
-  Left for Prisma to bump upstream.
-- **`image-size` (high, `bread-sheet-app/`).** No patched release exists at all — the advisory range
-  is `*`. Transitive via metro, i.e. build tooling; it is not in the shipped app bundle.
+- **`node-forge`, `zod` (high, `bread-sheet-app/`).** Both reach the tree only through `@expo/cli`
+  (`expo` → `@expo/cli`), i.e. the dev server / build tooling. Verified absent from the exported
+  Android and web bundles (the only `@expo/cli` file in a bundle is Metro's module loader,
+  `build/metro-require/require.js`). `node-forge` backs Expo Updates code signing, which the app
+  does not use. Left for Expo to bump.
+- **`uuid` via `cloudevents` (moderate, `terraform/functions/billing-killswitch/`).** Transitive
+  through `@google-cloud/functions-framework` (already latest). The advisory covers `uuid`'s v3/v5/v6
+  functions when called with a caller-supplied buffer; `cloudevents` only generates v4 IDs. npm's
+  "fix" is `functions-framework@2`.
+- **`braces`, `sprintf-js`.** Still listed by Dependabot, but both advisories are *withdrawn*.
+
+Formerly accepted, now resolved upstream: `mysql2` (an `overrides` entry in `server/package.json`,
+removed once `prisma` 7.10.1 pinned a patched release), `deepmerge-ts` (`@prisma/config` 7.10.1
+moved to the patched 8.x) and `image-size` (gone from the app tree with Expo SDK 58).
 
 ### `allowScripts` pins exact versions
 
-`server/package.json` carries an `allowScripts` allowlist keyed by `name@exact-version`. **Bumping any
-of those packages invalidates its entry**, and npm then silently blocks the install script rather than
-failing. For `prisma`/`@prisma/engines` that means the engine postinstall stops running, which breaks
-`prisma generate` and the Docker build. After any dependency bump, check `npm install` output for
-`npm warn install-scripts` and refresh the pinned versions to match.
+Every npm project carries an `allowScripts` allowlist keyed by `name@exact-version` (`false` records a
+reviewed denial, e.g. `@parcel/watcher`'s node-gyp fallback in the app, which ships a prebuilt binary).
+**Bumping any of those packages invalidates its entry**, and npm then silently blocks the install
+script rather than failing. For `prisma`/`@prisma/engines` that means the engine postinstall stops
+running, which breaks `prisma generate` and the Docker build. After any dependency bump, run
+`npm install-scripts ls` in each project (it must report "No packages with unreviewed install
+scripts") and refresh the pinned versions to match.

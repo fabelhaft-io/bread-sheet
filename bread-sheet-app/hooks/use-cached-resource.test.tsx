@@ -27,9 +27,9 @@ function makeCache<T>(initial: { memory?: T; disk?: T } = {}) {
 }
 
 describe('useCachedResource', () => {
-  it('paints a memory-cached value in the very first render — no loading state', () => {
+  it('paints a memory-cached value in the very first render — no loading state', async () => {
     const { cache } = makeCache<string[]>({ memory: ['cached'] });
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useCachedResource({ key: 'k', cache, fetcher: () => new Promise<string[]>(() => {}) }),
     );
 
@@ -38,19 +38,27 @@ describe('useCachedResource', () => {
   });
 
   it('falls back to the disk copy when memory is cold', async () => {
-    const { cache } = makeCache<string[]>({ disk: ['from disk'] });
-    const { result } = renderHook(() =>
+    // The disk read is held open: RNTL 14's awaited renderHook flushes
+    // settled promises, so an instantly-resolving read would hide the loading state.
+    let resolveDisk!: (value: string[]) => void;
+    const cache = {
+      peek: () => null,
+      read: () => new Promise<string[] | null>((resolve) => (resolveDisk = resolve)),
+      write: async () => {},
+    } as ResourceCache<string[]>;
+    const { result } = await renderHook(() =>
       useCachedResource({ key: 'k', cache, fetcher: () => new Promise<string[]>(() => {}) }),
     );
 
     expect(result.current.isLoading).toBe(true);
-    await waitFor(() => expect(result.current.data).toEqual(['from disk']));
+    await act(async () => resolveDisk(['from disk']));
+    expect(result.current.data).toEqual(['from disk']);
     expect(result.current.isLoading).toBe(false);
   });
 
   it('swaps in fresh data and writes it back to the cache', async () => {
     const holder = makeCache<string[]>({ memory: ['stale'] });
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useCachedResource({
         key: 'k',
         cache: holder.cache,
@@ -65,7 +73,7 @@ describe('useCachedResource', () => {
 
   it('keeps the cached value and reports offline when revalidation cannot reach the server', async () => {
     const { cache } = makeCache<string[]>({ memory: ['cached'] });
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useCachedResource({
         key: 'k',
         cache,
@@ -85,7 +93,7 @@ describe('useCachedResource', () => {
 
   it('surfaces an HTTP failure as an error, not as offline', async () => {
     const { cache } = makeCache<string[]>();
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useCachedResource({
         key: 'k',
         cache,
@@ -103,7 +111,7 @@ describe('useCachedResource', () => {
   it('clears the offline flag once a later revalidation succeeds', async () => {
     const { cache } = makeCache<string[]>({ memory: ['cached'] });
     let online = false;
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useCachedResource({
         key: 'k',
         cache,
@@ -126,7 +134,7 @@ describe('useCachedResource', () => {
   it('idles without fetching when the key is null (no signed-in user)', async () => {
     const { cache } = makeCache<string[]>({ memory: ['cached'] });
     const fetcher = jest.fn();
-    const { result } = renderHook(() => useCachedResource({ key: null, cache, fetcher }));
+    const { result } = await renderHook(() => useCachedResource({ key: null, cache, fetcher }));
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(fetcher).not.toHaveBeenCalled();
@@ -136,7 +144,7 @@ describe('useCachedResource', () => {
   it('paints from cache without revalidating when revalidate is false', async () => {
     const { cache } = makeCache<string[]>({ disk: ['lookup table'] });
     const fetcher = jest.fn();
-    const { result } = renderHook(() =>
+    const { result } = await renderHook(() =>
       useCachedResource({ key: 'k', cache, fetcher, revalidate: false }),
     );
 

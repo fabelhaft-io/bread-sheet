@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, fireEvent } from '@testing-library/react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import ProductScreen from './[barcode]';
 
@@ -97,9 +98,9 @@ beforeEach(() => {
 
 describe('ProductScreen — edit entry point (P5-006)', () => {
   it('shows "Edit product" for registered users on a VERIFIED product and navigates', async () => {
-    const { findByTestId } = render(<ProductScreen />);
+    const { findByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     const btn = await findByTestId('edit-product-button');
-    fireEvent.press(btn);
+    await fireEvent.press(btn);
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(app)/edit-product/[barcode]',
       params: { barcode: '0000000000001' },
@@ -108,7 +109,7 @@ describe('ProductScreen — edit entry point (P5-006)', () => {
 
   it('is entirely absent for anonymous users — no disabled state, no tooltip', async () => {
     signIn(true, 'guest');
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     expect(queryByTestId('edit-product-button')).toBeNull();
     expect(queryByTestId('edit-under-review-notice')).toBeNull();
@@ -123,14 +124,14 @@ describe('ProductScreen — edit entry point (P5-006)', () => {
       unverified: true,
       submittedByUserId: 'someone-else',
     });
-    const { findByText, findByTestId } = render(<ProductScreen />);
+    const { findByText, findByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByTestId('edit-product-button');
     await findByText(/Correct this submission/);
   });
 
   it('hides the button and shows the notice when an edit is already under review', async () => {
     mockGetPendingEdit.mockResolvedValue({ edit: PENDING_EDIT });
-    const { findByTestId, queryByTestId } = render(<ProductScreen />);
+    const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByTestId('edit-under-review-notice');
     expect(queryByTestId('edit-product-button')).toBeNull();
   });
@@ -139,9 +140,9 @@ describe('ProductScreen — edit entry point (P5-006)', () => {
 describe('ProductScreen — suggested-change banner (P5-006)', () => {
   it('shows the banner to a registered non-author and opens the diff screen', async () => {
     mockGetPendingEdit.mockResolvedValue({ edit: PENDING_EDIT });
-    const { findByTestId } = render(<ProductScreen />);
+    const { findByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     const banner = await findByTestId('review-edit-banner');
-    fireEvent.press(banner);
+    await fireEvent.press(banner);
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(app)/review-edit/[editId]',
       params: { editId: 'edit-1', barcode: '0000000000001' },
@@ -152,7 +153,7 @@ describe('ProductScreen — suggested-change banner (P5-006)', () => {
     mockGetPendingEdit.mockResolvedValue({
       edit: { ...PENDING_EDIT, viewer: { isAuthor: true, vote: null, dismissed: false } },
     });
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     expect(queryByTestId('review-edit-banner')).toBeNull();
   });
@@ -161,7 +162,7 @@ describe('ProductScreen — suggested-change banner (P5-006)', () => {
     mockGetPendingEdit.mockResolvedValue({
       edit: { ...PENDING_EDIT, viewer: { isAuthor: false, vote: null, dismissed: true } },
     });
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     expect(queryByTestId('review-edit-banner')).toBeNull();
     // The under-review notice still applies (edit exists) even when dismissed.
@@ -172,13 +173,13 @@ describe('ProductScreen — suggested-change banner (P5-006)', () => {
     mockGetPendingEdit.mockResolvedValue({
       edit: { ...PENDING_EDIT, viewer: { isAuthor: false, vote: 'APPROVE', dismissed: false } },
     });
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     expect(queryByTestId('review-edit-banner')).toBeNull();
   });
 
   it('shows no banner when there is no pending edit', async () => {
-    const { findByText, queryByTestId } = render(<ProductScreen />);
+    const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     expect(queryByTestId('review-edit-banner')).toBeNull();
   });
