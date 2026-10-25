@@ -15,7 +15,7 @@ import {
   ProductNotPendingError,
   SelfVerificationError,
 } from '../services/productVerificationService.js';
-import { visibleProductWhere } from '../services/productVisibility.js';
+import { isProductVisible, visibleProductWhere } from '../services/productVisibility.js';
 import { serializeProduct } from '../services/productSerializer.js';
 import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
 import { checkImage, type Verdict } from '../services/imagePlausibilityService.js';
@@ -70,8 +70,12 @@ export const getProductByGtin = async (req: AuthRequest, res: Response, next: Ne
       // REJECTED products are invisible to every caller — peer review has
       // already thrown this data out, and the resubmission path (P5-003) runs
       // through the "not found → add it" flow. PENDING_REVIEW products, by
-      // contrast, are visible to everyone since P5-007.
-      if (cached.product.status === ProductStatus.REJECTED) {
+      // contrast, are visible to everyone since P5-007. Checked via
+      // `isProductVisible` (not an inline `status === REJECTED`) so the rule
+      // stays in one place; fetched unfiltered on purpose — a REJECTED row
+      // with this GTIN must 404 here, not fall through to an OFF re-fetch
+      // that would then race the existing row's unique `gtin`.
+      if (!isProductVisible(cached.product, req.user)) {
         return res.status(404).json({ message: 'Product not found' });
       }
 

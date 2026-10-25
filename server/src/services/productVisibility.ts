@@ -32,6 +32,22 @@ export function visibleProductWhere(
 }
 
 /**
+ * The same rule as `visibleProductWhere`, as a predicate over an
+ * already-fetched row instead of a Prisma `where` clause. For the handful of
+ * read paths that must distinguish "truly missing" from "exists but
+ * invisible" (e.g. `getProductByGtin`, which must not fall through to an
+ * Open Food Facts re-fetch — and a `P2002` on an existing GTIN — for a
+ * `REJECTED` row), fetch unfiltered and check this instead of re-typing
+ * `status === 'REJECTED'` inline.
+ */
+export function isProductVisible(
+  product: { status: ProductStatus },
+  _user?: VisibilityUser,
+): boolean {
+  return product.status !== ProductStatus.REJECTED;
+}
+
+/**
  * Throws `ProductNotFoundError` (→ 404 in every controller) unless `id`
  * resolves to a product visible to `user` — i.e. it exists and is not
  * REJECTED.

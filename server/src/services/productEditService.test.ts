@@ -312,10 +312,18 @@ describe('createEdit', () => {
 
 describe('getPendingEdit', () => {
   it('throws ProductNotFoundError for a REJECTED (invisible) product', async () => {
+    // Same visibility-vs-missing distinction as productVerificationService's
+    // equivalent test: asserting the `where` clause is what makes this
+    // fail if `assertProductVisible`'s filter were ever removed, rather
+    // than passing identically for "no such product".
     mockProductFindFirst.mockResolvedValue(null);
     await expect(getPendingEdit(PRODUCT_ID, REVIEWER)).rejects.toBeInstanceOf(
       ProductNotFoundError,
     );
+    expect(mockProductFindFirst).toHaveBeenCalledWith({
+      where: { id: PRODUCT_ID, status: { not: ProductStatus.REJECTED } },
+      select: { id: true },
+    });
   });
 
   it('returns null when there is no pending edit', async () => {

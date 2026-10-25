@@ -65,10 +65,17 @@ describe('castVote', () => {
 
   it('throws ProductNotFoundError when the product is REJECTED (invisible)', async () => {
     // visibleProductWhere filters REJECTED rows out of the findFirst, so the
-    // mocked lookup simply returns null here, same as a missing row.
+    // mocked lookup simply returns null here, same as a missing row. The
+    // assertion below on the `where` clause is what actually pins this to
+    // visibility rather than to "the product doesn't exist" — without it,
+    // this test would still pass even if `visibleProductWhere()` were
+    // deleted from `castVote` entirely.
     mockTxProductFindFirst.mockResolvedValue(null);
     await expect(castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE))
       .rejects.toBeInstanceOf(ProductNotFoundError);
+    expect(mockTxProductFindFirst).toHaveBeenCalledWith({
+      where: { id: PRODUCT_ID, status: { not: ProductStatus.REJECTED } },
+    });
     expect(mockTxVerificationUpsert).not.toHaveBeenCalled();
   });
 

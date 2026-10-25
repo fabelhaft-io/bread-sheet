@@ -241,7 +241,11 @@ describe('GET /api/products/:productId/edits/pending', () => {
     expect(res.body.edit).toBeNull();
   });
 
-  it('returns 404 for a REJECTED (invisible) product', async () => {
+  // The service is mocked here, so this covers the controller's error
+  // mapping only — it is not visibility coverage. The service itself
+  // actually enforcing the REJECTED-is-invisible rule is asserted in
+  // productEditService.test.ts (`getPendingEdit`'s `where`-clause check).
+  it('maps the service ProductNotFoundError (raised for a REJECTED/invisible product) to 404', async () => {
     mockGetPendingEdit.mockRejectedValue(new ProductNotFoundError(PRODUCT_ID));
     const res = await request(app).get(`/api/products/${PRODUCT_ID}/edits/pending`);
     expect(res.status).toBe(404);
