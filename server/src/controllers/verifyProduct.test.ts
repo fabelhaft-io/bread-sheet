@@ -35,7 +35,10 @@ vi.mock('../middlewares/rateLimit.js', () => ({
 }));
 
 vi.mock('../db.js', () => ({
-  default: { product: { findUnique: vi.fn(), create: vi.fn() } },
+  default: {
+    product: { findFirst: vi.fn(), create: vi.fn() },
+    packagedProduct: { findUnique: vi.fn() },
+  },
 }));
 
 vi.mock('../services/productService.js', async () => {
@@ -53,13 +56,13 @@ import {
 } from '../services/productVerificationService.js';
 import { ProductStatus, VerificationVote } from '../generated/prisma_client/enums.js';
 
-const BARCODE = '1234567890123';
+const PRODUCT_ID = '11111111-1111-4111-8111-111111111111';
 
 function resetSession() {
   session.user = { id: 'reviewer-1', email: 'reviewer@test.com', isAnonymous: false };
 }
 
-describe('POST /api/products/:barcode/verify', () => {
+describe('POST /api/products/:productId/verify', () => {
   beforeEach(() => {
     mockCastVote.mockReset();
     resetSession();
@@ -69,19 +72,29 @@ describe('POST /api/products/:barcode/verify', () => {
     mockCastVote.mockResolvedValue({ verifications: 1, status: ProductStatus.PENDING_REVIEW });
 
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/verify`)
+      .post(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ verifications: 1 });
-    expect(mockCastVote).toHaveBeenCalledWith(BARCODE, 'reviewer-1', VerificationVote.APPROVE);
+    expect(mockCastVote).toHaveBeenCalledWith(PRODUCT_ID, 'reviewer-1', VerificationVote.APPROVE);
+  });
+
+  it('returns 400 for a non-UUID productId', async () => {
+    const res = await request(app)
+      .post('/api/products/not-a-uuid/verify')
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_product_id');
+    expect(mockCastVote).not.toHaveBeenCalled();
   });
 
   it('returns 403 when the submitter tries to self-verify', async () => {
     mockCastVote.mockRejectedValue(new SelfVerificationError());
 
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/verify`)
+      .post(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(403);
@@ -89,10 +102,10 @@ describe('POST /api/products/:barcode/verify', () => {
   });
 
   it('returns 404 when the product does not exist', async () => {
-    mockCastVote.mockRejectedValue(new ProductNotFoundError(BARCODE));
+    mockCastVote.mockRejectedValue(new ProductNotFoundError(PRODUCT_ID));
 
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/verify`)
+      .post(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(404);
@@ -100,10 +113,10 @@ describe('POST /api/products/:barcode/verify', () => {
   });
 
   it('returns 409 when the product is not in PENDING_REVIEW', async () => {
-    mockCastVote.mockRejectedValue(new ProductNotPendingError(BARCODE));
+    mockCastVote.mockRejectedValue(new ProductNotPendingError(PRODUCT_ID));
 
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/verify`)
+      .post(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(409);
@@ -114,7 +127,7 @@ describe('POST /api/products/:barcode/verify', () => {
     session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
 
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/verify`)
+      .post(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer anon-token');
 
     expect(res.status).toBe(403);
@@ -124,7 +137,7 @@ describe('POST /api/products/:barcode/verify', () => {
   it('returns 401 when unauthenticated', async () => {
     session.user = null;
 
-    const res = await request(app).post(`/api/products/${BARCODE}/verify`);
+    const res = await request(app).post(`/api/products/${PRODUCT_ID}/verify`);
 
     expect(res.status).toBe(401);
     expect(mockCastVote).not.toHaveBeenCalled();
@@ -134,14 +147,14 @@ describe('POST /api/products/:barcode/verify', () => {
     mockCastVote.mockRejectedValue(new Error('boom'));
 
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/verify`)
+      .post(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(500);
   });
 });
 
-describe('DELETE /api/products/:barcode/verify', () => {
+describe('DELETE /api/products/:productId/verify', () => {
   beforeEach(() => {
     mockCastVote.mockReset();
     resetSession();
@@ -151,19 +164,19 @@ describe('DELETE /api/products/:barcode/verify', () => {
     mockCastVote.mockResolvedValue({ verifications: 1, status: ProductStatus.PENDING_REVIEW });
 
     const res = await request(app)
-      .delete(`/api/products/${BARCODE}/verify`)
+      .delete(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ verifications: 1 });
-    expect(mockCastVote).toHaveBeenCalledWith(BARCODE, 'reviewer-1', VerificationVote.REJECT);
+    expect(mockCastVote).toHaveBeenCalledWith(PRODUCT_ID, 'reviewer-1', VerificationVote.REJECT);
   });
 
   it('returns 404 when the product does not exist', async () => {
-    mockCastVote.mockRejectedValue(new ProductNotFoundError(BARCODE));
+    mockCastVote.mockRejectedValue(new ProductNotFoundError(PRODUCT_ID));
 
     const res = await request(app)
-      .delete(`/api/products/${BARCODE}/verify`)
+      .delete(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(404);
@@ -171,10 +184,10 @@ describe('DELETE /api/products/:barcode/verify', () => {
   });
 
   it('returns 409 when the product is not in PENDING_REVIEW', async () => {
-    mockCastVote.mockRejectedValue(new ProductNotPendingError(BARCODE));
+    mockCastVote.mockRejectedValue(new ProductNotPendingError(PRODUCT_ID));
 
     const res = await request(app)
-      .delete(`/api/products/${BARCODE}/verify`)
+      .delete(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(409);
@@ -185,7 +198,7 @@ describe('DELETE /api/products/:barcode/verify', () => {
     session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
 
     const res = await request(app)
-      .delete(`/api/products/${BARCODE}/verify`)
+      .delete(`/api/products/${PRODUCT_ID}/verify`)
       .set('Authorization', 'Bearer anon-token');
 
     expect(res.status).toBe(403);

@@ -2,7 +2,7 @@ import React from 'react';
 import { render, waitFor, fireEvent } from '@testing-library/react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import ProductScreen from './[barcode]';
+import ProductScreen from './[id]';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -19,7 +19,7 @@ const mockRouter = {
   back: jest.fn(),
   navigate: jest.fn(),
 };
-const mockUseLocalSearchParams = jest.fn(() => ({ barcode: '0000000000001' }));
+const mockUseLocalSearchParams = jest.fn(() => ({ id: 'p1' }));
 const mockUseSession = jest.fn();
 
 jest.mock('expo-router', () => {
@@ -41,9 +41,8 @@ jest.mock('@/hooks/use-session', () => ({
 // IMPORTANT: the returned object must be stable across renders — if
 // `addRecentProduct` is a new reference on every call, the useEffect
 // inside ProductScreen re-runs on every render, which triggers repeated
-// state updates (setNotFound(false)) that clobber the not-found state we
-// are trying to assert. Memoise both the function and the wrapping object
-// inside the factory closure.
+// state updates that clobber the state we are trying to assert. Memoise
+// both the function and the wrapping object inside the factory closure.
 jest.mock('@/hooks/use-recent-products', () => {
   const addRecentProduct = jest.fn();
   const value = { addRecentProduct, recentProducts: [] as unknown[] };
@@ -62,10 +61,10 @@ const mockApiPost = api.post as jest.Mock;
 
 /**
  * Since P8-002 the screen loads:
- *  - GET /api/products/:barcode
+ *  - GET /api/products/:id
  *  - GET /api/users/me/ratings — only when this device has no cached copy of
- *    the list; "my rating" is then read out of it by barcode. The per-product
- *    `GET /api/ratings/me/:barcode` round trip is gone.
+ *    the list; "my rating" is then read out of it by product id. The
+ *    per-product `GET /api/ratings/me/:barcode` round trip is gone.
  *
  * Tests that don't care about the existing-rating path use this to stub the
  * product and return an empty rating history.
@@ -78,7 +77,7 @@ function mockProductAndNoExistingRating(product: unknown) {
 }
 
 /** Build one `/api/users/me/ratings` entry for the given product. */
-function ratingEntry(product: { id: string; barcode: string; name: string; brand: string | null },
+function ratingEntry(product: { id: string; kind: string; name: string; brand: string | null },
   taste: number, comment: string | null) {
   return {
     id: 'r1',
@@ -90,11 +89,12 @@ function ratingEntry(product: { id: string; barcode: string; name: string; brand
   };
 }
 
-describe('ProductScreen — product-not-found state', () => {
+describe('ProductScreen — id-based 404', () => {
   beforeEach(() => {
     mockRouter.push.mockClear();
     mockRouter.replace.mockClear();
     mockRouter.back.mockClear();
+    mockRouter.navigate.mockClear();
     mockApiGet.mockReset();
     mockUseSession.mockReset();
     mockUseSession.mockReturnValue({
@@ -102,50 +102,20 @@ describe('ProductScreen — product-not-found state', () => {
       isAnonymous: false,
       isLoading: false,
     });
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p1' });
   });
 
-  // One test in this block routes an invalid code; every other test (here and
-  // in the blocks below) assumes the default barcode.
-  afterEach(() => {
-    mockUseLocalSearchParams.mockReturnValue({ barcode: '0000000000001' });
-  });
-
-  it('renders the not-found screen on a 404 response', async () => {
-    mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
-    const { findByTestId, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
-    await findByTestId('product-not-found');
-    expect(getByText(/isn't in the database yet/i)).toBeTruthy();
-  });
-
-  it('shows the "Add this product" CTA for registered users and navigates with the barcode', async () => {
+  // Unlike the gtin resolver's not-found state, an id has no gtin to offer
+  // "add this product" against — this is a plain dead end.
+  it('renders a plain not-found screen with a "Back to Home" action, no add-product CTA', async () => {
     mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
     const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
-    const btn = await findByTestId('product-not-found-add');
-    expect(queryByTestId('product-not-found-signup')).toBeNull();
-    await fireEvent.press(btn);
-    // replace (not push) so the "not-found" screen is removed from the stack —
-    // prevents the user landing back on it after adding the product and rating it.
-    expect(mockRouter.replace).toHaveBeenCalledWith({
-      pathname: '/(app)/add-product',
-      params: { barcode: '0000000000001' },
-    });
-  });
-
-  it('shows the Sign up CTA for anonymous users and deep-links to signup with returnTo', async () => {
-    mockUseSession.mockReturnValue({
-      session: { user: { id: 'guest', is_anonymous: true } },
-      isAnonymous: true,
-      isLoading: false,
-    });
-    mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
-    const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
-    const btn = await findByTestId('product-not-found-signup');
+    await findByTestId('product-id-not-found');
     expect(queryByTestId('product-not-found-add')).toBeNull();
-    await fireEvent.press(btn);
-    expect(mockRouter.push).toHaveBeenCalledWith({
-      pathname: '/(auth)/signup',
-      params: { returnTo: '/product/0000000000001' },
-    });
+    expect(queryByTestId('product-not-found-signup')).toBeNull();
+
+    await fireEvent.press(await findByTestId('product-not-found-home'));
+    expect(mockRouter.navigate).toHaveBeenCalledWith('/(tabs)');
   });
 
   it('shows a friendly generic message (not the raw server error, not the not-found UI) on non-404 failures', async () => {
@@ -157,50 +127,66 @@ describe('ProductScreen — product-not-found state', () => {
     const { findByText, queryByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText(/Could not load this product/i);
     expect(queryByText(/Prisma|FK constraint|userId/i)).toBeNull();
-    expect(queryByTestId('product-not-found')).toBeNull();
-  });
-
-  // P6-006: a code the server rejects outright is a correctable mistake, not
-  // an error to read. The manual-entry sheet opens pre-filled with the digits.
-  it('offers the manual-entry sheet pre-filled on a 400 invalid-barcode response', async () => {
-    mockUseLocalSearchParams.mockReturnValue({ barcode: '14006381333931' });
-    mockApiGet.mockRejectedValue(new ApiError(400, 'Invalid barcode format', {}));
-
-    const { findByTestId, getByTestId, queryByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
-
-    await findByTestId('product-invalid-barcode');
-    expect(queryByText(/Invalid barcode format/i)).toBeNull();
-    expect(getByTestId('manual-barcode-input').props.value).toBe('1400638133393');
-
-    await fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
-    await fireEvent.press(getByTestId('manual-barcode-submit'));
-
-    // `replace`: the corrected code takes the place of the broken screen.
-    expect(mockRouter.replace).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(queryByTestId('product-id-not-found')).toBeNull();
   });
 
   it('renders the product normally on a 2xx response — no regression for known products', async () => {
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Sourdough Loaf',
       brand: 'Artisan',
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
     });
     const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
-    await waitFor(() => expect(queryByTestId('product-not-found')).toBeNull());
+    await waitFor(() => expect(queryByTestId('product-id-not-found')).toBeNull());
+  });
+
+  it('shows the barcode chip for a PACKAGED product', async () => {
+    mockProductAndNoExistingRating({
+      id: 'p1',
+      kind: 'PACKAGED',
+      name: 'Sourdough Loaf',
+      brand: 'Artisan',
+      image: null,
+      description: null,
+      packaged: { gtin: '0000000000001' },
+    });
+    const { findByText, queryByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
+    await findByText('Sourdough Loaf');
+    expect(queryByText('0000000000001')).toBeTruthy();
+  });
+
+  // P6-007 (not built yet) is what will produce a CUSTOM product; the branch
+  // and its test land now per the ticket's scope guard.
+  it('renders no barcode chip for a CUSTOM product (no packaged row)', async () => {
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p2' });
+    mockProductAndNoExistingRating({
+      id: 'p2',
+      kind: 'CUSTOM',
+      name: 'Whisky Sour',
+      brand: null,
+      image: null,
+      description: null,
+      packaged: null,
+    });
+    const { findByText, queryByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
+    await findByText('Whisky Sour');
+    expect(queryByText(/^\d{8,13}$/)).toBeNull();
   });
 
   it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Sourdough Loaf',
       brand: 'Artisan',
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
     });
     const { findByText, getByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
@@ -214,6 +200,7 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
   beforeEach(() => {
     mockRouter.push.mockClear();
     mockApiGet.mockReset();
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p1' });
   });
 
   it('shows the "Needs review" banner for a registered non-submitter on a PENDING_REVIEW product', async () => {
@@ -224,11 +211,12 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     });
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Mystery bread',
       brand: 'Artisan',
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
       unverified: true,
       submittedByUserId: 'someone-else',
     });
@@ -236,8 +224,8 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     const banner = await findByTestId('review-product-banner');
     await fireEvent.press(banner);
     expect(mockRouter.push).toHaveBeenCalledWith({
-      pathname: '/(app)/review-product/[barcode]',
-      params: { barcode: '0000000000001' },
+      pathname: '/(app)/review-product/[id]',
+      params: { id: 'p1' },
     });
   });
 
@@ -249,11 +237,12 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     });
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'My bread',
       brand: null,
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
       unverified: true,
       submittedByUserId: 'submitter',
     });
@@ -273,11 +262,12 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     });
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Mystery bread',
       brand: null,
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
       unverified: true,
     });
     const { findByTestId, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
@@ -301,11 +291,12 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     });
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Mystery bread',
       brand: null,
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
       unverified: true,
       submittedByUserId: 'someone-else',
     });
@@ -322,11 +313,12 @@ describe('ProductScreen — reviewer banner (P5-002)', () => {
     });
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Sourdough',
       brand: 'Artisan',
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
     });
     const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough');
@@ -339,6 +331,7 @@ describe('ProductScreen — rating submission errors', () => {
     mockApiGet.mockReset();
     mockApiPost.mockReset();
     mockUseSession.mockReset();
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p1' });
     mockUseSession.mockReturnValue({
       session: { user: { id: 'guest', is_anonymous: true } },
       isAnonymous: true,
@@ -346,11 +339,12 @@ describe('ProductScreen — rating submission errors', () => {
     });
     mockProductAndNoExistingRating({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Sourdough Loaf',
       brand: 'Artisan',
       image: null,
       description: null,
+      packaged: { gtin: '0000000000001' },
     });
   });
 
@@ -378,22 +372,44 @@ describe('ProductScreen — rating submission errors', () => {
     await fireEvent.press(getByText('Submit Rating'));
     await findByText(/taste must be between/i);
   });
+
+  it('submits ratings keyed by productId, not barcode', async () => {
+    mockApiPost.mockResolvedValue({
+      id: 'r1',
+      score: 5,
+      taste: 5,
+      comment: null,
+      createdAt: new Date().toISOString(),
+      product: { id: 'p1', kind: 'PACKAGED', name: 'Sourdough Loaf', brand: 'Artisan', image: null },
+    });
+    const { findByText, getByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
+    await findByText('Sourdough Loaf');
+    await fireEvent.press(getByText('Submit Rating'));
+    await findByText(/Rating Submitted!/i);
+    expect(mockApiPost).toHaveBeenCalledWith('/api/ratings', {
+      productId: 'p1',
+      taste: 5,
+      comment: undefined,
+    });
+  });
 });
 
 describe('ProductScreen — existing rating pre-fill', () => {
   const PRODUCT = {
     id: 'p1',
-    barcode: '0000000000001',
+    kind: 'PACKAGED' as const,
     name: 'Sourdough Loaf',
     brand: 'Artisan',
     image: null,
     description: null,
+    packaged: { gtin: '0000000000001' },
   };
 
   beforeEach(() => {
     mockApiGet.mockReset();
     mockApiPost.mockReset();
     mockUseSession.mockReset();
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p1' });
     mockUseSession.mockReturnValue({
       session: { user: { id: 'u1', is_anonymous: false } },
       isAnonymous: false,
@@ -441,7 +457,7 @@ describe('ProductScreen — existing rating pre-fill', () => {
     await findByText(/Rating Updated!/i);
   });
 
-  it('never issues the per-product /api/ratings/me/:barcode lookup (P8-002)', async () => {
+  it('never issues the per-product /api/ratings/me/:id lookup (P8-002)', async () => {
     mockProductAndNoExistingRating(PRODUCT);
     const { findByText } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Submit Rating');
@@ -481,17 +497,19 @@ describe('ProductScreen — existing rating pre-fill', () => {
 describe('ProductScreen — leaving the success card', () => {
   const PRODUCT = {
     id: 'p1',
-    barcode: '0000000000001',
+    kind: 'PACKAGED' as const,
     name: 'Sourdough Loaf',
     brand: 'Artisan',
     image: null,
     description: null,
+    packaged: { gtin: '0000000000001' },
   };
 
   beforeEach(() => {
     mockApiGet.mockReset();
     mockApiPost.mockReset();
     mockUseSession.mockReset();
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p1' });
     // The router mock is module-level: without this, one test's navigation is
     // still on record in the next one.
     mockRouter.navigate.mockClear();

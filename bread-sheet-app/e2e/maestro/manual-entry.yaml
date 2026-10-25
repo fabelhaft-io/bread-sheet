@@ -2,7 +2,7 @@
 #
 # The camera-free path (CLAUDE.md's camera-free principle): the scan tab's
 # "Enter code manually" sheet must work without the camera at all, and it lands
-# on the same /(app)/product/<barcode> destination a scan produces. This flow
+# on the same /(app)/product/gtin/<barcode> destination a scan produces. This flow
 # exercises that path end-to-end on a debug build.
 #
 # Prereqs: same as barcode-scan.yaml — see scripts/test-maestro.js.

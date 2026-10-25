@@ -113,7 +113,7 @@ export default function ScanScreen() {
         return;
       }
 
-      router.push(`/(app)/product/${data}`);
+      router.push(`/(app)/product/gtin/${data}`);
       // Release the burst lock after navigation. Re-scanning the same code is
       // governed by RESCAN_GAP_MS above, not by this timer.
       setTimeout(() => { scanLock.current = false; }, 2000);
@@ -127,10 +127,11 @@ export default function ScanScreen() {
   // step (CameraX → ML Kit) is the one link in the scan chain an on-device E2E
   // test cannot drive. Opening `breadsheet://scan?inject=<barcode>` in a __DEV__
   // build feeds the exact same `processScan` path the camera's onBarcodeScanned
-  // callback uses — validation, navigation to `/(app)/product/<barcode>`, and
-  // every downstream product-screen state are exercised for real. The seam is
-  // dead in release builds (`__DEV__` is false there), and the param is
-  // consumed on arrival so a later re-focus cannot re-fire the same scan.
+  // callback uses — validation, navigation to `/(app)/product/gtin/<barcode>`
+  // (TICKET-P6-009's resolver), and every downstream product-screen state are
+  // exercised for real. The seam is dead in release builds (`__DEV__` is false
+  // there), and the param is consumed on arrival so a later re-focus cannot
+  // re-fire the same scan.
   const { inject } = useLocalSearchParams<{ inject?: string }>();
   const consumedInject = useRef<string | null>(null);
   const injectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

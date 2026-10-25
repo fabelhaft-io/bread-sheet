@@ -4,6 +4,7 @@ import type {
   EditVote,
   ExtractedLabel,
   PendingEdit,
+  ProductDetail,
   ProductEditChanges,
   ProductSubmission,
 } from './types';
@@ -137,22 +138,38 @@ export async function extractLabelFromImage(
 }
 
 /**
+ * Resolve a scanned or typed GTIN to a product (TICKET-P6-009). On a miss the
+ * server fetches from Open Food Facts and creates the `Product` +
+ * `PackagedProduct` pair in one transaction. `400` on a malformed code (not
+ * `^\d{8,13}$`), `404` when OFF has nothing either — both are handled by the
+ * `product/gtin/[gtin]` resolver screen, not here.
+ */
+export function lookupProductByGtin(gtin: string) {
+  return api.get<ProductDetail>(`/api/products/gtin/${encodeURIComponent(gtin)}`);
+}
+
+/** Fetch a product by its server id. */
+export function getProduct(id: string) {
+  return api.get<ProductDetail>(`/api/products/${encodeURIComponent(id)}`);
+}
+
+/**
  * Submit a new product. The server persists it as `PENDING_REVIEW` and runs
  * AI plausibility checks before responding. A 422 indicates the submission
  * was rejected for plausibility reasons and carries an inline error payload
  * the form can surface.
  */
 export function submitProduct(payload: ProductSubmission) {
-  return api.post<{ barcode: string; status: string }>('/api/products', payload);
+  return api.post<{ id: string; gtin: string; status: string }>('/api/products', payload);
 }
 
 /**
  * Cast a "looks correct" vote on a `PENDING_REVIEW` product. After two
  * distinct verifiers approve the product is auto-promoted to `VERIFIED`.
  */
-export function approveProduct(barcode: string) {
+export function approveProduct(id: string) {
   return api.post<{ verifications: number }>(
-    `/api/products/${encodeURIComponent(barcode)}/verify`,
+    `/api/products/${encodeURIComponent(id)}/verify`,
     {},
   );
 }
@@ -161,9 +178,9 @@ export function approveProduct(barcode: string) {
  * Cast a "something looks wrong" vote. The DELETE method is the channel for
  * REJECT votes — it does not retract an existing approval.
  */
-export function rejectProduct(barcode: string) {
+export function rejectProduct(id: string) {
   return api.delete<{ verifications: number }>(
-    `/api/products/${encodeURIComponent(barcode)}/verify`,
+    `/api/products/${encodeURIComponent(id)}/verify`,
   );
 }
 
@@ -173,14 +190,15 @@ export function rejectProduct(barcode: string) {
  * In-place correction of a PENDING_REVIEW submission. Restarts the review
  * cycle (existing votes are cleared; the caller becomes the submitter). The
  * server returns 409 (`product_verified`) on VERIFIED products — those go
- * through `proposeProductEdit` instead.
+ * through `proposeProductEdit` instead. Returns the full serialized product
+ * (same shape as `GET /api/products/:id`).
  */
 export function correctProduct(
-  barcode: string,
-  payload: Omit<ProductSubmission, 'barcode' | 'productImageKey'> & { productImageKey?: string },
+  id: string,
+  payload: Omit<ProductSubmission, 'gtin' | 'productImageKey'> & { productImageKey?: string },
 ) {
-  return api.patch<{ barcode: string; status: string }>(
-    `/api/products/${encodeURIComponent(barcode)}`,
+  return api.patch<ProductDetail>(
+    `/api/products/${encodeURIComponent(id)}`,
     payload,
   );
 }
@@ -189,17 +207,17 @@ export function correctProduct(
  * Propose a change to a VERIFIED product. Only changed fields are sent. 409
  * (`edit_pending`) when another edit is already under review.
  */
-export function proposeProductEdit(barcode: string, changes: ProductEditChanges) {
-  return api.post<{ editId: string; barcode: string; status: string }>(
-    `/api/products/${encodeURIComponent(barcode)}/edits`,
+export function proposeProductEdit(id: string, changes: ProductEditChanges) {
+  return api.post<{ editId: string; productId: string; status: string }>(
+    `/api/products/${encodeURIComponent(id)}/edits`,
     changes,
   );
 }
 
 /** Current pending edit for a product, or `{ edit: null }`. Drives the review banner. */
-export function getPendingEdit(barcode: string) {
+export function getPendingEdit(id: string) {
   return api.get<{ edit: PendingEdit | null }>(
-    `/api/products/${encodeURIComponent(barcode)}/edits/pending`,
+    `/api/products/${encodeURIComponent(id)}/edits/pending`,
   );
 }
 

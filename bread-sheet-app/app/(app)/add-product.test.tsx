@@ -15,7 +15,7 @@ const mockRouter = {
   replace: jest.fn(),
   back: jest.fn(),
 };
-const mockUseLocalSearchParams = jest.fn(() => ({ barcode: '0000000000001' }));
+const mockUseLocalSearchParams = jest.fn(() => ({ gtin: '0000000000001' }));
 const mockUseSession = jest.fn();
 
 jest.mock('expo-router', () => ({
@@ -83,10 +83,10 @@ const imageProcessing = require('@/features/products/image-processing');
 describe('AddProductScreen — access control', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseLocalSearchParams.mockReturnValue({ barcode: '0000000000001' });
+    mockUseLocalSearchParams.mockReturnValue({ gtin: '0000000000001' });
   });
 
-  it('shows the sign-up gate for anonymous users and carries barcode into returnTo', async () => {
+  it('shows the sign-up gate for anonymous users and carries the gtin into returnTo', async () => {
     mockUseSession.mockReturnValue({
       session: { user: { id: 'g1', is_anonymous: true } },
       isAnonymous: true,
@@ -96,7 +96,7 @@ describe('AddProductScreen — access control', () => {
     await fireEvent.press(getByTestId('add-product-signup'));
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(auth)/signup',
-      params: { returnTo: '/product/0000000000001' },
+      params: { returnTo: '/product/gtin/0000000000001' },
     });
   });
 
@@ -128,7 +128,7 @@ describe('AddProductScreen — access control', () => {
 describe('AddProductScreen — flow progression', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseLocalSearchParams.mockReturnValue({ barcode: '0000000000001' });
+    mockUseLocalSearchParams.mockReturnValue({ gtin: '0000000000001' });
     mockUseSession.mockReturnValue({
       session: { user: { id: 'u1', is_anonymous: false } },
       isAnonymous: false,

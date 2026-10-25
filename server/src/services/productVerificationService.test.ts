@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockTxProductFindUnique = vi.hoisted(() => vi.fn());
+const mockTxProductFindFirst = vi.hoisted(() => vi.fn());
 const mockTxProductUpdate = vi.hoisted(() => vi.fn());
 const mockTxVerificationUpsert = vi.hoisted(() => vi.fn());
 const mockTxVerificationFindMany = vi.hoisted(() => vi.fn());
@@ -9,7 +9,7 @@ const mockTransaction = vi.hoisted(() =>
     async <T>(fn: (tx: Record<string, unknown>) => Promise<T>): Promise<T> => {
       const tx = {
         product: {
-          findUnique: mockTxProductFindUnique,
+          findFirst: mockTxProductFindFirst,
           update: mockTxProductUpdate,
         },
         productVerification: {
@@ -34,13 +34,11 @@ import {
 } from './productVerificationService.js';
 import { ProductStatus, VerificationVote } from '../generated/prisma_client/enums.js';
 
-const BARCODE = '1234567890123';
 const PRODUCT_ID = 'product-1';
 const USER_ID = 'reviewer-1';
 
 const PENDING_PRODUCT = {
   id: PRODUCT_ID,
-  barcode: BARCODE,
   status: ProductStatus.PENDING_REVIEW,
   submittedByUserId: 'submitter-1',
 };
@@ -51,47 +49,56 @@ function makeVotes(...votes: VerificationVote[]) {
 
 describe('castVote', () => {
   beforeEach(() => {
-    mockTxProductFindUnique.mockReset();
+    mockTxProductFindFirst.mockReset();
     mockTxProductUpdate.mockReset();
     mockTxVerificationUpsert.mockReset();
     mockTxVerificationFindMany.mockReset();
     mockTransaction.mockClear();
   });
 
-  it('throws ProductNotFoundError when the barcode does not exist', async () => {
-    mockTxProductFindUnique.mockResolvedValue(null);
-    await expect(castVote(BARCODE, USER_ID, VerificationVote.APPROVE))
+  it('throws ProductNotFoundError when the product does not exist', async () => {
+    mockTxProductFindFirst.mockResolvedValue(null);
+    await expect(castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE))
       .rejects.toBeInstanceOf(ProductNotFoundError);
     expect(mockTxVerificationUpsert).not.toHaveBeenCalled();
   });
 
-  it('throws ProductNotPendingError when the product is VERIFIED', async () => {
-    mockTxProductFindUnique.mockResolvedValue({ ...PENDING_PRODUCT, status: ProductStatus.VERIFIED });
-    await expect(castVote(BARCODE, USER_ID, VerificationVote.APPROVE))
-      .rejects.toBeInstanceOf(ProductNotPendingError);
+  it('throws ProductNotFoundError when the product is REJECTED (invisible)', async () => {
+    // visibleProductWhere filters REJECTED rows out of the findFirst, so the
+    // mocked lookup simply returns null here, same as a missing row. The
+    // assertion below on the `where` clause is what actually pins this to
+    // visibility rather than to "the product doesn't exist" — without it,
+    // this test would still pass even if `visibleProductWhere()` were
+    // deleted from `castVote` entirely.
+    mockTxProductFindFirst.mockResolvedValue(null);
+    await expect(castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE))
+      .rejects.toBeInstanceOf(ProductNotFoundError);
+    expect(mockTxProductFindFirst).toHaveBeenCalledWith({
+      where: { id: PRODUCT_ID, status: { not: ProductStatus.REJECTED } },
+    });
     expect(mockTxVerificationUpsert).not.toHaveBeenCalled();
   });
 
-  it('throws ProductNotPendingError when the product is REJECTED', async () => {
-    mockTxProductFindUnique.mockResolvedValue({ ...PENDING_PRODUCT, status: ProductStatus.REJECTED });
-    await expect(castVote(BARCODE, USER_ID, VerificationVote.APPROVE))
+  it('throws ProductNotPendingError when the product is VERIFIED', async () => {
+    mockTxProductFindFirst.mockResolvedValue({ ...PENDING_PRODUCT, status: ProductStatus.VERIFIED });
+    await expect(castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE))
       .rejects.toBeInstanceOf(ProductNotPendingError);
     expect(mockTxVerificationUpsert).not.toHaveBeenCalled();
   });
 
   it('throws SelfVerificationError when the caller is the product submitter', async () => {
-    mockTxProductFindUnique.mockResolvedValue({ ...PENDING_PRODUCT, submittedByUserId: USER_ID });
-    await expect(castVote(BARCODE, USER_ID, VerificationVote.APPROVE))
+    mockTxProductFindFirst.mockResolvedValue({ ...PENDING_PRODUCT, submittedByUserId: USER_ID });
+    await expect(castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE))
       .rejects.toBeInstanceOf(SelfVerificationError);
     expect(mockTxVerificationUpsert).not.toHaveBeenCalled();
   });
 
   it('upserts the vote and returns current approval count below threshold', async () => {
-    mockTxProductFindUnique.mockResolvedValue(PENDING_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(PENDING_PRODUCT);
     mockTxVerificationUpsert.mockResolvedValue({});
     mockTxVerificationFindMany.mockResolvedValue(makeVotes(VerificationVote.APPROVE));
 
-    const result = await castVote(BARCODE, USER_ID, VerificationVote.APPROVE);
+    const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE);
 
     expect(result).toEqual({ verifications: 1, status: ProductStatus.PENDING_REVIEW });
     expect(mockTxVerificationUpsert).toHaveBeenCalledWith({
@@ -103,14 +110,14 @@ describe('castVote', () => {
   });
 
   it('flips to VERIFIED when 2 approvals, 0 rejections', async () => {
-    mockTxProductFindUnique.mockResolvedValue(PENDING_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(PENDING_PRODUCT);
     mockTxVerificationUpsert.mockResolvedValue({});
     mockTxVerificationFindMany.mockResolvedValue(
       makeVotes(VerificationVote.APPROVE, VerificationVote.APPROVE),
     );
     mockTxProductUpdate.mockResolvedValue({});
 
-    const result = await castVote(BARCODE, USER_ID, VerificationVote.APPROVE);
+    const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE);
 
     expect(result.status).toBe(ProductStatus.VERIFIED);
     expect(result.verifications).toBe(2);
@@ -121,21 +128,21 @@ describe('castVote', () => {
   });
 
   it('flips to VERIFIED when 2 approvals, 1 rejection (net positive)', async () => {
-    mockTxProductFindUnique.mockResolvedValue(PENDING_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(PENDING_PRODUCT);
     mockTxVerificationUpsert.mockResolvedValue({});
     mockTxVerificationFindMany.mockResolvedValue(
       makeVotes(VerificationVote.APPROVE, VerificationVote.APPROVE, VerificationVote.REJECT),
     );
     mockTxProductUpdate.mockResolvedValue({});
 
-    const result = await castVote(BARCODE, USER_ID, VerificationVote.APPROVE);
+    const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE);
 
     expect(result.status).toBe(ProductStatus.VERIFIED);
     expect(result.verifications).toBe(2);
   });
 
   it('stays PENDING_REVIEW when 2 approvals and 2 rejections (tied)', async () => {
-    mockTxProductFindUnique.mockResolvedValue(PENDING_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(PENDING_PRODUCT);
     mockTxVerificationUpsert.mockResolvedValue({});
     mockTxVerificationFindMany.mockResolvedValue(
       makeVotes(
@@ -146,21 +153,21 @@ describe('castVote', () => {
       ),
     );
 
-    const result = await castVote(BARCODE, USER_ID, VerificationVote.REJECT);
+    const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.REJECT);
 
     expect(result.status).toBe(ProductStatus.PENDING_REVIEW);
     expect(mockTxProductUpdate).not.toHaveBeenCalled();
   });
 
   it('flips to REJECTED when 2 rejections, 1 approval', async () => {
-    mockTxProductFindUnique.mockResolvedValue(PENDING_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(PENDING_PRODUCT);
     mockTxVerificationUpsert.mockResolvedValue({});
     mockTxVerificationFindMany.mockResolvedValue(
       makeVotes(VerificationVote.REJECT, VerificationVote.REJECT, VerificationVote.APPROVE),
     );
     mockTxProductUpdate.mockResolvedValue({});
 
-    const result = await castVote(BARCODE, USER_ID, VerificationVote.REJECT);
+    const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.REJECT);
 
     expect(result.status).toBe(ProductStatus.REJECTED);
     expect(result.verifications).toBe(1);
@@ -171,13 +178,13 @@ describe('castVote', () => {
   });
 
   it('stays PENDING_REVIEW when 1 approval and 1 rejection (below threshold)', async () => {
-    mockTxProductFindUnique.mockResolvedValue(PENDING_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(PENDING_PRODUCT);
     mockTxVerificationUpsert.mockResolvedValue({});
     mockTxVerificationFindMany.mockResolvedValue(
       makeVotes(VerificationVote.APPROVE, VerificationVote.REJECT),
     );
 
-    const result = await castVote(BARCODE, USER_ID, VerificationVote.REJECT);
+    const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.REJECT);
 
     expect(result.status).toBe(ProductStatus.PENDING_REVIEW);
     expect(mockTxProductUpdate).not.toHaveBeenCalled();

@@ -229,8 +229,8 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 |------|---------------|
 | `constants.ts` | `MIN_OCR_LENGTH`, image size caps, JPEG quality targets — must match the backend contract defined in P5-003 |
 | `barcode.ts` | P6-006 manual-entry validation: `BARCODE_RE` (mirrors the server), `validateBarcode` (typed `reason`: `empty` / `non-digit` / `too-short` / `too-long`), `sanitizeBarcodeInput` (digits-only, for seeding from a scan), `stripBarcodeSeparators` (typing normalisation) |
-| `types.ts` | `ProductSubmission`, `ExtractedLabel`, `ProductDetail` — shared wire types |
-| `api.ts` | `submitProduct`, `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct`, plus the P5-006 edit calls: `correctProduct`, `proposeProductEdit`, `getPendingEdit`, `voteOnProductEdit`, `retractProductEditVote`, `dismissProductEdit` |
+| `types.ts` | `ProductSubmission` (now `gtin`, not `barcode`), `ExtractedLabel`, `ProductDetail` (TICKET-P6-009: `id`, `kind`, `packaged: PackagedDetails \| null` — no top-level nutrition), `PendingEdit` (`productId`, not `barcode`) — shared wire types |
+| `api.ts` | `lookupProductByGtin(gtin)`, `getProduct(id)` (TICKET-P6-009), `submitProduct` (returns `{ id, gtin, status }`), `uploadProductImage`, `extractLabelFromText`, `extractLabelFromImage`, `approveProduct`, `rejectProduct`, plus the P5-006 edit calls: `correctProduct`, `proposeProductEdit`, `getPendingEdit`, `voteOnProductEdit`, `retractProductEditVote`, `dismissProductEdit` — all keyed by `Product.id` since P6-009 |
 | `edit-form.ts` | P5-006 edit-form logic: `productToFormValues` (pre-population), `buildEditChanges` (changed-fields diff for the proposal payload), `buildCorrectionPayload` (full PATCH payload), `formHasChanges` / `validateFormValues`, `FIELD_LABELS` (shared with the diff screen) |
 | `ocr.ts` | `recogniseLabelText` — thin wrapper over `@react-native-ml-kit/text-recognition`, returns `{rawText, unavailable}` |
 | `image-picker.ts` | `captureImage` — camera or library, returns the raw URI |
@@ -243,15 +243,15 @@ The multi-step Add Product flow is rooted at `app/(app)/add-product.tsx` with al
 
 ### Reviewer flow
 
-`app/(app)/review-product/[barcode].tsx` is the reviewer screen for peer approval. It's surfaced from the product detail screen via a "Needs review" banner that is shown when:
+`app/(app)/review-product/[id].tsx` (param renamed from `barcode` in TICKET-P6-009) is the reviewer screen for peer approval. It's surfaced from the product detail screen via a "Needs review" banner that is shown when:
 - the product response carries `unverified: true`
 - the caller is not the submitter (`submittedByUserId !== session.user.id`)
 
 **Anonymous viewers see the banner too (P5-007), but as a plain note.** Since P5-007 the backend no longer hides `PENDING_REVIEW` products from anonymous callers, so a guest who scans a barcode a neighbour just submitted lands on the product rather than a "not found" dead end. They read the identical title and explanation ("Needs review" / "This product was added by a user — does it look correct?") plus a third line, **"Log in to review this product."**, and the banner renders as a `View`, not a `TouchableOpacity` — no tap, no navigation to the reviewer screen. It is deliberately not a link into signup; the P5-001 `returnTo` pattern is available if that changes. The submitter check still passes for guests because the anonymous copy of the response omits `submittedByUserId` entirely.
 
-None of this is the security boundary: `POST`/`DELETE /api/products/:barcode/verify` keep `requireRegistered` and answer an anonymous token with `403`. The reviewer screen also keeps its own `!session || isAnonymous` guard for deep links.
+None of this is the security boundary: `POST`/`DELETE /api/products/:productId/verify` keep `requireRegistered` and answer an anonymous token with `403`. The reviewer screen also keeps its own `!session || isAnonymous` guard for deep links.
 
-The reviewer screen renders every submitted field — including `null` values, shown as "Not provided" — so the reviewer can judge completeness. "Looks correct" calls `POST /api/products/:barcode/verify`; "Something looks wrong" calls `DELETE /api/products/:barcode/verify` (reused as the "no" vote channel).
+The reviewer screen renders every submitted field — including `null` values, shown as "Not provided" — so the reviewer can judge completeness. "Looks correct" calls `POST /api/products/:productId/verify`; "Something looks wrong" calls `DELETE /api/products/:productId/verify` (reused as the "no" vote channel). The barcode chip shown at the top reads `product.packaged.gtin` and is omitted entirely for a `CUSTOM` product (`packaged: null` — not built until P6-007, but the branch is in place).
 
 ---
 
@@ -262,9 +262,10 @@ camera had **already read successfully**. A damaged label, an unsupported symbol
 device with no camera left the user with no way in at all.
 
 `components/manual-barcode-sheet.tsx` is the fix: a modal numeric-entry sheet that navigates to
-`/(app)/product/<code>` — deliberately the *same* destination a scan produces, so every downstream state
-(found, `PENDING_REVIEW`, the 404 "Add this product" screen, the P5-001 anonymous sign-up gate) is reached
-identically and nothing new was added to the backend.
+`/(app)/product/gtin/<code>` (TICKET-P6-009: the GTIN resolver, see below) — deliberately the *same*
+destination a scan produces, so every downstream state (found, `PENDING_REVIEW`, the 404 "Add this
+product" screen, the P5-001 anonymous sign-up gate) is reached identically and nothing new was added to
+the backend.
 
 Three entry points, all rendering the same component:
 
@@ -272,7 +273,7 @@ Three entry points, all rendering the same component:
 |---|---|---|
 | Scan tab (`app/(tabs)/scan.tsx`) | "Enter code manually" below the viewfinder | Rendered in **every** permission state — undetermined, denied, granted. Requiring the camera to reach the camera-free path would defeat the ticket. |
 | Home tab (`app/(tabs)/index.tsx`) | "＋" in the header | Adding without going through the camera tab at all. P6-007 turns this into a two-choice sheet; this is the single-purpose version. |
-| Product screen | Automatic, on a `400` from `GET /api/products/:barcode` | Opens pre-filled with the salvageable digits and submits via `router.replace`, so the corrected code takes the place of the broken screen instead of stacking behind it. |
+| GTIN resolver (`app/(app)/product/gtin/[gtin].tsx`) | Automatic, on a `400` from `GET /api/products/gtin/:gtin` | Opens pre-filled with the salvageable digits and submits via `router.replace`, so the corrected code takes the place of the broken resolver screen instead of stacking behind it. |
 
 **Validation is client-side and mirrors the server** (`BARCODE_RE` ≡ `productController.ts`'s
 `^\d{8,13}$`). The reasons are typed and the copy is distinguishable — "too short, this has 7" is a
@@ -304,26 +305,51 @@ silence would re-arm the code), and it applies only to the camera: the `__DEV__`
 
 ---
 
-## Product Detail & Rating (`app/(app)/product/[barcode].tsx`)
+## The GTIN Resolver (`app/(app)/product/gtin/[gtin].tsx`, TICKET-P6-009)
 
-The product itself is read through `useCachedResource` (see *Offline & Performance* below): painted from the on-disk cache first, then revalidated with `GET /api/products/:barcode` in the background. Three terminal states, and keeping them distinct is the point:
+`Product.id` — not a GTIN — is the only key the rest of the app understands (routes, the offline caches, the outbox, `POST /api/ratings`), but a scan, a typed code, or a deep link only ever produces a GTIN. Every code-shaped entry point routes through this resolver first; its only successful outcome is `router.replace`-ing into `/(app)/product/<id>` once it has one.
+
+```
+mount
+  ├─ gtin → id in the products cache's index (sync, then disk)?
+  │    yes → router.replace('/(app)/product/<id>')   — no network call at all
+  │    no  ↓
+  └─ lookupProductByGtin(gtin)
+       ├─ success → write to the id-keyed cache (populates the gtin index) → replace
+       ├─ 400     → "that code doesn't look right" + manual-entry sheet, pre-filled (P6-006)
+       ├─ 404     → "product not found" + add-product / sign-up CTA (P5-001)
+       ├─ NetworkError → "you're offline" + retry — never the add CTA (P8-002)
+       └─ other   → generic error + retry
+```
+
+The cache-index check is what makes an **offline scan of a previously viewed product still paint**: the `products` document (see *Offline & Performance*) carries a `gtin → id` reverse index alongside the id-keyed map, so a known GTIN resolves without ever reaching the network.
+
+These five states — and their `testID`s (`product-invalid-barcode`, `product-not-found`, `product-offline`, `product-error`) — are exactly the ones the product screen rendered when it was still keyed by `barcode`; they moved here verbatim (JSX included) when the screen was re-keyed, so the Maestro flows' landing assertions keep matching without modification. `app/(app)/product/[id].tsx` never renders any of them.
+
+---
+
+## Product Detail & Rating (`app/(app)/product/[id].tsx`)
+
+The product itself is read through `useCachedResource` (see *Offline & Performance* below): painted from the on-disk cache first, then revalidated with `GET /api/products/:id` in the background. By the time this screen mounts, the GTIN resolver above has already ruled out a bad code or an unknown GTIN — this screen's own terminal states are narrower:
 
 | Outcome | State |
 |---------|-------|
-| `ApiError` 404 and nothing cached | "Product not found" + add/sign-up CTA (P5-001) |
-| `NetworkError` and nothing cached | "You're offline" + retry (P8-002) — **never** the add CTA |
-| `ApiError` 400 (bad code) and nothing cached | "That code doesn't look right" + the manual-entry sheet, pre-filled (P6-006) |
+| `ApiError` 404 and nothing cached | Plain "Product not found" + "Back to Home" — **no** add-product CTA (an id has no GTIN to add) |
+| `NetworkError` and nothing cached | "You're offline" + retry (P8-002) — rare here; the resolver is the usual way to get an id, and it only ever hands one out once the product is cached |
+| Any other `ApiError` | Generic "Could not load this product" error, never the raw server message |
 | Anything cached | The product renders; an offline strip appears if revalidation failed |
 
-**"My rating" comes from the cached ratings list, not a second request.** `hooks/use-my-rating.ts` reads the cached `/api/users/me/ratings` payload and looks the barcode up in it. Only when this device has never cached that list (fresh install, or a deep link straight into a product) does it fetch the list once — still one request, and it primes the Home tab at the same time. The old per-product `GET /api/ratings/me/:barcode` call is gone.
+**"My rating" comes from the cached ratings list, not a second request.** `hooks/use-my-rating.ts` reads the cached `/api/users/me/ratings` payload and looks the product up in it **by id**. Only when this device has never cached that list (fresh install, or a deep link straight into a product) does it fetch the list once — still one request, and it primes the Home tab at the same time. The old per-product `GET /api/ratings/me/:barcode` call is deleted server-side; it was already unused by the app.
 
 When a rating is found, the slider and comment field are pre-populated, the section title flips from "How does it taste?" to "Your rating", and the submit button reads "Update Rating". This applies to anonymous users too (P8-003) — their ratings are stored server-side under their anonymous user id, which now survives a restart.
 
-Submission always calls `POST /api/ratings`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven off whether a rating was found before submitting. A `NetworkError` on submit queues the rating in the outbox and reports success ("Saved on this device") rather than an error.
+Submission always calls `POST /api/ratings` with `{ productId, taste, comment? }`, which the backend upserts on `(userId, productId)` — there is no separate `PUT` endpoint. The screen does not differentiate between the create (`201`) and update (`200`) status codes; the wording switch is driven off whether a rating was found before submitting. A `NetworkError` on submit queues the rating in the outbox and reports success ("Saved on this device") rather than an error.
 
-**The success card is a state of this screen, not a route, and its exit has to be an explicit destination.** It offers **Done** → `router.navigate('/(tabs)')`, which pops the root stack back to the tab navigator and lands on Home where the new rating is already listed, plus **Back to product**, which just clears the state and returns the form. `router.back()` was wrong for both: the product screen sits on the root stack above the tabs, so back returns the user wherever they entered from — after a scan that is the camera, still pointed at the barcode they just rated, which scanned it again and put them straight back on the rating form. (The scanner's re-scan suppression, above, closes the other half of that loop, including for the header back button.) Leaving the screen also retires the card via the focus-effect cleanup, so a later visit to the same product opens the form rather than a stale "Rating Submitted!".
+**The success card is a state of this screen, not a route, and its exit has to be an explicit destination.** It offers **Done** → `router.navigate('/(tabs)')`, which pops the root stack back to the tab navigator and lands on Home where the new rating is already listed, plus **Back to product**, which just clears the state and returns the form. `router.back()` was wrong for both: the product screen sits on the root stack above the tabs, so back returns the user wherever they entered from — after a scan that is the camera, still pointed at the barcode they just rated (now via the GTIN resolver), which scanned it again and put them straight back on the rating form. (The scanner's re-scan suppression, above, closes the other half of that loop, including for the header back button.) Leaving the screen also retires the card via the focus-effect cleanup, so a later visit to the same product opens the form rather than a stale "Rating Submitted!".
 
-For registered users on `VERIFIED` products the screen additionally calls `GET /api/products/:barcode/edits/pending` (failures degrade to "no pending edit") to drive the P5-006 edit entry point and review banner, described below.
+For registered users on `VERIFIED` products the screen additionally calls `GET /api/products/:id/edits/pending` (failures degrade to "no pending edit") to drive the P5-006 edit entry point and review banner, described below.
+
+**Nutrition / barcode chip and `CUSTOM` products.** The barcode chip reads `product.packaged?.gtin` and is omitted entirely when `packaged` is `null` — not even "no barcode" copy, matching ADR 0006's rule that a `CUSTOM` product makes no statement about data it cannot have. Nothing produces a `CUSTOM` product yet (that's P6-007), but the branch and its test land with this ticket.
 
 ---
 
@@ -333,11 +359,11 @@ For registered users on `VERIFIED` products the screen additionally calls `GET /
 
 | Product state | Affordance | Submit path |
 |---------------|-----------|-------------|
-| `PENDING_REVIEW` | "Correct this submission" | `PATCH /api/products/:barcode` — in-place correction; verifications reset, corrector becomes submitter |
-| `VERIFIED`, no pending edit | "Edit product" | `POST /api/products/:barcode/edits` — peer-reviewed proposal, changed fields only |
+| `PENDING_REVIEW` | "Correct this submission" | `PATCH /api/products/:id` — in-place correction; verifications reset, corrector becomes submitter |
+| `VERIFIED`, no pending edit | "Edit product" | `POST /api/products/:id/edits` — peer-reviewed proposal, changed fields only |
 | `VERIFIED`, pending edit exists | Hidden; notice "An edit is already under review." | — |
 
-**Edit form** (`app/(app)/edit-product/[barcode].tsx`): same field layout as Add Product but pre-populated from the current product values; the barcode is read-only. The submit button stays disabled until something actually changed (`formHasChanges`). The product photo can optionally be replaced — the new photo is uploaded at capture time (plausibility-gated, like Add Product) and its key is included as `productImageKey` only when replaced. All form logic lives in `features/products/edit-form.ts`.
+**Edit form** (`app/(app)/edit-product/[id].tsx`): same field layout as Add Product but pre-populated from the current product values (nutrition/ingredient fields read from `product.packaged`); the barcode (`product.packaged.gtin`) is read-only. The submit button stays disabled until something actually changed (`formHasChanges`). The product photo can optionally be replaced — the new photo is uploaded at capture time (plausibility-gated, like Add Product) and its key is included as `productImageKey` only when replaced. All form logic lives in `features/products/edit-form.ts`.
 
 **Review banner + diff screen.** When a registered non-author opens a product with a pending edit they haven't voted on or dismissed, a "Someone suggested a change" banner links to `app/(app)/review-edit/[editId].tsx`. The diff screen renders, per changed field, the `originalValues` snapshot (struck through, muted) against the proposed value (bold, accent) — the baseline comes from the edit record, not the live product. Unchanged fields sit in a collapsed section. Actions: "Looks correct" (`APPROVE`), "Something's wrong" (`REJECT`), and "Dismiss" (`POST /edits/:editId/dismissals`, a server-side record so the banner stays hidden across devices; not a vote). The current tally is shown ("1 of 2 approvals needed") without revealing who voted. Authors and users who already voted see a passive note instead of the action buttons.
 
@@ -364,7 +390,7 @@ A screen that overflows the viewport by only a handful of pixels reads as broken
 - Never the padding *inside* a pressable. Tightening a container is free; tightening a button's own padding is what drives a touch target below 44×44. Compact overrides adjust the margin around controls, not the padding within them.
 - Above `COMPACT_MAX_FONT_SCALE` the screen scrolls normally.
 
-**Screens wired up:** `product/[barcode]`, `add-product`, `edit-product/[barcode]`, `review-product/[barcode]`, `review-edit/[editId]`, `(tabs)/index`, `(tabs)/profile`. The parallax header in `components/parallax-scroll-view.tsx` is deliberately excluded — its scroll is the point.
+**Screens wired up:** `product/[id]`, `add-product`, `edit-product/[id]`, `review-product/[id]`, `review-edit/[editId]`, `(tabs)/index`, `(tabs)/profile`. The parallax header in `components/parallax-scroll-view.tsx` is deliberately excluded — its scroll is the point.
 
 > Testing note: `PixelRatio.getFontScale()` falls back to the pixel *density* when the window carries no `fontScale`. That never happens on a device, but jest-expo's default window reports `fontScale: 2`, so any test that exercises the compaction path must stub `PixelRatio.getFontScale`.
 
@@ -383,7 +409,7 @@ A typed, versioned, **user-namespaced** document store laid out as `<documentDir
 | Property | Why |
 |----------|-----|
 | Namespaced by Supabase user id | The anonymous→registered upgrade and account switching must never leak one user's data into another's view. |
-| Schema mismatch **wipes**, never migrates | These are caches; the server is the source of truth, so re-fetching always beats migration code for throwaway data. Directories from older versions are pruned once per process. |
+| Schema mismatch **wipes**, never migrates | These are caches; the server is the source of truth, so re-fetching always beats migration code for throwaway data. Directories from older versions are pruned once per process. `CACHE_SCHEMA_VERSION` went `1 → 2` for TICKET-P6-009's `barcode` → `Product.id` re-key — the bump alone wipes every v1 document, outbox included; there were no users to lose anything. |
 | Failures are non-fatal | A cache that cannot be read or written degrades to "no cache", never to a broken screen. |
 | Synchronous memory mirror (`peekCache`) | Lets a screen paint in its *first frame* rather than after a disk round trip. |
 
@@ -395,9 +421,9 @@ Three documents, exposed as `ResourceCache<T>` descriptors (`peek` / `read` / `w
 
 | Document | Contents | Notes |
 |----------|----------|-------|
-| `products` | `barcode → { data, touchedAt }` | LRU-capped at `PRODUCT_CACHE_LIMIT` (200). One map document rather than a file per barcode: eviction becomes a sort instead of a directory walk. |
-| `ratings` | The `/api/users/me/ratings` payload verbatim | Also serves as the "my rating for this barcode" lookup table. |
-| `recents` | The "Recently Opened" list | `viewedAt` is stored as an ISO string and revived on read. |
+| `products` | `{ byId: { [Product.id]: { data, touchedAt } }, gtinIndex: { [gtin]: Product.id } }` (TICKET-P6-009) | LRU-capped at `PRODUCT_CACHE_LIMIT` (200) on `byId`. One map document rather than a file per id: eviction becomes a sort instead of a directory walk. `gtinIndex` is what lets the GTIN resolver skip the network on an offline scan; eviction drops an evicted id's index entry with it, so the index never points at a product no longer on disk. `peekProductIdByGtin` / `readProductIdByGtin` read it. |
+| `ratings` | The `/api/users/me/ratings` payload verbatim | Also serves as the "my rating for this product id" lookup table. |
+| `recents` | The "Recently Opened" list, now `{ id, name, brand, image, viewedAt }` (`barcode` dropped) | `viewedAt` is stored as an ISO string and revived on read. |
 
 ### Stale-while-revalidate — `hooks/use-cached-resource.ts`
 
@@ -424,13 +450,13 @@ Product images use `expo-image` with `cachePolicy="memory-disk"`. React Native's
 
 ### The rating outbox — `lib/offline/outbox.ts` (TICKET-P8-004)
 
-A persisted queue of `{ barcode, taste, comment, queuedAt, attempts, nextAttemptAt }`, flushed on mount, on every app foreground, and on pull-to-refresh.
+A persisted queue of `{ productId, taste, comment, queuedAt, attempts, nextAttemptAt }` (TICKET-P6-009: `barcode` → `productId`, no legacy shape), flushed on mount, on every app foreground, and on pull-to-refresh.
 
 **Only ratings are queued, and that is deliberate.** A rating is owned by exactly one user and `POST /api/ratings` upserts on `(userId, productId)`, so replay is idempotent and last-write-wins is *correct* — the queued value is the user's latest intent and there is no server state that could disagree. Product submissions, edits and peer votes hinge on state that is invisible offline (the image plausibility gate, the one-pending-edit `409`, the self-vote `403`); those stay online-only.
 
 | Behaviour | Rule |
 |-----------|------|
-| Collapse | Re-rating the same barcode replaces the queued item (original `queuedAt` preserved), so five slider fiddles cost one request. |
+| Collapse | Re-rating the same product replaces the queued item (original `queuedAt` preserved), so five slider fiddles cost one request. |
 | Transient failure | `NetworkError`, 5xx, 401, 408, 429 → retry with exponential back-off from 30 s, capped at 30 min. A `NetworkError` stops the pass early — the rest of the queue would fail too. |
 | Permanent failure | Any other 4xx → dropped, and the server's message is surfaced on the Home tab. Retrying a malformed request forever only hides it. |
 | Optimistic UI | The queued rating is folded into the cached ratings list immediately and marked "not yet synced" on the Home tab and product screen; on success the server's version replaces it. |
@@ -484,8 +510,9 @@ slate *between runs*; `clearState` gives one *between flows*, which matters beca
 each flow signs in as a guest and the second would otherwise inherit the first's
 persisted Supabase session and never see "Continue as Guest".
 
-Both land on an assertion against the product screen's own testIDs
-(`product-screen` / `product-not-found` / `product-offline`), never against the
+Both land on an assertion against the product/resolver screens' own testIDs
+(`product-screen` / `product-not-found` / `product-offline` / `product-error` —
+the latter three now live on the GTIN resolver, TICKET-P6-009), never against the
 barcode string — `4006381333931` is also the manual sheet's `placeholder`, so a
 text assertion stays satisfied when navigation never happened. A flow that can pass
 vacuously is worse than no flow.

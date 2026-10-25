@@ -24,7 +24,7 @@ export const BASE_BACKOFF_MS = 30_000;
 export const MAX_BACKOFF_MS = 30 * 60_000;
 
 export interface OutboxRating {
-  barcode: string;
+  productId: string;
   taste: number;
   comment: string | null;
   /** Epoch millis the user submitted; preserved across collapses. */
@@ -36,12 +36,12 @@ export interface OutboxRating {
 
 /** An item the server rejected for good — reported once, then forgotten. */
 export interface OutboxFailure {
-  barcode: string;
+  productId: string;
   message: string;
 }
 
 export interface FlushResult {
-  /** Barcodes accepted by the server during this flush. */
+  /** Product ids accepted by the server during this flush. */
   synced: string[];
   /** Items dropped because retrying could not help. */
   dropped: OutboxFailure[];
@@ -78,27 +78,27 @@ export async function clearOutbox(): Promise<void> {
 }
 
 /**
- * Queue a rating, replacing any earlier queued rating for the same barcode.
+ * Queue a rating, replacing any earlier queued rating for the same product.
  * Collapsing is what makes "the user fiddled with the slider five times while
  * offline" cost one request instead of five, and the last value is the one they
  * meant.
  */
 export async function enqueueRating(input: {
-  barcode: string;
+  productId: string;
   taste: number;
   comment: string | null;
 }): Promise<OutboxRating[]> {
   const queue = await readOutbox();
-  const previous = queue.find((item) => item.barcode === input.barcode);
+  const previous = queue.find((item) => item.productId === input.productId);
   const item: OutboxRating = {
-    barcode: input.barcode,
+    productId: input.productId,
     taste: input.taste,
     comment: input.comment,
     queuedAt: previous?.queuedAt ?? Date.now(),
     attempts: 0,
     nextAttemptAt: 0,
   };
-  const next = [...queue.filter((entry) => entry.barcode !== input.barcode), item];
+  const next = [...queue.filter((entry) => entry.productId !== input.productId), item];
   await writeCache(OUTBOX_DOC, next);
   return next;
 }
@@ -132,14 +132,14 @@ async function runFlush(): Promise<FlushResult> {
     }
     try {
       const saved = await api.post<RatingEntry>('/api/ratings', {
-        barcode: item.barcode,
+        productId: item.productId,
         taste: item.taste,
         comment: item.comment ?? undefined,
       });
-      synced.push(item.barcode);
+      synced.push(item.productId);
       // Replace the optimistic local entry with what the server stored, so ids
       // and timestamps stop being made up.
-      if (saved?.product?.barcode) await upsertCachedRating(saved);
+      if (saved?.product?.id) await upsertCachedRating(saved);
     } catch (err) {
       if (err instanceof NetworkError) {
         // Still offline — stop early, the rest of the queue would fail too.
@@ -147,7 +147,7 @@ async function runFlush(): Promise<FlushResult> {
         break;
       }
       if (isPermanent(err)) {
-        dropped.push({ barcode: item.barcode, message: err.message });
+        dropped.push({ productId: item.productId, message: err.message });
         continue;
       }
       remaining.push({

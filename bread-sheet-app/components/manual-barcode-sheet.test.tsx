@@ -20,13 +20,13 @@ beforeEach(() => {
 });
 
 describe('ManualBarcodeSheet', () => {
-  it('navigates to the product screen for the entered code', async () => {
+  it('navigates to the gtin resolver for the entered code', async () => {
     await render(<ManualBarcodeSheet visible onClose={jest.fn()} />);
 
     await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006381333931');
     await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/gtin/4006381333931');
   });
 
   it('closes itself once it has navigated', async () => {
@@ -78,7 +78,7 @@ describe('ManualBarcodeSheet', () => {
     await fireEvent.changeText(screen.getByTestId('manual-barcode-input'), '4006 381-333931');
     await fireEvent.press(screen.getByTestId('manual-barcode-submit'));
 
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/gtin/4006381333931');
   });
 
   it('pre-fills from initialValue so a bad scan is corrected, not retyped', async () => {

@@ -428,7 +428,7 @@ User History
 
 Worth knowing before implementation starts:
 
-- P6-002 removes GET /api/ratings/product/:barcode, which today hands every rater's id, username and avatar to any authenticated caller. Nothing in the app calls it, so it's a free deletion — and independent of whether groups ever ship. That one doesn't need
+- P6-002 removes GET /api/ratings/product/:productId (re-keyed from `:barcode` by P6-009), which today hands every rater's id, username and avatar to any authenticated caller. Nothing in the app calls it, so it's a free deletion — and independent of whether groups ever ship. That one doesn't need
   to wait.
 - The seed category list is the thing I'd most expect to be wrong, and P6-003 is now built so being wrong is cheap: custom names are queryable across users, so seed promotion is a report rather than a guess. My suggestion stands — don't tune the list before
   there's real usage.
@@ -470,7 +470,7 @@ Worth knowing before implementation starts:
   written by the client today. Groups display member names, so P6-002 introduces the display-name flow.
   Names are visible to fellow group members only — never in a global context.
 - **Aggregates outside a group are anonymous.** A product's global average is a number and a count,
-  never a list of who rated what. `GET /api/ratings/product/:barcode` currently returns every rating
+  never a list of who rated what. `GET /api/ratings/product/:productId` (re-keyed from `:barcode` by P6-009) currently returns every rating
   row with the author's `id`/`username`/`avatar` to any authenticated caller; nothing in the app calls
   it. P6-002 removes it and replaces it with a scoped summary endpoint.
 - **Offline posture.** Group reads (my groups, group detail, product rating summary) join the Phase 8
@@ -634,7 +634,7 @@ groupId)` row exists. Everything else is a way of creating or removing those row
   over 42 people attributes nothing. `count` is suppressed below 3 ratings so a small `global` can't be
   differenced against a group aggregate to re-identify someone. Names appear inside a group or nowhere —
   treat that as an invariant of the phase, not a per-endpoint choice.
-- **Removed in this ticket:** `GET /api/ratings/product/:barcode`, which returns every rating with the
+- **Removed in this ticket:** `GET /api/ratings/product/:productId` (`:barcode` before P6-009), which returns every rating with the
   author's id, username and avatar to any authenticated caller. Nothing in the app calls it; its Bruno
   request is replaced by the summary request.
 
@@ -710,7 +710,7 @@ groupId)` row exists. Everything else is a way of creating or removing those row
 - [ ] A group aggregate counts only ratings shared into that group — an unshared rating is invisible to it.
 - [ ] `top` is present only when the group has ≥ 2 ratings and the top score differs from the average.
 - [ ] `global` returns an average with no names or per-user rows, and suppresses `count` below 3 ratings.
-- [ ] `GET /api/ratings/product/:barcode` no longer exists; no endpoint returns another user's identity
+- [ ] `GET /api/ratings/product/:productId` no longer exists; no endpoint returns another user's identity
       alongside their rating outside a shared group context.
 - [ ] `requireGroupMember` and `requireGroupAdmin` are composable router-level middleware, not inline
       controller checks, and are covered by integration tests.
@@ -1276,7 +1276,8 @@ where custom items can't hold them, and lets P6-007 add custom items without a s
 - `POST /api/ratings` takes `{ productId, taste, comment? }`. There is no legacy `{ barcode }` shape: there
   are no users yet, so this is a clean break with no compatibility layer anywhere.
 - `GET /api/ratings/me/:barcode` (unused by the app since Phase 8) is deleted, not re-keyed.
-  `GET /api/ratings/product/:barcode` is left alone; P6-002 deletes it.
+  `GET /api/ratings/product/:barcode` is left alone; P6-002 deletes it. *(As built: re-keyed to
+  `:productId`, because `Product.barcode` no longer exists. It's still unused, and P6-002 still deletes it.)*
 - New `server/src/services/productVisibility.ts`: `visibleProductWhere(user)` and
   `assertProductVisible(user, id)`. The rule is the P5-007 one, for both kinds: `REJECTED` is invisible
   (`404`), and everything else is visible to every caller. **Every** product read goes through it, so the
@@ -1306,21 +1307,43 @@ where custom items can't hold them, and lets P6-007 add custom items without a s
 to implemented.
 
 **Acceptance Criteria:**
-- [ ] `Product` holds no GTIN, nutrition or ingredient columns; `PackagedProduct` holds them, 1:1 by
+- [x] `Product` holds no GTIN, nutrition or ingredient columns; `PackagedProduct` holds them, 1:1 by
       `productId`, with `gtin` unique.
-- [ ] The migration preserves every existing product, rating, verification and edit, and every existing
+- [x] The migration preserves every existing product, rating, verification and edit, and every existing
       row ends up `kind: PACKAGED` with exactly one `PackagedProduct`.
-- [ ] Creating a packaged product (OFF fetch or user submission) writes both rows in one transaction; a
+- [x] Creating a packaged product (OFF fetch or user submission) writes both rows in one transaction; a
       failure leaves neither.
-- [ ] Every product route is keyed by `Product.id`; `GET /api/products/gtin/:gtin` is the only way to
+- [x] Every product route is keyed by `Product.id`; `GET /api/products/gtin/:gtin` is the only way to
       resolve a GTIN, and keeps today's `400` / OFF-fetch / `404` behaviour.
-- [ ] `ProductEdit` references `productId`, and the one-pending-edit-per-product rule still holds at the
+- [x] `ProductEdit` references `productId`, and the one-pending-edit-per-product rule still holds at the
       database layer.
-- [ ] Every product read goes through `productVisibility`; a test asserts that a `REJECTED` product is
+- [x] Every product read goes through `productVisibility`; a test asserts that a `REJECTED` product is
       `404` on every product-reading endpoint, for both kinds.
-- [ ] Scanning, manual entry, the add-product 404 path and the P6-006 invalid-code path all work through
+- [x] Scanning, manual entry, the add-product 404 path and the P6-006 invalid-code path all work through
       the GTIN resolver; an offline scan of a cached product paints from cache.
-- [ ] Backend and frontend suites pass; Playwright and Maestro scan flows pass against the new routes.
+- [x] Backend and frontend suites pass; Playwright and Maestro scan flows pass against the new routes.
+
+### [TICKET-P6-010] Consolidate `Product.description` and `PackagedProduct.genericName`
+**Goal:** Store OFF's `generic_name` once. Today an OFF-sourced row writes it to both `Product.description` and `PackagedProduct.genericName`, so an edit to one leaves the other stale.
+**Context:** This duplication predates P6-009, which kept it on purpose (see `docs/P6-009-implementation-plan.md` § migration and `docs/P6-009-findings.md` § follow-ups). It's cheapest to fix before P6-007 gives `description` a meaning for custom products, which have no `genericName`.
+**Implementation:**
+- Decide the split: `description` as free text on every product, and `genericName` as the packaged-only label field.
+- `getProductByGtin` (OFF create) and `POST /api/products` stop copying one into the other. A data-preserving migration clears any `description` that only repeats `genericName`.
+- The product and edit screens show each field from its owning table.
+**Acceptance Criteria:**
+- [ ] No code path writes the same OFF value to both columns.
+- [ ] The migration preserves every distinct value; the before/after counts are recorded in the findings doc.
+- [ ] Edit and peer-review flows change exactly one column per field.
+
+### [TICKET-P6-011] Decide Whether a User's Own History Shows `REJECTED` Products
+**Goal:** Make an explicit decision on `GET /api/users/me/ratings`, which still returns ratings of products that have since become `REJECTED`. Every other product read sends them through `productVisibility` and answers `404`.
+**Context:** This is unchanged from before P6-009 and was flagged as N-7 in `docs/P6-009-findings.md`. It's arguably correct: it's the user's own data, and hiding it would make a rating silently vanish. But today that's an accident rather than a decision, and the Home tab links into a product screen that will `404`.
+**Implementation:**
+- Either filter through `visibleProductWhere`, or keep the rows and mark them (e.g. `product.status: REJECTED`) so the Home tab can render a "removed product" row instead of a dead link.
+- Record the choice in `docs/architecture/backend.md` next to the P5-007 visibility rule.
+**Acceptance Criteria:**
+- [ ] The behaviour for a rated-then-`REJECTED` product is documented and covered by a server test.
+- [ ] The Home tab never navigates into a product screen that `404`s for a listed rating.
 
 ## Phase 7: Auth Enhancements
 
@@ -1515,6 +1538,39 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - [ ] A confirmed finding becomes a GitHub issue with a replayable repro, filed by the coordinator rather than the agent.
 - [ ] Session and eval both run on the Mac mini and the CachyOS PC.
 - [ ] `test:e2e` and `test:maestro` still green after the `scripts/lib/android.js` extraction.
+
+### [TICKET-P9-006] Self-Contained E2E: Local Supabase + Runnable Worktrees
+**Goal:** `npm run test:e2e` and `npm run test:maestro` run in a fresh `/dev-team` worktree with no human step and no real credentials.
+**Context:** Every P6-009 agent hit "No Supabase config": a worktree has no gitignored env files, agents are forbidden to read, copy or symlink them, and the runs were only unblocked by the user handing the values over to be passed inline. A local Supabase stack, whose demo keys aren't secrets, removes the secret entirely and stops test runs creating anonymous users in the real project. A first attempt (`npx supabase start` on rootless podman) failed with "can't fork" in `supabase_db`; the cause is unconfirmed (`pids.max` was 2048), so capture `podman logs supabase_db_<project_id>` before the CLI removes the container. Overlaps P9-002 (CI) and P9-005 (QA sessions), which both want a throwaway Supabase.
+**Implementation:**
+- Commit `supabase/config.toml` (`enable_anonymous_sign_ins = true`, unused services excluded) and document the podman socket (`DOCKER_HOST`) in README.md.
+- Have `scripts/test-maestro.js` and the Playwright `webServer` default to the local stack's URL and demo key when nothing is exported (the emulator uses `10.0.2.2`).
+- Have the `/dev-team` coordinator prepare the worktree before spawning agents: `npm ci` in both packages, Postgres up (with the `GCLOUD_ADC_PATH` podman-compose workaround), local Supabase up, non-secret local values from a checked-in template.
+**Acceptance Criteria:**
+- [ ] In a fresh worktree, `test:e2e` and the full `test:maestro` pass with no env file present and no value supplied by the user.
+- [ ] No real Supabase key appears in any committed file, findings doc or agent transcript.
+- [ ] `docs/architecture/agent-dev-team.md` describes the worktree preparation.
+
+### [TICKET-P9-007] Playwright Spec for the GTIN Resolver
+**Goal:** Make the web e2e suite cover the product flow, not just auth and the camera prompt.
+**Context:** P6-009's Playwright run passed but never reached a product route (N-6 in `docs/P6-009-findings.md`). Only Maestro exercises the scan → `product/gtin/<gtin>` → `router.replace` → `product/<id>` hop, and Maestro needs an emulator. Expo web can deep-link straight into the resolver.
+**Implementation:**
+- A spec that signs in as guest, opens `/product/gtin/<seeded gtin>`, and asserts it lands on `product-screen` with an id URL.
+- Cases for invalid code (`400` → manual sheet pre-filled) and unknown GTIN (`404` → add-product / guest gate), asserting the same `testID`s the Maestro flows use.
+- Needs a deterministic backend (seeded product, mocked OFF — see P9-005's `OFF_MODE`); depends on P9-006 for config.
+**Acceptance Criteria:**
+- [ ] `npm run test:e2e` covers the resolver's found, `400` and `404` states.
+- [ ] The spec fails if the resolver stops redirecting to `product/<id>`.
+
+### [TICKET-P9-008] ESLint Coverage for Server Scripts and Lambda
+**Goal:** Make `eslint .` in `server/` clean so whole-directory lint runs report real problems only.
+**Context:** `npm run lint` only globs `src/**/*.ts`, but `eslint .` (which the `rtk` CLI proxy substitutes when lint runs interactively) reports ~97 pre-existing `no-undef` errors in `server/scripts/*.mjs` and `server/lambda/**`, which the flat config gives no Node globals. During P6-009 this read as a ticket failure until the reviewer traced it.
+**Implementation:**
+- Add a flat-config block with `globals.node` for `scripts/**/*.{js,mjs}` and `lambda/**/*.js`, or ignore build output explicitly.
+- Optionally widen the `lint` script to the same scope so `npm run lint` and `eslint .` agree.
+**Acceptance Criteria:**
+- [ ] `npx eslint .` in `server/` exits 0.
+- [ ] `npm run lint` and `npx eslint .` report the same result.
 
 # Future Plans and Ideas
 

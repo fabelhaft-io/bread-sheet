@@ -6,13 +6,20 @@
 
 export type ProductStatus = 'VERIFIED' | 'PENDING_REVIEW' | 'REJECTED';
 
+/** TICKET-P6-009: `Product.kind` — a custom product has no `PackagedProduct`. */
+export type ProductKind = 'PACKAGED' | 'CUSTOM';
+
 /**
  * Nutrient & identity fields that make up a product submission. All optional
  * fields accept `null` explicitly — the backend differentiates between "not
  * provided" (null) and "zero" (0), especially for the reviewer diff screen.
+ *
+ * `gtin` (TICKET-P6-009, formerly `barcode`) identifies the manufactured
+ * article being submitted; the server resolves or creates the `Product` +
+ * `PackagedProduct` pair from it.
  */
 export interface ProductSubmission {
-  barcode: string;
+  gtin: string;
   name: string;
   brand: string | null;
   genericName: string | null;
@@ -52,14 +59,38 @@ export interface ExtractedLabel {
 }
 
 /**
- * Response shape for `GET /products/:barcode` augmented with the unverified
- * and submitter metadata required for the reviewer flow. Kept intentionally
- * minimal — the reviewer banner only branches on `unverified` and
- * `submittedByUserId`.
+ * The manufactured-article half of a `PACKAGED` product (TICKET-P6-009 /
+ * ADR 0006). `null` on `ProductDetail.packaged` for a `CUSTOM` product —
+ * there is nothing to store and nothing to display, not even "no nutrition
+ * info yet".
+ */
+export interface PackagedDetails {
+  gtin: string;
+  genericName: string | null;
+  energyKcal: number | null;
+  fat: number | null;
+  saturatedFat: number | null;
+  carbohydrates: number | null;
+  sugars: number | null;
+  protein: number | null;
+  salt: number | null;
+  servingSize: string | null;
+  ingredients: string | null;
+}
+
+/**
+ * Response shape for `GET /products/:productId` augmented with the
+ * unverified and submitter metadata required for the reviewer flow. Kept
+ * intentionally minimal — the reviewer banner only branches on `unverified`
+ * and `submittedByUserId`.
+ *
+ * TICKET-P6-009: identity is `id` (a server UUID), not a barcode. GTIN and
+ * nutrition/ingredient data live under `packaged`, which is `null` for a
+ * `CUSTOM` product.
  */
 export interface ProductDetail {
   id: string;
-  barcode: string;
+  kind: ProductKind;
   name: string;
   brand: string | null;
   image: string | null;
@@ -67,19 +98,9 @@ export interface ProductDetail {
   status?: ProductStatus;
   unverified?: boolean;
   submittedByUserId?: string | null;
-  /** Fully-populated submission view for the reviewer screen (P5-002). */
+  /** Fully-populated submission view for the reviewer screen (P5-002). Stays flat. */
   submission?: Partial<ProductSubmission> | null;
-  /** Nutrition + identity columns, present on cached products (P5-006 edit form). */
-  genericName?: string | null;
-  energyKcal?: number | null;
-  fat?: number | null;
-  saturatedFat?: number | null;
-  carbohydrates?: number | null;
-  sugars?: number | null;
-  protein?: number | null;
-  salt?: number | null;
-  servingSize?: string | null;
-  ingredients?: string | null;
+  packaged: PackagedDetails | null;
 }
 
 // ─── Product editing & peer review (TICKET-P5-006) ──────────────────────────
@@ -87,7 +108,7 @@ export interface ProductDetail {
 export type EditVote = 'APPROVE' | 'REJECT';
 
 /**
- * Wire payload for `POST /products/:barcode/edits` — only the changed fields.
+ * Wire payload for `POST /products/:productId/edits` — only the changed fields.
  * `productImageKey` is included only when the photo was replaced.
  */
 export interface ProductEditChanges {
@@ -107,13 +128,14 @@ export interface ProductEditChanges {
 }
 
 /**
- * Response of `GET /products/:barcode/edits/pending`. `originalValues` is the
- * snapshot at proposal time (the diff baseline), keyed by product column name
- * (`image`, not `productImageKey`; image values arrive as resolved URLs).
+ * Response of `GET /products/:productId/edits/pending`. `originalValues` is
+ * the snapshot at proposal time (the diff baseline), keyed by product column
+ * name (`image`, not `productImageKey`; image values arrive as resolved
+ * URLs).
  */
 export interface PendingEdit {
   editId: string;
-  barcode: string;
+  productId: string;
   originalValues: Record<string, string | number | null>;
   proposedChanges: Record<string, string | number | null>;
   approvals: number;

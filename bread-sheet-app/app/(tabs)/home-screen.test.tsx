@@ -71,22 +71,22 @@ const files = (require('expo-file-system/legacy') as { __files: Map<string, stri
 const { api } = require('@/lib/api');
 const mockApiGet = api.get as jest.Mock;
 
-function rating(barcode: string, name: string, taste: number): RatingEntry {
+function rating(id: string, name: string, taste: number): RatingEntry {
   return {
-    id: `r-${barcode}`,
+    id: `r-${id}`,
     score: taste,
     taste,
     comment: null,
     createdAt: new Date().toISOString(),
-    product: { id: `p-${barcode}`, barcode, name, brand: 'Artisan', image: null },
+    product: { id, kind: 'PACKAGED', name, brand: 'Artisan', image: null },
   };
 }
 
-function outbox(queuedBarcodes: string[] = [], failures: { barcode: string; message: string }[] = []) {
+function outbox(queuedIds: string[] = [], failures: { productId: string; message: string }[] = []) {
   return {
-    queued: queuedBarcodes.map((barcode) => ({ barcode })),
+    queued: queuedIds.map((productId) => ({ productId })),
     failures,
-    isQueued: (barcode: string) => queuedBarcodes.includes(barcode),
+    isQueued: (productId: string) => queuedIds.includes(productId),
     enqueue: jest.fn(),
     flush: jest.fn().mockResolvedValue(undefined),
     dismissFailures: jest.fn(),
@@ -178,7 +178,7 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
   });
 
   it('reports ratings the server refused outright', async () => {
-    mockUseOutbox.mockReturnValue(outbox([], [{ barcode: '111', message: 'taste must be 0–10' }]));
+    mockUseOutbox.mockReturnValue(outbox([], [{ productId: '111', message: 'taste must be 0–10' }]));
     mockApiGet.mockResolvedValue([]);
 
     const { findByTestId, getByText } = await render(<HomeScreen />);
@@ -202,6 +202,6 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     await fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
     await fireEvent.press(getByTestId('manual-barcode-submit'));
 
-    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/4006381333931');
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/gtin/4006381333931');
   });
 });

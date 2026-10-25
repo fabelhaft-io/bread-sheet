@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockTxProductFindUnique = vi.hoisted(() => vi.fn());
+const mockTxPackagedFindUnique = vi.hoisted(() => vi.fn());
+const mockTxPackagedCreate = vi.hoisted(() => vi.fn());
+const mockTxPackagedUpdate = vi.hoisted(() => vi.fn());
 const mockTxProductCreate = vi.hoisted(() => vi.fn());
 const mockTxProductUpdate = vi.hoisted(() => vi.fn());
 const mockTxVerificationDeleteMany = vi.hoisted(() => vi.fn());
@@ -8,8 +10,12 @@ const mockTransaction = vi.hoisted(() =>
   vi.fn(
     async <T>(fn: (tx: Record<string, unknown>) => Promise<T>): Promise<T> => {
       const tx = {
+        packagedProduct: {
+          findUnique: mockTxPackagedFindUnique,
+          create: mockTxPackagedCreate,
+          update: mockTxPackagedUpdate,
+        },
         product: {
-          findUnique: mockTxProductFindUnique,
           create: mockTxProductCreate,
           update: mockTxProductUpdate,
         },
@@ -101,7 +107,7 @@ describe('fetchFromOpenFoodFacts', () => {
 
     const result = await fetchFromOpenFoodFacts('1234567890123');
     expect(result).toEqual({
-      barcode: '1234567890123',
+      gtin: '1234567890123',
       name: 'Sourdough Bread',
       brand: 'BakeryCo',
       image: 'https://example.com/img.jpg',
@@ -134,7 +140,7 @@ describe('fetchFromOpenFoodFacts', () => {
     );
   });
 
-  it('returns null (does not throw) when OFF returns HTTP 404 for an unknown barcode', async () => {
+  it('returns null (does not throw) when OFF returns HTTP 404 for an unknown GTIN', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockReturnValue(makeResponse({}, false, 404)),
@@ -144,7 +150,7 @@ describe('fetchFromOpenFoodFacts', () => {
 });
 
 const VALID_INPUT: ProductSubmissionInput = {
-  barcode: '1234567890123',
+  gtin: '1234567890123',
   name: 'Sourdough Bread',
   brand: 'BakeryCo',
   genericName: 'Bread',
@@ -162,19 +168,24 @@ const VALID_INPUT: ProductSubmissionInput = {
 
 describe('createSubmittedProduct', () => {
   beforeEach(() => {
-    mockTxProductFindUnique.mockReset();
+    mockTxPackagedFindUnique.mockReset();
+    mockTxPackagedCreate.mockReset();
+    mockTxPackagedUpdate.mockReset();
     mockTxProductCreate.mockReset();
     mockTxProductUpdate.mockReset();
     mockTxVerificationDeleteMany.mockReset();
     mockTransaction.mockClear();
   });
 
-  it('throws ProductAlreadyVerifiedError when the barcode is already VERIFIED', async () => {
-    mockTxProductFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_INPUT.barcode,
-      status: ProductStatus.VERIFIED,
-      submittedByUserId: 'other-user',
+  it('throws ProductAlreadyVerifiedError when the GTIN is already VERIFIED', async () => {
+    mockTxPackagedFindUnique.mockResolvedValue({
+      productId: 'p1',
+      gtin: VALID_INPUT.gtin,
+      product: {
+        id: 'p1',
+        status: ProductStatus.VERIFIED,
+        submittedByUserId: 'other-user',
+      },
     });
 
     await expect(
@@ -186,11 +197,14 @@ describe('createSubmittedProduct', () => {
   });
 
   it('throws ProductPreviouslyRejectedError when the original submitter resubmits a REJECTED product', async () => {
-    mockTxProductFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_INPUT.barcode,
-      status: ProductStatus.REJECTED,
-      submittedByUserId: 'user-1',
+    mockTxPackagedFindUnique.mockResolvedValue({
+      productId: 'p1',
+      gtin: VALID_INPUT.gtin,
+      product: {
+        id: 'p1',
+        status: ProductStatus.REJECTED,
+        submittedByUserId: 'user-1',
+      },
     });
 
     await expect(
@@ -201,27 +215,28 @@ describe('createSubmittedProduct', () => {
     expect(mockTxProductUpdate).not.toHaveBeenCalled();
   });
 
-  it('a different user resubmitting a REJECTED product overwrites the row and resets verifications', async () => {
-    mockTxProductFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_INPUT.barcode,
-      status: ProductStatus.REJECTED,
-      submittedByUserId: 'original-user',
+  it('a different user resubmitting a REJECTED product overwrites both rows and resets verifications', async () => {
+    mockTxPackagedFindUnique.mockResolvedValue({
+      productId: 'p1',
+      gtin: VALID_INPUT.gtin,
+      product: {
+        id: 'p1',
+        status: ProductStatus.REJECTED,
+        submittedByUserId: 'original-user',
+      },
     });
     mockTxVerificationDeleteMany.mockResolvedValue({ count: 2 });
     mockTxProductUpdate.mockResolvedValue({
-      barcode: VALID_INPUT.barcode,
+      id: 'p1',
       status: ProductStatus.PENDING_REVIEW,
     });
+    mockTxPackagedUpdate.mockResolvedValue({});
 
     const result = await createSubmittedProduct(VALID_INPUT, 'user-2');
 
     expect(result).toEqual({
       action: 'updated',
-      product: {
-        barcode: VALID_INPUT.barcode,
-        status: ProductStatus.PENDING_REVIEW,
-      },
+      product: { id: 'p1', gtin: VALID_INPUT.gtin, status: ProductStatus.PENDING_REVIEW },
     });
 
     expect(mockTxVerificationDeleteMany).toHaveBeenCalledWith({
@@ -237,14 +252,21 @@ describe('createSubmittedProduct', () => {
         submittedByUserId: 'user-2',
       }),
     });
+    expect(mockTxPackagedUpdate).toHaveBeenCalledWith({
+      where: { productId: 'p1' },
+      data: expect.objectContaining({ genericName: VALID_INPUT.genericName }),
+    });
   });
 
   it('throws ProductPendingByAnotherUserError when a different user already has a PENDING_REVIEW submission', async () => {
-    mockTxProductFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_INPUT.barcode,
-      status: ProductStatus.PENDING_REVIEW,
-      submittedByUserId: 'other-user',
+    mockTxPackagedFindUnique.mockResolvedValue({
+      productId: 'p1',
+      gtin: VALID_INPUT.gtin,
+      product: {
+        id: 'p1',
+        status: ProductStatus.PENDING_REVIEW,
+        submittedByUserId: 'other-user',
+      },
     });
 
     await expect(
@@ -255,27 +277,28 @@ describe('createSubmittedProduct', () => {
     expect(mockTxProductUpdate).not.toHaveBeenCalled();
   });
 
-  it('same user re-submitting their own PENDING_REVIEW product updates fields and resets verifications', async () => {
-    mockTxProductFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_INPUT.barcode,
-      status: ProductStatus.PENDING_REVIEW,
-      submittedByUserId: 'user-1',
+  it('same user re-submitting their own PENDING_REVIEW product updates both tables and resets verifications', async () => {
+    mockTxPackagedFindUnique.mockResolvedValue({
+      productId: 'p1',
+      gtin: VALID_INPUT.gtin,
+      product: {
+        id: 'p1',
+        status: ProductStatus.PENDING_REVIEW,
+        submittedByUserId: 'user-1',
+      },
     });
     mockTxVerificationDeleteMany.mockResolvedValue({ count: 1 });
     mockTxProductUpdate.mockResolvedValue({
-      barcode: VALID_INPUT.barcode,
+      id: 'p1',
       status: ProductStatus.PENDING_REVIEW,
     });
+    mockTxPackagedUpdate.mockResolvedValue({});
 
     const result = await createSubmittedProduct(VALID_INPUT, 'user-1');
 
     expect(result).toEqual({
       action: 'updated',
-      product: {
-        barcode: VALID_INPUT.barcode,
-        status: ProductStatus.PENDING_REVIEW,
-      },
+      product: { id: 'p1', gtin: VALID_INPUT.gtin, status: ProductStatus.PENDING_REVIEW },
     });
 
     expect(mockTxVerificationDeleteMany).toHaveBeenCalledWith({
@@ -289,49 +312,68 @@ describe('createSubmittedProduct', () => {
     expect(updateArg.data.name).toBe(VALID_INPUT.name);
   });
 
-  it('creates a brand-new PENDING_REVIEW product when no row exists for the barcode', async () => {
-    mockTxProductFindUnique.mockResolvedValue(null);
+  it('creates a brand-new PENDING_REVIEW Product + PackagedProduct when no row exists for the GTIN', async () => {
+    mockTxPackagedFindUnique.mockResolvedValue(null);
     mockTxProductCreate.mockResolvedValue({
-      barcode: VALID_INPUT.barcode,
+      id: 'p2',
       status: ProductStatus.PENDING_REVIEW,
     });
+    mockTxPackagedCreate.mockResolvedValue({});
 
     const result = await createSubmittedProduct(VALID_INPUT, 'user-1');
 
     expect(result).toEqual({
       action: 'created',
-      product: {
-        barcode: VALID_INPUT.barcode,
-        status: ProductStatus.PENDING_REVIEW,
-      },
+      product: { id: 'p2', gtin: VALID_INPUT.gtin, status: ProductStatus.PENDING_REVIEW },
     });
 
     expect(mockTxProductCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        barcode: VALID_INPUT.barcode,
+        kind: 'PACKAGED',
         name: VALID_INPUT.name,
         image: VALID_INPUT.productImageKey,
         status: ProductStatus.PENDING_REVIEW,
         submittedByUserId: 'user-1',
       }),
     });
+    expect(mockTxPackagedCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        productId: 'p2',
+        gtin: VALID_INPUT.gtin,
+        genericName: VALID_INPUT.genericName,
+        energyKcal: VALID_INPUT.energyKcal,
+      }),
+    });
   });
 
   it('maps every payload field correctly when creating a new product', async () => {
-    mockTxProductFindUnique.mockResolvedValue(null);
+    mockTxPackagedFindUnique.mockResolvedValue(null);
     mockTxProductCreate.mockResolvedValue({
-      barcode: VALID_INPUT.barcode,
+      id: 'p3',
       status: ProductStatus.PENDING_REVIEW,
     });
+    mockTxPackagedCreate.mockResolvedValue({});
 
     await createSubmittedProduct(VALID_INPUT, 'user-1');
 
-    const createArg = mockTxProductCreate.mock.calls[0][0];
-    expect(createArg.data).toMatchObject({
-      barcode: VALID_INPUT.barcode,
+    const productCreateArg = mockTxProductCreate.mock.calls[0][0];
+    expect(productCreateArg.data).toMatchObject({
+      kind: 'PACKAGED',
       name: VALID_INPUT.name,
       brand: VALID_INPUT.brand,
       image: VALID_INPUT.productImageKey,
+      status: ProductStatus.PENDING_REVIEW,
+      submittedByUserId: 'user-1',
+    });
+    // The schema field is `image`, not `productImageKey` — make sure we don't leak the wire name
+    expect(productCreateArg.data).not.toHaveProperty('productImageKey');
+    // `gtin` lives on PackagedProduct, not Product.
+    expect(productCreateArg.data).not.toHaveProperty('gtin');
+
+    const packagedCreateArg = mockTxPackagedCreate.mock.calls[0][0];
+    expect(packagedCreateArg.data).toMatchObject({
+      productId: 'p3',
+      gtin: VALID_INPUT.gtin,
       genericName: VALID_INPUT.genericName,
       energyKcal: VALID_INPUT.energyKcal,
       carbohydrates: VALID_INPUT.carbohydrates,
@@ -340,15 +382,11 @@ describe('createSubmittedProduct', () => {
       salt: VALID_INPUT.salt,
       servingSize: VALID_INPUT.servingSize,
       ingredients: VALID_INPUT.ingredients,
-      status: ProductStatus.PENDING_REVIEW,
-      submittedByUserId: 'user-1',
     });
-    // The schema field is `image`, not `productImageKey` — make sure we don't leak the wire name
-    expect(createArg.data).not.toHaveProperty('productImageKey');
   });
 
   it('translates a Prisma P2002 unique-violation race into ProductPendingByAnotherUserError', async () => {
-    mockTxProductFindUnique.mockResolvedValue(null);
+    mockTxPackagedFindUnique.mockResolvedValue(null);
     mockTxProductCreate.mockImplementation(() => {
       throw new FakePrismaKnownRequestError('Unique constraint failed', {
         code: 'P2002',
@@ -361,7 +399,7 @@ describe('createSubmittedProduct', () => {
   });
 
   it('re-throws unexpected Prisma errors (not P2002) without wrapping', async () => {
-    mockTxProductFindUnique.mockResolvedValue(null);
+    mockTxPackagedFindUnique.mockResolvedValue(null);
     const unexpected = new FakePrismaKnownRequestError('Some other failure', {
       code: 'P2003',
     });
@@ -376,7 +414,7 @@ describe('createSubmittedProduct', () => {
 
   it('re-throws unrelated errors (e.g. connection failures) without wrapping', async () => {
     const boom = new Error('DB connection lost');
-    mockTxProductFindUnique.mockImplementation(() => {
+    mockTxPackagedFindUnique.mockImplementation(() => {
       throw boom;
     });
 

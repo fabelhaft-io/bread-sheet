@@ -8,7 +8,7 @@ import {
 } from './productSubmissionValidator.js';
 
 /**
- * Validates the partial payload of POST /products/:barcode/edits (TICKET-P5-006).
+ * Validates the partial payload of POST /products/:productId/edits (TICKET-P5-006).
  * Only provided fields are validated; each follows the same rules as the full
  * submission validator. `productImageKey` (client wire name) is mapped to the
  * `image` product column. Unknown fields are rejected so typos don't silently

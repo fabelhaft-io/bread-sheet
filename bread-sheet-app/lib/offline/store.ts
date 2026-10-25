@@ -33,8 +33,15 @@ import {
  * which is backed by `localStorage` on web.
  */
 
-/** Bump to invalidate every cached document on the next launch. */
-export const CACHE_SCHEMA_VERSION = 1;
+/**
+ * Bump to invalidate every cached document on the next launch.
+ *
+ * v2 (TICKET-P6-009): every product-route key moved from `barcode` to
+ * `Product.id`, and the ratings/outbox payloads moved with it. There is no
+ * migration path for a barcode-keyed v1 document — the existing
+ * wipe-on-mismatch behaviour is the whole plan, outbox included (no users).
+ */
+export const CACHE_SCHEMA_VERSION = 2;
 
 const ROOT_DIR_NAME = 'offline';
 const VERSION_DIR_NAME = `v${CACHE_SCHEMA_VERSION}`;

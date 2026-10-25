@@ -17,9 +17,8 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
-import { api } from '@/lib/api';
 
-import { approveProduct, rejectProduct } from '@/features/products/api';
+import { approveProduct, getProduct, rejectProduct } from '@/features/products/api';
 import type { ProductDetail } from '@/features/products/types';
 
 /**
@@ -32,8 +31,8 @@ import type { ProductDetail } from '@/features/products/types';
  * "Not provided") so the reviewer can judge completeness.
  *
  * Bottom of the screen exposes two actions:
- *   - "Looks correct"       → POST /products/:barcode/verify
- *   - "Something looks wrong" → DELETE /products/:barcode/verify
+ *   - "Looks correct"       → POST /products/:id/verify
+ *   - "Something looks wrong" → DELETE /products/:id/verify
  *                               (semantics: a "no" vote is represented by
  *                                explicitly *not* verifying — P5-003 uses
  *                                the DELETE path to allow retractions, so we
@@ -41,7 +40,7 @@ import type { ProductDetail } from '@/features/products/types';
  */
 
 export default function ReviewProductScreen() {
-  const { barcode } = useLocalSearchParams<{ barcode: string }>();
+  const { id } = useLocalSearchParams<{ id: string }>();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
   const router = useRouter();
@@ -62,11 +61,10 @@ export default function ReviewProductScreen() {
     // anyway would 401/403 and surface a misleading error.
     if (!session || isAnonymous) return;
     let cancelled = false;
-    // Clear any stale error before re-fetching (e.g. on barcode/session change).
+    // Clear any stale error before re-fetching (e.g. on id/session change).
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadError(null);
-    api
-      .get<ProductDetail>(`/api/products/${barcode}`)
+    getProduct(id)
       .then((data) => {
         if (!cancelled) setProduct(data);
       })
@@ -80,37 +78,37 @@ export default function ReviewProductScreen() {
     return () => {
       cancelled = true;
     };
-  }, [barcode, session, isAnonymous]);
+  }, [id, session, isAnonymous]);
 
   const goBackToProduct = useCallback(() => {
-    router.replace({ pathname: '/(app)/product/[barcode]', params: { barcode } });
-  }, [router, barcode]);
+    router.replace({ pathname: '/(app)/product/[id]', params: { id } });
+  }, [router, id]);
 
   const onApprove = useCallback(async () => {
     if (submitting) return;
     setSubmitting('approve');
     setActionError(null);
     try {
-      await approveProduct(barcode);
+      await approveProduct(id);
       goBackToProduct();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not record approval.');
       setSubmitting(null);
     }
-  }, [barcode, goBackToProduct, submitting]);
+  }, [id, goBackToProduct, submitting]);
 
   const onReject = useCallback(async () => {
     if (submitting) return;
     setSubmitting('reject');
     setActionError(null);
     try {
-      await rejectProduct(barcode);
+      await rejectProduct(id);
       goBackToProduct();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not record rejection.');
       setSubmitting(null);
     }
-  }, [barcode, goBackToProduct, submitting]);
+  }, [id, goBackToProduct, submitting]);
 
   // Access control: anonymous users have no business here. They'd get a
   // 403 from the backend anyway (P5-003 requireRegistered), but the upstream
@@ -127,7 +125,7 @@ export default function ReviewProductScreen() {
           onPress={() =>
             router.push({
               pathname: '/(auth)/signup',
-              params: { returnTo: `/product/${barcode}` },
+              params: { returnTo: `/product/${id}` },
             })
           }
         >
@@ -197,7 +195,10 @@ export default function ReviewProductScreen() {
         <ThemedText type="title" style={styles.productName}>
           {product.name}
         </ThemedText>
-        <ThemedText style={styles.barcode}>{product.barcode}</ThemedText>
+        {/* No chip for a CUSTOM product (`packaged` null) — there is no GTIN. */}
+        {product.packaged ? (
+          <ThemedText style={styles.barcode}>{product.packaged.gtin}</ThemedText>
+        ) : null}
         <ThemedText style={styles.explanation}>
           This product was submitted by a user and is awaiting peer review.
           Please check the details match what&apos;s on the packaging.

@@ -12,7 +12,7 @@ const mockRouter = {
 };
 const mockUseLocalSearchParams = jest.fn(() => ({
   editId: 'edit-1',
-  barcode: '0000000000001',
+  productId: 'p1',
 }));
 const mockUseSession = jest.fn();
 
@@ -43,7 +43,7 @@ const mockDismiss = productsApi.dismissProductEdit as jest.Mock;
 
 const PENDING_EDIT = {
   editId: 'edit-1',
-  barcode: '0000000000001',
+  productId: 'p1',
   originalValues: {
     name: 'Sourdough Loaf',
     brand: 'Artisan',
@@ -116,8 +116,8 @@ describe('ReviewEditScreen — actions', () => {
     await fireEvent.press(await findByTestId('edit-approve'));
     await waitFor(() => expect(mockVote).toHaveBeenCalledWith('edit-1', 'APPROVE'));
     expect(mockRouter.replace).toHaveBeenCalledWith({
-      pathname: '/(app)/product/[barcode]',
-      params: { barcode: '0000000000001' },
+      pathname: '/(app)/product/[id]',
+      params: { id: 'p1' },
     });
   });
 

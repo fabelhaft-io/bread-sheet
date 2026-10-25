@@ -21,13 +21,14 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useSession } from '@/hooks/use-session';
-import { ApiError, api } from '@/lib/api';
+import { ApiError } from '@/lib/api';
 import { formatApiError } from '@/lib/format-error';
 import { log } from '@/lib/log';
 import { supabase } from '@/lib/supabase';
 
 import {
   correctProduct,
+  getProduct,
   proposeProductEdit,
   uploadProductImage,
 } from '@/features/products/api';
@@ -51,11 +52,11 @@ import type { ProductDetail } from '@/features/products/types';
  * TICKET-P5-006 — Edit Product screen.
  *
  * Same field layout as Add Product, but every field starts pre-populated with
- * the current product values and the barcode is read-only. The submit path
- * depends on the product status:
- *   - PENDING_REVIEW → PATCH /products/:barcode (in-place correction; the
+ * the current product values and the barcode (TICKET-P6-009: `product.packaged.gtin`)
+ * is read-only. The submit path depends on the product status:
+ *   - PENDING_REVIEW → PATCH /products/:id (in-place correction; the
  *     review cycle restarts and the caller becomes the submitter)
- *   - VERIFIED       → POST /products/:barcode/edits (peer-reviewed proposal;
+ *   - VERIFIED       → POST /products/:id/edits (peer-reviewed proposal;
  *     only the changed fields are sent)
  *
  * Submitting unchanged data is blocked client-side (button disabled).
@@ -63,7 +64,7 @@ import type { ProductDetail } from '@/features/products/types';
  * signup gate below is defence-in-depth.
  */
 export default function EditProductScreen() {
-  const { barcode } = useLocalSearchParams<{ barcode: string }>();
+  const { id } = useLocalSearchParams<{ id: string }>();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
   const router = useRouter();
@@ -91,8 +92,7 @@ export default function EditProductScreen() {
   useEffect(() => {
     if (!session || isAnonymous) return;
     let cancelled = false;
-    api
-      .get<ProductDetail>(`/api/products/${barcode}`)
+    getProduct(id)
       .then((data) => {
         if (cancelled) return;
         setProduct(data);
@@ -111,7 +111,7 @@ export default function EditProductScreen() {
     return () => {
       cancelled = true;
     };
-  }, [barcode, session, isAnonymous]);
+  }, [id, session, isAnonymous]);
 
   const isCorrection = product?.status === 'PENDING_REVIEW' || product?.unverified === true;
 
@@ -170,15 +170,15 @@ export default function EditProductScreen() {
 
     try {
       if (isCorrection) {
-        await correctProduct(barcode, buildCorrectionPayload(form, newImageKey));
+        await correctProduct(id, buildCorrectionPayload(form, newImageKey));
         Alert.alert('Thanks!', 'Your correction was saved — the review restarts from zero.');
       } else {
         const changes = buildEditChanges(initialForm, form, newImageKey);
         if (!changes) return; // unreachable — hasChanges gates the button
-        await proposeProductEdit(barcode, changes);
+        await proposeProductEdit(id, changes);
         Alert.alert('Thanks!', 'Your edit was submitted for peer review.');
       }
-      router.replace({ pathname: '/(app)/product/[barcode]', params: { barcode } });
+      router.replace({ pathname: '/(app)/product/[id]', params: { id } });
     } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 409) {
         const code = (err.body as { error?: string } | undefined)?.error;
@@ -202,7 +202,7 @@ export default function EditProductScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [form, initialForm, hasChanges, submitting, isCorrection, barcode, newImageKey, router]);
+  }, [form, initialForm, hasChanges, submitting, isCorrection, id, newImageKey, router]);
 
   // ─── Anonymous gate (defence-in-depth; the entry point is already hidden) ──
   if (!session || isAnonymous) {
@@ -217,7 +217,7 @@ export default function EditProductScreen() {
           onPress={() =>
             router.push({
               pathname: '/(auth)/signup',
-              params: { returnTo: `/product/${barcode}` },
+              params: { returnTo: `/product/${id}` },
             })
           }
         >
@@ -302,15 +302,18 @@ export default function EditProductScreen() {
             </ThemedText>
           ) : null}
 
-          {/* Barcode — read-only by spec */}
-          <Field
-            label="Barcode"
-            testID="field-barcode"
-            value={barcode}
-            onChangeText={() => {}}
-            readOnly
-            colors={colors}
-          />
+          {/* Barcode — read-only by spec. No field at all for a CUSTOM product
+              (`packaged` null) — there is no GTIN to show. */}
+          {product.packaged ? (
+            <Field
+              label="Barcode"
+              testID="field-barcode"
+              value={product.packaged.gtin}
+              onChangeText={() => {}}
+              readOnly
+              colors={colors}
+            />
+          ) : null}
           <Field
             label="Name *"
             testID="field-name"

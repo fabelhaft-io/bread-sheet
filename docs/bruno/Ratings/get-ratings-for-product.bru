@@ -1,11 +1,11 @@
 meta {
   name: Get ratings for product
   type: http
-  seq: 3
+  seq: 2
 }
 
 get {
-  url: {{baseUrl}}/api/ratings/product/{{barcode}}
+  url: {{baseUrl}}/api/ratings/product/{{productId}}
   body: none
   auth: bearer
 }
@@ -16,4 +16,5 @@ auth:bearer {
 
 docs {
   Returns all ratings for a product (most recent first), each with the author's id / username / avatar.
+  `:productId` must be a UUID (400 { code: 'invalid_product_id' } otherwise, TICKET-P6-009).
 }

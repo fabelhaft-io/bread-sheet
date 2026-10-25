@@ -6,18 +6,17 @@ import { ApiError, NetworkError } from '@/lib/api';
 import { productCache, ratingsCache } from '@/lib/offline/caches';
 import { __resetOfflineStoreForTests, setActiveCacheUser } from '@/lib/offline/store';
 
-import ProductScreen from './[barcode]';
+import ProductScreen from './[id]';
 
 /**
- * Offline behaviour of the product screen (P8-002 / P8-004).
- *
- * The distinction these tests protect: "the server said this barcode does not
- * exist" and "the request never left the device" must never render the same
- * way. Offering "Add this product" to someone standing in a supermarket with
- * no signal sends them into a submission flow that cannot succeed.
+ * Offline behaviour of the product screen (P8-002 / P8-004), re-keyed to
+ * `Product.id` (TICKET-P6-009). The code-shaped 404/400/offline-uncached
+ * states moved to the `product/gtin/[gtin]` resolver — this screen only
+ * handles the offline-with-nothing-cached-for-this-id edge case (a direct
+ * deep link to an id this device never cached) plus the id-404 dead end.
  */
 
-const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn() };
+const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 const mockUseSession = jest.fn();
 const mockEnqueue = jest.fn().mockResolvedValue(undefined);
 const mockIsQueued = jest.fn().mockReturnValue(false);
@@ -26,7 +25,7 @@ jest.mock('expo-router', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const React = require('react');
   return {
-    useLocalSearchParams: () => ({ barcode: '0000000000001' }),
+    useLocalSearchParams: () => ({ id: 'p1' }),
     useRouter: () => mockRouter,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run-once mock
     useFocusEffect: (cb: () => unknown) => React.useEffect(() => cb(), []),
@@ -41,7 +40,7 @@ jest.mock('@/hooks/use-outbox', () => ({
   useOutbox: () => ({
     queued: [],
     failures: [],
-    isQueued: (barcode: string) => mockIsQueued(barcode),
+    isQueued: (productId: string) => mockIsQueued(productId),
     enqueue: mockEnqueue,
     flush: jest.fn(),
     dismissFailures: jest.fn(),
@@ -90,12 +89,25 @@ const mockApiPost = api.post as jest.Mock;
 
 const PRODUCT = {
   id: 'p1',
-  barcode: '0000000000001',
+  kind: 'PACKAGED' as const,
   name: 'Sourdough Loaf',
   brand: 'Artisan',
   image: null,
   description: null,
   status: 'VERIFIED' as const,
+  packaged: {
+    gtin: '0000000000001',
+    genericName: null,
+    energyKcal: null,
+    fat: null,
+    saturatedFat: null,
+    carbohydrates: null,
+    sugars: null,
+    protein: null,
+    salt: null,
+    servingSize: null,
+    ingredients: null,
+  },
 };
 
 describe('ProductScreen — offline (P8-002)', () => {
@@ -113,7 +125,7 @@ describe('ProductScreen — offline (P8-002)', () => {
   });
 
   it('renders a previously viewed product from cache with an offline strip', async () => {
-    await productCache(PRODUCT.barcode).write(PRODUCT);
+    await productCache(PRODUCT.id).write(PRODUCT);
     await ratingsCache.write([]);
     mockApiGet.mockRejectedValue(new NetworkError());
 
@@ -121,30 +133,29 @@ describe('ProductScreen — offline (P8-002)', () => {
 
     await findByText('Sourdough Loaf');
     await findByTestId('product-offline-indicator');
-    expect(queryByTestId('product-not-found')).toBeNull();
+    expect(queryByTestId('product-id-not-found')).toBeNull();
   });
 
-  it('shows the offline state — not "add this product" — for an uncached barcode', async () => {
+  it('shows the offline state — not "not found" — for an uncached id', async () => {
     mockApiGet.mockRejectedValue(new NetworkError());
 
     const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
     await findByTestId('product-offline');
-    expect(queryByTestId('product-not-found')).toBeNull();
-    expect(queryByTestId('product-not-found-add')).toBeNull();
+    expect(queryByTestId('product-id-not-found')).toBeNull();
   });
 
-  it('still shows the not-found state when the server genuinely answers 404', async () => {
+  it('shows the plain id-not-found state when the server genuinely answers 404', async () => {
     mockApiGet.mockRejectedValue(new ApiError(404, 'Product not found', {}));
 
     const { findByTestId, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
 
-    await findByTestId('product-not-found');
+    await findByTestId('product-id-not-found');
     expect(queryByTestId('product-offline')).toBeNull();
   });
 
   it('pre-fills the rating from the cached ratings list with no network at all', async () => {
-    await productCache(PRODUCT.barcode).write(PRODUCT);
+    await productCache(PRODUCT.id).write(PRODUCT);
     await ratingsCache.write([
       {
         id: 'r1',
@@ -152,7 +163,7 @@ describe('ProductScreen — offline (P8-002)', () => {
         taste: 9,
         comment: 'Great crust',
         createdAt: '2026-07-01T00:00:00.000Z',
-        product: { id: 'p1', barcode: PRODUCT.barcode, name: PRODUCT.name, brand: null, image: null },
+        product: { id: 'p1', kind: 'PACKAGED', name: PRODUCT.name, brand: null, image: null },
       },
     ]);
     mockApiGet.mockRejectedValue(new NetworkError());
@@ -190,7 +201,7 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
 
     await findByTestId('rating-queued-offline');
     expect(mockEnqueue).toHaveBeenCalledWith({
-      barcode: PRODUCT.barcode,
+      productId: PRODUCT.id,
       taste: 5,
       comment: null,
     });
@@ -205,7 +216,7 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
     await findByTestId('rating-queued-offline');
 
     expect(await ratingsCache.read()).toMatchObject([
-      { taste: 5, product: { barcode: PRODUCT.barcode } },
+      { taste: 5, product: { id: PRODUCT.id } },
     ]);
   });
 
@@ -216,7 +227,7 @@ describe('ProductScreen — offline rating submission (P8-004)', () => {
       taste: 5,
       comment: null,
       createdAt: '2026-07-29T00:00:00.000Z',
-      product: { id: 'p1', barcode: PRODUCT.barcode, name: PRODUCT.name, brand: null, image: null },
+      product: { id: 'p1', kind: 'PACKAGED', name: PRODUCT.name, brand: null, image: null },
     });
 
     const { findByText, getByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });

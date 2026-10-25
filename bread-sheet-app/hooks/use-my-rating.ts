@@ -7,7 +7,8 @@ import { getActiveCacheUser } from '@/lib/offline/store';
 
 /**
  * The caller's own rating for one product, read out of the cached
- * `/api/users/me/ratings` payload (P8-002).
+ * `/api/users/me/ratings` payload (P8-002). Keyed by `Product.id` since
+ * TICKET-P6-009.
  *
  * This replaces the `GET /api/ratings/me/:barcode` round trip the product
  * screen used to make — one fewer request per product open, online as well as
@@ -15,9 +16,9 @@ import { getActiveCacheUser } from '@/lib/offline/store';
  * install, or a deep link straight into a product): that is still a single
  * request, and it primes the Home tab at the same time.
  */
-export function useMyRating(userId: string | null, barcode: string) {
+export function useMyRating(userId: string | null, productId: string) {
   const [rating, setRating] = useState<RatingEntry | null>(() =>
-    findCachedRating(ratingsCache.peek(), barcode),
+    findCachedRating(ratingsCache.peek(), productId),
   );
   const [isResolved, setIsResolved] = useState(() => ratingsCache.peek() !== null);
 
@@ -35,7 +36,7 @@ export function useMyRating(userId: string | null, barcode: string) {
       const cached = await ratingsCache.read();
       if (cancelled) return;
       if (cached) {
-        setRating(findCachedRating(cached, barcode));
+        setRating(findCachedRating(cached, productId));
         setIsResolved(true);
         return;
       }
@@ -45,7 +46,7 @@ export function useMyRating(userId: string | null, barcode: string) {
         // The account may have changed while the request was in flight; these
         // are one user's private ratings and must not land in another's cache.
         if (getActiveCacheUser() === userId) await ratingsCache.write(fresh);
-        setRating(findCachedRating(fresh, barcode));
+        setRating(findCachedRating(fresh, productId));
       } catch {
         // Offline or an API failure — the user simply gets no pre-filled score.
       } finally {
@@ -55,7 +56,7 @@ export function useMyRating(userId: string | null, barcode: string) {
     return () => {
       cancelled = true;
     };
-  }, [userId, barcode]);
+  }, [userId, productId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   /** Reflect a just-submitted (or just-queued) rating without a refetch. */

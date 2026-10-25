@@ -5,7 +5,7 @@ meta {
 }
 
 post {
-  url: {{baseUrl}}/api/products/{{barcode}}/edits
+  url: {{baseUrl}}/api/products/{{productId}}/edits
   body: json
   auth: bearer
 }
@@ -28,23 +28,25 @@ script:post-response {
 }
 
 docs {
-  TICKET-P5-006 — Propose a change to a VERIFIED product. Registered users only.
+  TICKET-P5-006 (re-keyed in TICKET-P6-009) — Propose a change to a VERIFIED product. Registered
+  users only. `:productId` must be a UUID (400 { code: 'invalid_product_id' } otherwise).
 
-  Send ONLY the changed fields (partial payload). Editable fields: name, brand, genericName,
-  energyKcal, fat, saturatedFat, carbohydrates, sugars, protein, salt, servingSize, ingredients,
-  productImageKey (when the photo was replaced). Unknown fields are rejected. Values equal to the
-  current product value are dropped server-side; an effectively empty diff is a 422 (no_changes).
+  Send ONLY the changed fields (partial payload). Editable fields span both tables but stay flat in
+  the request: name, brand (Product), genericName, energyKcal, fat, saturatedFat, carbohydrates,
+  sugars, protein, salt, servingSize, ingredients (PackagedProduct), productImageKey (Product.image,
+  when the photo was replaced). Unknown fields are rejected. Values equal to the current product value
+  are dropped server-side; an effectively empty diff is a 422 (no_changes).
 
   The edit is stored as PENDING with an originalValues snapshot; two other registered users must
-  approve before it is applied. The DB enforces one PENDING edit per barcode via a partial unique
-  index (one_pending_edit_per_product).
+  approve before it is applied. The DB enforces one PENDING edit per product via a partial unique
+  index (one_pending_edit_per_product, now keyed on productId).
 
   On 201 the post-response script stores `editId` for the vote/dismiss requests.
 
   Errors:
   - 401 — unauthenticated
   - 403 — anonymous user
-  - 404 — product not found ({ error: 'product_not_found' })
+  - 404 — product not found, including REJECTED ({ error: 'product_not_found' })
   - 409 — pending edit already exists ({ error: 'edit_pending' }) or product not VERIFIED ({ error: 'product_not_verified' })
   - 422 — validation failure / no changes
 }

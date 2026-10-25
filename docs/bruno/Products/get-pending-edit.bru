@@ -5,7 +5,7 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/api/products/{{barcode}}/edits/pending
+  url: {{baseUrl}}/api/products/{{productId}}/edits/pending
   body: none
   auth: bearer
 }
@@ -15,14 +15,16 @@ auth:bearer {
 }
 
 docs {
-  TICKET-P5-006 — Current pending edit for a product, or { edit: null }.
+  TICKET-P5-006 (re-keyed in TICKET-P6-009) — Current pending edit for a product, or { edit: null }.
+  `:productId` must be a UUID (400 { code: 'invalid_product_id' } otherwise); a REJECTED or unknown
+  product id is 404 ({ error: 'product_not_found' }), via services/productVisibility.ts.
 
   Drives the client's review banner and the diff screen. Response shape:
 
   {
     "edit": {
       "editId": "...",
-      "barcode": "...",
+      "productId": "...",
       "originalValues": { ...snapshot at proposal time, image keys resolved to URLs },
       "proposedChanges": { ...changed fields only },
       "approvals": 1,

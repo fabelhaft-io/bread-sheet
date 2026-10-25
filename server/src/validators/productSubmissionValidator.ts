@@ -1,4 +1,5 @@
 import { ProductSubmissionInput } from '../services/productService.js';
+import { isValidUuid } from './idValidator.js';
 
 export class SubmissionValidationError extends Error {
   constructor(
@@ -60,12 +61,12 @@ export function validateProductSubmission(
   }
   const b = body as Record<string, unknown>;
 
-  // Barcode: digits only, 8–14 chars
-  const barcode = requireString(b.barcode, 'barcode', 14);
-  if (!/^\d{8,14}$/.test(barcode)) {
+  // GTIN: digits only, 8–14 chars
+  const gtin = requireString(b.gtin, 'gtin', 14);
+  if (!/^\d{8,14}$/.test(gtin)) {
     throw new SubmissionValidationError(
-      'barcode',
-      'barcode must be 8–14 digits',
+      'gtin',
+      'gtin must be 8–14 digits',
     );
   }
 
@@ -86,18 +87,20 @@ export function validateProductSubmission(
 
   return {
     ...validateSharedFields(b),
-    barcode,
+    gtin,
     productImageKey,
   };
 }
 
 /**
- * PATCH /products/:barcode (PENDING_REVIEW correction, TICKET-P5-006): same
- * full payload as a submission, except `productImageKey` is optional — the
- * client only holds a resolved image URL, not the S3 key, so it omits the
- * field unless the photo was actually replaced. `null` = keep current image.
+ * PATCH /products/:productId (PENDING_REVIEW correction, TICKET-P5-006): same
+ * full payload as a submission, keyed by `productId` (the UUID route param)
+ * instead of a GTIN, except `productImageKey` is optional — the client only
+ * holds a resolved image URL, not the S3 key, so it omits the field unless
+ * the photo was actually replaced. `null` = keep current image.
  */
-export type ProductCorrectionInput = Omit<ProductSubmissionInput, 'productImageKey'> & {
+export type ProductCorrectionInput = Omit<ProductSubmissionInput, 'productImageKey' | 'gtin'> & {
+  productId: string;
   productImageKey: string | null;
 };
 
@@ -107,9 +110,9 @@ export function validateProductCorrection(body: unknown): ProductCorrectionInput
   }
   const b = body as Record<string, unknown>;
 
-  const barcode = requireString(b.barcode, 'barcode', 14);
-  if (!/^\d{8,14}$/.test(barcode)) {
-    throw new SubmissionValidationError('barcode', 'barcode must be 8–14 digits');
+  const productId = requireString(b.productId, 'productId', 64);
+  if (!isValidUuid(productId)) {
+    throw new SubmissionValidationError('productId', 'productId must be a valid id');
   }
 
   let productImageKey: string | null = null;
@@ -125,7 +128,7 @@ export function validateProductCorrection(body: unknown): ProductCorrectionInput
 
   return {
     ...validateSharedFields(b),
-    barcode,
+    productId,
     productImageKey,
   };
 }

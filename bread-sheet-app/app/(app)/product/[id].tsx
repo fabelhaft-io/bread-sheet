@@ -20,7 +20,6 @@ import Animated, {
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
-import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { SPACING_COMPACT } from '@/constants/spacing';
@@ -35,7 +34,6 @@ import { useOutbox } from '@/hooks/use-outbox';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
 import { getPendingEdit } from '@/features/products/api';
-import { sanitizeBarcodeInput } from '@/features/products/barcode';
 import type { PendingEdit, ProductDetail } from '@/features/products/types';
 import type { RatingEntry } from '@/features/ratings/types';
 
@@ -334,8 +332,15 @@ const sliderStyles = StyleSheet.create({
 
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
+/**
+ * TICKET-P6-009: identity is `Product.id`. The code-shaped states (invalid
+ * barcode, not-found-by-gtin, offline-with-nothing-cached) moved to the
+ * `product/gtin/[gtin]` resolver, which always redirects here with an id once
+ * it has one — this screen only ever renders found / id-not-found / generic
+ * error / the success card.
+ */
 export default function ProductScreen() {
-  const { barcode } = useLocalSearchParams<{ barcode: string }>();
+  const { id } = useLocalSearchParams<{ id: string }>();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
   const router = useRouter();
@@ -347,7 +352,7 @@ export default function ProductScreen() {
 
   const { compact, scrollProps } = useFitToScreen();
 
-  const fetchProduct = useCallback(() => api.get<Product>(`/api/products/${barcode}`), [barcode]);
+  const fetchProduct = useCallback(() => api.get<Product>(`/api/products/${id}`), [id]);
 
   // Product: painted from the on-disk cache first, revalidated in the
   // background (P8-002). `error` only ever holds an HTTP failure — a request
@@ -360,24 +365,21 @@ export default function ProductScreen() {
     error: loadError,
     refresh: refreshProduct,
   } = useCachedResource<Product>({
-    key: `product:${barcode}`,
-    cache: productCache(barcode),
+    key: `product:${id}`,
+    cache: productCache(id),
     fetcher: fetchProduct,
   });
 
+  // A product that genuinely no longer exists (rejected, or an id that never
+  // existed). Unlike the gtin resolver's not-found state there is no gtin to
+  // offer "add this product" against — an id is opaque.
   const notFound = loadError instanceof ApiError && loadError.status === 404;
-
-  // The server rejected the code itself (`^\d{8,13}$`). Reachable from a deep
-  // link or a scan of an unsupported symbology; P6-006 answers it with the
-  // manual-entry sheet pre-filled rather than a raw "Invalid barcode format".
-  const invalidBarcode = loadError instanceof ApiError && loadError.status === 400;
-  const [manualDismissed, setManualDismissed] = useState(false);
 
   // Pending edit on a VERIFIED product (P5-006). Drives both the "review this
   // change" banner and the hide-edit-button-with-notice state.
   const [pendingEdit, setPendingEdit] = useState<PendingEdit | null>(null);
 
-  const { rating: existingRating, applyLocalRating } = useMyRating(userId, barcode);
+  const { rating: existingRating, applyLocalRating } = useMyRating(userId, id);
 
   const [taste, setTaste] = useState(5);
   const [comment, setComment] = useState('');
@@ -404,7 +406,7 @@ export default function ProductScreen() {
   useEffect(() => {
     if (product) {
       addRecentProduct({
-        barcode: product.barcode,
+        id: product.id,
         name: product.name,
         brand: product.brand,
         image: product.image,
@@ -424,7 +426,7 @@ export default function ProductScreen() {
       return;
     }
     let cancelled = false;
-    getPendingEdit(product.barcode)
+    getPendingEdit(product.id)
       .then(({ edit }) => { if (!cancelled) setPendingEdit(edit); })
       .catch(() => { if (!cancelled) setPendingEdit(null); });
     return () => { cancelled = true; };
@@ -470,11 +472,11 @@ export default function ProductScreen() {
     const trimmed = comment.trim();
     try {
       const saved = await api.post<RatingEntry>('/api/ratings', {
-        barcode: product.barcode,
+        productId: product.id,
         taste,
         comment: trimmed || undefined,
       });
-      if (saved?.product?.barcode) {
+      if (saved?.product?.id) {
         await upsertCachedRating(saved);
         applyLocalRating(saved);
       }
@@ -486,20 +488,20 @@ export default function ProductScreen() {
         // (user, product), so replay is idempotent and the local value is by
         // definition the user's latest intent (P8-004).
         const optimistic: RatingEntry = {
-          id: existingRating?.id ?? `local:${product.barcode}`,
+          id: existingRating?.id ?? `local:${product.id}`,
           score: taste,
           taste,
           comment: trimmed || null,
           createdAt: new Date().toISOString(),
           product: {
             id: product.id,
-            barcode: product.barcode,
+            kind: product.kind,
             name: product.name,
             brand: product.brand,
             image: product.image,
           },
         };
-        await enqueue({ barcode: product.barcode, taste, comment: trimmed || null });
+        await enqueue({ productId: product.id, taste, comment: trimmed || null });
         await upsertCachedRating(optimistic);
         applyLocalRating(optimistic);
         setQueuedOffline(true);
@@ -513,7 +515,7 @@ export default function ProductScreen() {
   }, [product, taste, comment, submitting, existingRating, enqueue, applyLocalRating]);
 
   const isUpdate = existingRating !== null;
-  const pendingSync = product ? isQueued(product.barcode) : false;
+  const pendingSync = product ? isQueued(product.id) : false;
 
   if (loading || (!product && !notFound && !loadError && !isOffline)) {
     return (
@@ -523,8 +525,10 @@ export default function ProductScreen() {
     );
   }
 
-  // Offline with nothing cached for this barcode. Deliberately *not* the
-  // not-found state: we have no idea whether this product exists (P8-002).
+  // Offline with nothing cached for this id. Rare by construction — the gtin
+  // resolver is the usual entry point and only hands out an id once the
+  // product has been written to this device's cache — but a direct deep link
+  // to an id that was never cached here can still land in this state.
   if (!product && isOffline) {
     return (
       <ThemedView style={styles.center} testID="product-offline">
@@ -535,7 +539,6 @@ export default function ProductScreen() {
         <ThemedText style={styles.notFoundBody}>
           We haven&apos;t saved this product on this device yet. Reconnect to look it up.
         </ThemedText>
-        <ThemedText style={styles.barcodeChip}>{barcode}</ThemedText>
         <TouchableOpacity
           testID="product-offline-retry"
           style={[styles.button, { backgroundColor: colors.tint }]}
@@ -547,97 +550,39 @@ export default function ProductScreen() {
     );
   }
 
-  if (invalidBarcode && !product) {
+  // Id-based 404 (rejected or deleted). Unlike the gtin resolver's not-found
+  // state, there is no gtin here to offer "add this product" against — an id
+  // is opaque, so this is a plain dead end back to Home.
+  if (notFound && !product) {
     return (
-      <ThemedView style={styles.center} testID="product-invalid-barcode">
-        <Text style={styles.successIcon}>🔢</Text>
+      <ThemedView style={styles.center} testID="product-id-not-found">
+        <Text style={styles.successIcon}>🤔</Text>
         <ThemedText type="title" style={styles.successTitle}>
-          That code doesn&apos;t look right
+          Product not found
         </ThemedText>
         <ThemedText style={styles.notFoundBody}>
-          Product barcodes are 8–13 digits. Check the number printed under the barcode.
+          This product is no longer available.
         </ThemedText>
         <TouchableOpacity
-          testID="product-invalid-barcode-retry"
+          testID="product-not-found-home"
           style={[styles.button, { backgroundColor: colors.tint }]}
-          onPress={() => setManualDismissed(false)}
+          onPress={goHome}
         >
-          <Text style={[styles.buttonText, { color: colors.background }]}>Enter code manually</Text>
+          <Text style={[styles.buttonText, { color: colors.background }]}>Back to Home</Text>
         </TouchableOpacity>
-        <ManualBarcodeSheet
-          visible={!manualDismissed}
-          onClose={() => setManualDismissed(true)}
-          initialValue={sanitizeBarcodeInput(barcode)}
-          subtitle="Product barcodes are 8–13 digits. Correct the number below."
-          // `replace`, not `push`: the corrected code takes the place of the
-          // broken screen instead of stacking a second one behind it.
-          onSubmit={(code) => router.replace(`/(app)/product/${code}`)}
-        />
       </ThemedView>
     );
   }
 
   if (loadError && !notFound && !product) {
     return (
-      // testID (P9-003): the fourth product-screen state. The Maestro flows assert they landed
+      // testID (P9-003): a backend-hiccup state. The Maestro flows assert they landed
       // on the product screen in *any* state; without this one a backend hiccup reads as a
       // navigation failure, which is what it did in CI.
       <ThemedView style={styles.center} testID="product-error">
         <ThemedText style={styles.errorText}>
           {formatApiError(loadError, 'Could not load this product. Please try again.')}
         </ThemedText>
-      </ThemedView>
-    );
-  }
-
-  if (notFound && !product) {
-    return (
-      <ThemedView style={styles.center} testID="product-not-found">
-        <Text style={styles.successIcon}>🤔</Text>
-        <ThemedText type="title" style={styles.successTitle}>
-          Product not found
-        </ThemedText>
-        <ThemedText style={styles.notFoundBody}>
-          This product isn&apos;t in the database yet.
-        </ThemedText>
-        <ThemedText style={styles.barcodeChip}>{barcode}</ThemedText>
-
-        {isAnonymous ? (
-          <>
-            <ThemedText style={styles.notFoundHint}>
-              Sign up to help add it.
-            </ThemedText>
-            <TouchableOpacity
-              testID="product-not-found-signup"
-              style={[styles.button, { backgroundColor: colors.tint }]}
-              onPress={() =>
-                router.push({
-                  pathname: '/(auth)/signup',
-                  params: { returnTo: `/product/${barcode}` },
-                })
-              }
-            >
-              <Text style={[styles.buttonText, { color: colors.background }]}>
-                Sign up
-              </Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          <TouchableOpacity
-            testID="product-not-found-add"
-            style={[styles.button, { backgroundColor: colors.tint }]}
-            onPress={() =>
-              router.replace({
-                pathname: '/(app)/add-product',
-                params: { barcode },
-              })
-            }
-          >
-            <Text style={[styles.buttonText, { color: colors.background }]}>
-              Add this product
-            </Text>
-          </TouchableOpacity>
-        )}
       </ThemedView>
     );
   }
@@ -763,8 +708,8 @@ export default function ProductScreen() {
             ]}
             onPress={() =>
               router.push({
-                pathname: '/(app)/review-product/[barcode]',
-                params: { barcode },
+                pathname: '/(app)/review-product/[id]',
+                params: { id },
               })
             }
           >
@@ -798,7 +743,7 @@ export default function ProductScreen() {
           onPress={() =>
             router.push({
               pathname: '/(app)/review-edit/[editId]',
-              params: { editId: pendingEdit.editId, barcode },
+              params: { editId: pendingEdit.editId, productId: id },
             })
           }
         >
@@ -820,7 +765,14 @@ export default function ProductScreen() {
         {product?.description ? (
           <ThemedText style={styles.description}>{product.description}</ThemedText>
         ) : null}
-        <ThemedText style={styles.barcodeChip}>{barcode}</ThemedText>
+        {/*
+          A CUSTOM product (P6-007, not built yet) has no `packaged` row and
+          therefore no GTIN to show — the chip (and, later, any nutrition
+          section) is omitted entirely rather than shown as "not provided".
+        */}
+        {product?.packaged ? (
+          <ThemedText style={styles.barcodeChip}>{product.packaged.gtin}</ThemedText>
+        ) : null}
 
         {/*
           Edit entry point (P5-006). Registered users only — absent (not
@@ -835,7 +787,7 @@ export default function ProductScreen() {
               testID="edit-product-button"
               style={[styles.editLink, { borderColor: colors.tint }]}
               onPress={() =>
-                router.push({ pathname: '/(app)/edit-product/[barcode]', params: { barcode } })
+                router.push({ pathname: '/(app)/edit-product/[id]', params: { id } })
               }
             >
               <Text style={[styles.editLinkText, { color: colors.tint }]}>
@@ -852,7 +804,7 @@ export default function ProductScreen() {
                 testID="edit-product-button"
                 style={[styles.editLink, { borderColor: colors.tint }]}
                 onPress={() =>
-                  router.push({ pathname: '/(app)/edit-product/[barcode]', params: { barcode } })
+                  router.push({ pathname: '/(app)/edit-product/[id]', params: { id } })
                 }
               >
                 <Text style={[styles.editLinkText, { color: colors.tint }]}>✏️ Edit product</Text>
@@ -1041,12 +993,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     opacity: 0.8,
     marginTop: 4,
-  },
-  notFoundHint: {
-    fontSize: 14,
-    textAlign: 'center',
-    opacity: 0.6,
-    marginTop: 8,
   },
   reviewBanner: {
     flexDirection: 'row',

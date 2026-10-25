@@ -1,14 +1,14 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
-import ReviewProductScreen from './[barcode]';
+import ReviewProductScreen from './[id]';
 
 const mockRouter = {
   push: jest.fn(),
   replace: jest.fn(),
   back: jest.fn(),
 };
-const mockUseLocalSearchParams = jest.fn(() => ({ barcode: '0000000000001' }));
+const mockUseLocalSearchParams = jest.fn(() => ({ id: 'p1' }));
 const mockUseSession = jest.fn();
 
 jest.mock('expo-router', () => ({
@@ -20,22 +20,19 @@ jest.mock('@/hooks/use-session', () => ({
   useSession: () => mockUseSession(),
 }));
 
-jest.mock('@/lib/api');
-
 jest.mock('@/features/products/api', () => ({
+  getProduct: jest.fn(),
   approveProduct: jest.fn(),
   rejectProduct: jest.fn(),
 }));
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { api } = require('@/lib/api');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const productsApi = require('@/features/products/api');
 
 describe('ReviewProductScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseLocalSearchParams.mockReturnValue({ barcode: '0000000000001' });
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p1' });
     mockUseSession.mockReturnValue({
       session: { user: { id: 'reviewer', is_anonymous: false } },
       isAnonymous: false,
@@ -54,14 +51,14 @@ describe('ReviewProductScreen', () => {
     await fireEvent.press(getByText('Sign up'));
     expect(mockRouter.push).toHaveBeenCalledWith({
       pathname: '/(auth)/signup',
-      params: { returnTo: '/product/0000000000001' },
+      params: { returnTo: '/product/p1' },
     });
   });
 
   it('calls approveProduct when the reviewer taps "Looks correct"', async () => {
-    api.get.mockResolvedValue({
+    productsApi.getProduct.mockResolvedValue({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Mystery bread',
       brand: null,
       image: null,
@@ -69,6 +66,7 @@ describe('ReviewProductScreen', () => {
       unverified: true,
       submittedByUserId: 'someone-else',
       submission: { name: 'Mystery bread' },
+      packaged: { gtin: '0000000000001' },
     });
     productsApi.approveProduct.mockResolvedValue({ verifications: 1 });
 
@@ -76,18 +74,18 @@ describe('ReviewProductScreen', () => {
     const btn = await findByTestId('review-approve');
     await fireEvent.press(btn);
     await waitFor(() =>
-      expect(productsApi.approveProduct).toHaveBeenCalledWith('0000000000001'),
+      expect(productsApi.approveProduct).toHaveBeenCalledWith('p1'),
     );
     expect(mockRouter.replace).toHaveBeenCalledWith({
-      pathname: '/(app)/product/[barcode]',
-      params: { barcode: '0000000000001' },
+      pathname: '/(app)/product/[id]',
+      params: { id: 'p1' },
     });
   });
 
   it('hides action buttons and shows a note when the viewer is the submitter', async () => {
-    api.get.mockResolvedValue({
+    productsApi.getProduct.mockResolvedValue({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'My bread',
       brand: null,
       image: null,
@@ -95,6 +93,7 @@ describe('ReviewProductScreen', () => {
       unverified: true,
       submittedByUserId: 'reviewer',
       submission: { name: 'My bread' },
+      packaged: { gtin: '0000000000001' },
     });
     const { findByTestId, queryByTestId } = await render(<ReviewProductScreen />);
     await findByTestId('own-submission-note');
@@ -103,15 +102,16 @@ describe('ReviewProductScreen', () => {
   });
 
   it('renders every submission field, surfacing nulls as "Not provided"', async () => {
-    api.get.mockResolvedValue({
+    productsApi.getProduct.mockResolvedValue({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'PACKAGED',
       name: 'Mystery bread',
       brand: 'Artisan',
       image: null,
       description: null,
       unverified: true,
       submittedByUserId: 'someone-else',
+      packaged: { gtin: '0000000000001' },
       submission: {
         name: 'Mystery bread',
         brand: 'Artisan',
@@ -132,15 +132,34 @@ describe('ReviewProductScreen', () => {
     expect(getAllByText('Not provided').length).toBeGreaterThanOrEqual(9);
   });
 
-  it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
-    api.get.mockResolvedValue({
+  it('omits the barcode chip for a CUSTOM product (no packaged row)', async () => {
+    productsApi.getProduct.mockResolvedValue({
       id: 'p1',
-      barcode: '0000000000001',
+      kind: 'CUSTOM',
+      name: 'Whisky Sour',
+      brand: null,
+      image: null,
+      description: null,
+      unverified: true,
+      submittedByUserId: 'someone-else',
+      packaged: null,
+      submission: { name: 'Whisky Sour' },
+    });
+    const { findAllByText, queryByText } = await render(<ReviewProductScreen />);
+    await findAllByText('Whisky Sour');
+    expect(queryByText(/^\d{8,13}$/)).toBeNull();
+  });
+
+  it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
+    productsApi.getProduct.mockResolvedValue({
+      id: 'p1',
+      kind: 'PACKAGED',
       name: 'Mystery bread',
       brand: null,
       image: null,
       description: null,
       unverified: true,
+      packaged: { gtin: '0000000000001' },
       submission: { submittedByUserId: 'submitter' },
     });
     const { findByTestId } = await render(<ReviewProductScreen />);

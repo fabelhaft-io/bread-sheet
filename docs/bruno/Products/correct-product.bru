@@ -5,7 +5,7 @@ meta {
 }
 
 patch {
-  url: {{baseUrl}}/api/products/{{barcode}}
+  url: {{baseUrl}}/api/products/{{productId}}
   body: json
   auth: bearer
 }
@@ -32,19 +32,22 @@ body:json {
 }
 
 docs {
-  TICKET-P5-006 — In-place correction of a PENDING_REVIEW submission. Registered users only.
+  TICKET-P5-006 (re-keyed in TICKET-P6-009) — In-place correction of a PENDING_REVIEW submission.
+  Registered users only. `:productId` must be a UUID (400 { code: 'invalid_product_id' } otherwise).
 
-  Accepts a FULL product payload (barcode comes from the URL). On success the product data is replaced,
-  all existing verification votes are deleted (review restarts from zero), and the caller becomes the
-  submitter. `productImageKey` is OPTIONAL — include it only when the photo was replaced via
-  POST /upload-image; omitting it keeps the current image.
+  Accepts a FULL product payload (the id comes from the URL, not the body). On success the Product
+  fields (name, brand) and — for a PACKAGED product — the PackagedProduct fields (nutrition,
+  ingredients) are replaced in one transaction, all existing verification votes are deleted (review
+  restarts from zero), and the caller becomes the submitter. `productImageKey` is OPTIONAL — include
+  it only when the photo was replaced via POST /upload-image; omitting it keeps the current image.
 
-  Response: the updated product (image key resolved to a URL).
+  Response: the updated product, serialized the same way as Get product by id (nutrition nested
+  under `packaged`).
 
   Errors:
   - 401 — unauthenticated
   - 403 — anonymous user ({ error: 'Registration required' })
-  - 404 — product not found ({ error: 'product_not_found' })
+  - 404 — product not found, including REJECTED ({ error: 'product_not_found' })
   - 409 — product is VERIFIED, use the edit-proposal flow ({ error: 'product_verified' })
   - 422 — validation failure ({ error, reason, field })
 }

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockTxProductFindUnique = vi.hoisted(() => vi.fn());
+const mockTxProductFindFirst = vi.hoisted(() => vi.fn());
 const mockTxProductUpdate = vi.hoisted(() => vi.fn());
+const mockTxPackagedUpdate = vi.hoisted(() => vi.fn());
 const mockTxVerificationDeleteMany = vi.hoisted(() => vi.fn());
 const mockTxEditFindUnique = vi.hoisted(() => vi.fn());
 const mockTxEditFindFirst = vi.hoisted(() => vi.fn());
@@ -11,6 +12,7 @@ const mockTxVoteCreate = vi.hoisted(() => vi.fn());
 const mockTxVoteFindMany = vi.hoisted(() => vi.fn());
 const mockTxVoteDeleteMany = vi.hoisted(() => vi.fn());
 
+const mockProductFindFirst = vi.hoisted(() => vi.fn());
 const mockEditFindFirst = vi.hoisted(() => vi.fn());
 const mockEditFindUnique = vi.hoisted(() => vi.fn());
 const mockEditUpdateMany = vi.hoisted(() => vi.fn());
@@ -21,8 +23,11 @@ const mockTransaction = vi.hoisted(() =>
     async <T>(fn: (tx: Record<string, unknown>) => Promise<T>): Promise<T> => {
       const tx = {
         product: {
-          findUnique: mockTxProductFindUnique,
+          findFirst: mockTxProductFindFirst,
           update: mockTxProductUpdate,
+        },
+        packagedProduct: {
+          update: mockTxPackagedUpdate,
         },
         productVerification: {
           deleteMany: mockTxVerificationDeleteMany,
@@ -47,6 +52,9 @@ const mockTransaction = vi.hoisted(() =>
 vi.mock('../db.js', () => ({
   default: {
     $transaction: mockTransaction,
+    product: {
+      findFirst: mockProductFindFirst,
+    },
     productEdit: {
       findFirst: mockEditFindFirst,
       findUnique: mockEditFindUnique,
@@ -98,26 +106,23 @@ import {
   ProductNotVerifiedError,
   SelfEditVoteError,
 } from './productEditService.js';
-import {
-  ProductNotFoundError,
-} from './productVerificationService.js';
+import { ProductNotFoundError } from './productVisibility.js';
 import {
   ProductEditStatus,
+  ProductKind,
   ProductStatus,
   VerificationVote,
 } from '../generated/prisma_client/enums.js';
 
-const BARCODE = '1234567890123';
+const PRODUCT_ID = 'product-1';
+const GTIN = '1234567890123';
 const EDIT_ID = 'edit-1';
 const AUTHOR = 'author-1';
 const REVIEWER = 'reviewer-1';
 
-const VERIFIED_PRODUCT = {
-  id: 'product-1',
-  barcode: BARCODE,
-  status: ProductStatus.VERIFIED,
-  name: 'Sourdough Bread',
-  brand: 'BakeryCo',
+const PACKAGED = {
+  productId: PRODUCT_ID,
+  gtin: GTIN,
   genericName: 'Bread',
   energyKcal: 250,
   fat: 3.5,
@@ -128,13 +133,22 @@ const VERIFIED_PRODUCT = {
   salt: 1.2,
   servingSize: '50g',
   ingredients: 'Flour, water, salt, yeast',
+};
+
+const VERIFIED_PRODUCT = {
+  id: PRODUCT_ID,
+  kind: ProductKind.PACKAGED,
+  status: ProductStatus.VERIFIED,
+  name: 'Sourdough Bread',
+  brand: 'BakeryCo',
   image: 'processed/00000000-0000-4000-8000-000000000000.jpg',
   submittedByUserId: 'submitter-1',
+  packaged: PACKAGED,
 };
 
 const PENDING_EDIT = {
   id: EDIT_ID,
-  barcode: BARCODE,
+  productId: PRODUCT_ID,
   authorUserId: AUTHOR,
   originalValues: { name: 'Sourdough Bread' },
   proposedChanges: { name: 'Sourdough Loaf' },
@@ -144,7 +158,7 @@ const PENDING_EDIT = {
 };
 
 const CORRECTION_PAYLOAD = {
-  barcode: BARCODE,
+  productId: PRODUCT_ID,
   name: 'Corrected Bread',
   brand: 'BakeryCo',
   genericName: null,
@@ -167,15 +181,15 @@ beforeEach(() => {
 // ─── correctPendingProduct (PATCH path) ──────────────────────────────────────
 
 describe('correctPendingProduct', () => {
-  it('throws ProductNotFoundError for an unknown barcode', async () => {
-    mockTxProductFindUnique.mockResolvedValue(null);
+  it('throws ProductNotFoundError for an unknown productId', async () => {
+    mockTxProductFindFirst.mockResolvedValue(null);
     await expect(correctPendingProduct(CORRECTION_PAYLOAD, REVIEWER)).rejects.toBeInstanceOf(
       ProductNotFoundError,
     );
   });
 
   it('throws ProductIsVerifiedError when the product is VERIFIED (use the edit flow)', async () => {
-    mockTxProductFindUnique.mockResolvedValue(VERIFIED_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(VERIFIED_PRODUCT);
     await expect(correctPendingProduct(CORRECTION_PAYLOAD, REVIEWER)).rejects.toBeInstanceOf(
       ProductIsVerifiedError,
     );
@@ -183,8 +197,9 @@ describe('correctPendingProduct', () => {
 
   it('updates in place, clears verifications, and reassigns the submitter', async () => {
     const pending = { ...VERIFIED_PRODUCT, status: ProductStatus.PENDING_REVIEW };
-    mockTxProductFindUnique.mockResolvedValue(pending);
+    mockTxProductFindFirst.mockResolvedValue(pending);
     mockTxProductUpdate.mockImplementation(async ({ data }) => ({ ...pending, ...data }));
+    mockTxPackagedUpdate.mockResolvedValue(PACKAGED);
 
     const result = await correctPendingProduct(CORRECTION_PAYLOAD, REVIEWER);
 
@@ -192,18 +207,27 @@ describe('correctPendingProduct', () => {
       where: { productId: pending.id },
     });
     const updateArgs = mockTxProductUpdate.mock.calls[0][0];
+    expect(updateArgs.where).toEqual({ id: PRODUCT_ID });
     expect(updateArgs.data.submittedByUserId).toBe(REVIEWER);
     expect(updateArgs.data.status).toBe(ProductStatus.PENDING_REVIEW);
     expect(updateArgs.data.name).toBe('Corrected Bread');
     // No new image key -> the image column must not be touched.
     expect('image' in updateArgs.data).toBe(false);
     expect(result.submittedByUserId).toBe(REVIEWER);
+
+    // Packaged fields are updated on the PackagedProduct table too, in the
+    // same transaction.
+    expect(mockTxPackagedUpdate).toHaveBeenCalledWith({
+      where: { productId: PRODUCT_ID },
+      data: expect.objectContaining({ energyKcal: 260 }),
+    });
   });
 
   it('replaces the image when a new productImageKey is provided', async () => {
     const pending = { ...VERIFIED_PRODUCT, status: ProductStatus.PENDING_REVIEW };
-    mockTxProductFindUnique.mockResolvedValue(pending);
+    mockTxProductFindFirst.mockResolvedValue(pending);
     mockTxProductUpdate.mockImplementation(async ({ data }) => ({ ...pending, ...data }));
+    mockTxPackagedUpdate.mockResolvedValue(PACKAGED);
 
     const key = 'processed/11111111-1111-4111-8111-111111111111.jpg';
     await correctPendingProduct({ ...CORRECTION_PAYLOAD, productImageKey: key }, REVIEWER);
@@ -215,54 +239,55 @@ describe('correctPendingProduct', () => {
 // ─── createEdit ──────────────────────────────────────────────────────────────
 
 describe('createEdit', () => {
-  it('throws ProductNotFoundError for an unknown barcode', async () => {
-    mockTxProductFindUnique.mockResolvedValue(null);
-    await expect(createEdit(BARCODE, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
+  it('throws ProductNotFoundError for an unknown productId', async () => {
+    mockTxProductFindFirst.mockResolvedValue(null);
+    await expect(createEdit(PRODUCT_ID, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
       ProductNotFoundError,
     );
   });
 
   it('throws ProductNotVerifiedError on a PENDING_REVIEW product', async () => {
-    mockTxProductFindUnique.mockResolvedValue({
+    mockTxProductFindFirst.mockResolvedValue({
       ...VERIFIED_PRODUCT,
       status: ProductStatus.PENDING_REVIEW,
     });
-    await expect(createEdit(BARCODE, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
+    await expect(createEdit(PRODUCT_ID, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
       ProductNotVerifiedError,
     );
   });
 
   it('throws PendingEditExistsError when another edit is already pending', async () => {
-    mockTxProductFindUnique.mockResolvedValue(VERIFIED_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(VERIFIED_PRODUCT);
     mockTxEditFindFirst.mockResolvedValue({ id: 'existing-edit' });
-    await expect(createEdit(BARCODE, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
+    await expect(createEdit(PRODUCT_ID, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
       PendingEditExistsError,
     );
   });
 
   it('throws NoChangesError when every proposed value equals the current one', async () => {
-    mockTxProductFindUnique.mockResolvedValue(VERIFIED_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(VERIFIED_PRODUCT);
     mockTxEditFindFirst.mockResolvedValue(null);
     await expect(
-      createEdit(BARCODE, AUTHOR, { name: 'Sourdough Bread', salt: 1.2 }),
+      createEdit(PRODUCT_ID, AUTHOR, { name: 'Sourdough Bread', salt: 1.2 }),
     ).rejects.toBeInstanceOf(NoChangesError);
   });
 
-  it('stores only the effective diff plus a full snapshot of the editable fields', async () => {
-    mockTxProductFindUnique.mockResolvedValue(VERIFIED_PRODUCT);
+  it('stores only the effective diff plus a full snapshot of the editable fields, spanning both tables', async () => {
+    mockTxProductFindFirst.mockResolvedValue(VERIFIED_PRODUCT);
     mockTxEditFindFirst.mockResolvedValue(null);
     mockTxEditCreate.mockImplementation(async ({ data }) => ({ id: EDIT_ID, ...data }));
 
-    await createEdit(BARCODE, AUTHOR, {
+    await createEdit(PRODUCT_ID, AUTHOR, {
       name: 'Sourdough Bread', // unchanged -> dropped
-      brand: 'New Bakery', // changed
-      salt: 1.5, // changed
+      brand: 'New Bakery', // changed (Product field)
+      salt: 1.5, // changed (PackagedProduct field)
     });
 
     const created = mockTxEditCreate.mock.calls[0][0].data;
     expect(created.proposedChanges).toEqual({ brand: 'New Bakery', salt: 1.5 });
     expect(created.originalValues.name).toBe('Sourdough Bread');
     expect(created.originalValues.image).toBe(VERIFIED_PRODUCT.image);
+    expect(created.originalValues.salt).toBe(PACKAGED.salt);
     expect(created.authorUserId).toBe(AUTHOR);
     // Expiry sits ~2 years out.
     const years =
@@ -272,12 +297,12 @@ describe('createEdit', () => {
   });
 
   it('maps a P2002 race on the partial unique index to PendingEditExistsError', async () => {
-    mockTxProductFindUnique.mockResolvedValue(VERIFIED_PRODUCT);
+    mockTxProductFindFirst.mockResolvedValue(VERIFIED_PRODUCT);
     mockTxEditFindFirst.mockResolvedValue(null);
     mockTxEditCreate.mockRejectedValue(
       new FakePrismaKnownRequestError('unique violation', { code: 'P2002' }),
     );
-    await expect(createEdit(BARCODE, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
+    await expect(createEdit(PRODUCT_ID, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
       PendingEditExistsError,
     );
   });
@@ -286,12 +311,29 @@ describe('createEdit', () => {
 // ─── getPendingEdit ──────────────────────────────────────────────────────────
 
 describe('getPendingEdit', () => {
+  it('throws ProductNotFoundError for a REJECTED (invisible) product', async () => {
+    // Same visibility-vs-missing distinction as productVerificationService's
+    // equivalent test: asserting the `where` clause is what makes this
+    // fail if `assertProductVisible`'s filter were ever removed, rather
+    // than passing identically for "no such product".
+    mockProductFindFirst.mockResolvedValue(null);
+    await expect(getPendingEdit(PRODUCT_ID, REVIEWER)).rejects.toBeInstanceOf(
+      ProductNotFoundError,
+    );
+    expect(mockProductFindFirst).toHaveBeenCalledWith({
+      where: { id: PRODUCT_ID, status: { not: ProductStatus.REJECTED } },
+      select: { id: true },
+    });
+  });
+
   it('returns null when there is no pending edit', async () => {
+    mockProductFindFirst.mockResolvedValue({ id: PRODUCT_ID });
     mockEditFindFirst.mockResolvedValue(null);
-    expect(await getPendingEdit(BARCODE, REVIEWER)).toBeNull();
+    expect(await getPendingEdit(PRODUCT_ID, REVIEWER)).toBeNull();
   });
 
   it('returns tallies and viewer flags, resolving image keys to URLs', async () => {
+    mockProductFindFirst.mockResolvedValue({ id: PRODUCT_ID });
     mockEditFindFirst.mockResolvedValue({
       ...PENDING_EDIT,
       originalValues: { name: 'Old', image: 'processed/abc.jpg' },
@@ -303,10 +345,11 @@ describe('getPendingEdit', () => {
       dismissals: [],
     });
 
-    const view = await getPendingEdit(BARCODE, REVIEWER);
+    const view = await getPendingEdit(PRODUCT_ID, REVIEWER);
 
     expect(view).toMatchObject({
       editId: EDIT_ID,
+      productId: PRODUCT_ID,
       approvals: 1,
       rejections: 1,
       viewer: { isAuthor: false, vote: VerificationVote.REJECT, dismissed: false },
@@ -315,13 +358,14 @@ describe('getPendingEdit', () => {
   });
 
   it('flags the author and dismissals', async () => {
+    mockProductFindFirst.mockResolvedValue({ id: PRODUCT_ID });
     mockEditFindFirst.mockResolvedValue({
       ...PENDING_EDIT,
       votes: [],
       dismissals: [{ id: 'dismissal-1' }],
     });
 
-    const view = await getPendingEdit(BARCODE, AUTHOR);
+    const view = await getPendingEdit(PRODUCT_ID, AUTHOR);
     expect(view!.viewer).toEqual({ isAuthor: true, vote: null, dismissed: true });
   });
 });
@@ -389,7 +433,7 @@ describe('castEditVote', () => {
     expect(mockTxProductUpdate).not.toHaveBeenCalled();
   });
 
-  it('applies the edit on the second approval: product updated, lastModifiedByUserId set', async () => {
+  it('applies the edit on the second approval: product updated by id, lastModifiedByUserId set', async () => {
     mockTxEditFindUnique.mockResolvedValue(PENDING_EDIT);
     mockTxVoteCreate.mockResolvedValue({});
     mockTxVoteFindMany.mockResolvedValue([
@@ -402,16 +446,47 @@ describe('castEditVote', () => {
     const result = await castEditVote(EDIT_ID, REVIEWER, VerificationVote.APPROVE);
 
     expect(result.status).toBe(ProductEditStatus.APPLIED);
-    // Product is updated by barcode with ONLY the proposed changes + audit field.
-    // submittedByUserId is untouched (original-author attribution preserved),
-    // and Product.id is never part of the update -> ratings stay attached.
+    // Product is updated by id with ONLY the proposed Product-table changes +
+    // audit field. submittedByUserId is untouched (original-author
+    // attribution preserved), and Product.id is never part of the update ->
+    // ratings stay attached.
     expect(mockTxProductUpdate).toHaveBeenCalledWith({
-      where: { barcode: BARCODE },
+      where: { id: PRODUCT_ID },
       data: { name: 'Sourdough Loaf', lastModifiedByUserId: AUTHOR },
     });
+    // The proposed change (`name`) lives on Product only — no PackagedProduct
+    // write when nothing packaged-only changed.
+    expect(mockTxPackagedUpdate).not.toHaveBeenCalled();
     expect(mockTxEditUpdate).toHaveBeenCalledWith({
       where: { id: EDIT_ID },
       data: { status: ProductEditStatus.APPLIED },
+    });
+  });
+
+  it('applies an edit spanning both tables in one transaction', async () => {
+    mockTxEditFindUnique.mockResolvedValue({
+      ...PENDING_EDIT,
+      proposedChanges: { brand: 'New Bakery', salt: 1.8 },
+    });
+    mockTxVoteCreate.mockResolvedValue({});
+    mockTxVoteFindMany.mockResolvedValue([
+      { vote: VerificationVote.APPROVE },
+      { vote: VerificationVote.APPROVE },
+    ]);
+    mockTxProductUpdate.mockResolvedValue({});
+    mockTxPackagedUpdate.mockResolvedValue({});
+    mockTxEditUpdate.mockResolvedValue({});
+
+    const result = await castEditVote(EDIT_ID, REVIEWER, VerificationVote.APPROVE);
+
+    expect(result.status).toBe(ProductEditStatus.APPLIED);
+    expect(mockTxProductUpdate).toHaveBeenCalledWith({
+      where: { id: PRODUCT_ID },
+      data: { brand: 'New Bakery', lastModifiedByUserId: AUTHOR },
+    });
+    expect(mockTxPackagedUpdate).toHaveBeenCalledWith({
+      where: { productId: PRODUCT_ID },
+      data: { salt: 1.8 },
     });
   });
 

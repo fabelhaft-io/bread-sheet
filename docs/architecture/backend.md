@@ -133,16 +133,21 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Model | Key fields | Notes |
 |-------|-----------|-------|
 | `User` | `id`, `email?`, `username`, `avatarUrl` | `id` mirrors the Supabase user UUID |
-| `Product` | `barcode` (PK), `name`, `brand`, `imageUrl`, `status`, `submittedByUserId?`, `lastModifiedByUserId?` | `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED |
+| `Product` | `id` (PK, UUID), `kind`, `name`, `brand`, `image`, `description`, `status`, `submittedByUserId?`, `lastModifiedByUserId?` | **TICKET-P6-009 / ADR 0006:** the slim, rateable thing. `kind`: `PACKAGED \| CUSTOM` (only `PACKAGED` rows exist until P6-007). `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED. No GTIN, nutrition, or ingredient columns — those moved to `PackagedProduct` |
+| `PackagedProduct` | `productId` (PK, FK → `Product.id`, `onDelete: Cascade`), `gtin` (unique), `genericName`, nutrition fields, `servingSize`, `ingredients` | 1:1 with a `PACKAGED` `Product`; a `CUSTOM` product has no row here, so it structurally cannot hold nutrition or ingredient data. The invariant "`kind = PACKAGED` ⇔ exactly one `PackagedProduct` row" is enforced by writing both rows in one transaction (`productService.ts`), not a DB constraint |
 | `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?`, `createdAt`, `updatedAt` | `@@unique([userId, productId])` — one rating per user per product; resubmission upserts the existing row (`createdAt` preserved, `updatedAt` advances) |
 | `Group` | `id`, `name`, `inviteCode` | Invite code is unique |
 | `GroupMember` | `userId`, `groupId`, `role` | `role`: `ADMIN \| MEMBER` |
 | `ProductVerification` | `productId`, `userId`, `vote`, `createdAt` | `@@unique([productId, userId])`; 2 net-approvals flip to `VERIFIED`; 2 net-rejections flip to `REJECTED` |
-| `ProductEdit` | `id`, `barcode`, `authorUserId`, `originalValues` (JSON), `proposedChanges` (JSON), `status`, `createdAt`, `expiresAt` | `status`: `PENDING \| APPLIED \| REJECTED \| EXPIRED`. Partial unique index `one_pending_edit_per_product` (`barcode` WHERE `status='PENDING'`) enforces one pending edit per product at the DB layer |
+| `ProductEdit` | `id`, `productId` (FK → `Product.id`, renamed from `barcode` in P6-009), `authorUserId`, `originalValues` (JSON), `proposedChanges` (JSON), `status`, `createdAt`, `expiresAt` | `status`: `PENDING \| APPLIED \| REJECTED \| EXPIRED`. Partial unique index `one_pending_edit_per_product` (`productId` WHERE `status='PENDING'`) enforces one pending edit per product at the DB layer. `originalValues`/`proposedChanges` stay flat JSON keyed by field name regardless of which table (`Product` or `PackagedProduct`) the field lives on |
 | `ProductEditVote` | `editId`, `userId`, `vote` | `vote`: `APPROVE \| REJECT`; composite unique `(editId, userId)` |
 | `ProductEditDismissal` | `editId`, `userId` | Persists reviewer dismissals server-side |
 
 **Prisma import:** Always import the client from `src/generated/prisma_client`, never from `@prisma/client` directly.
+
+**Product visibility helper (`services/productVisibility.ts`, TICKET-P6-009).** `visibleProductWhere(user)` returns the P5-007 rule — `{ status: { not: REJECTED } }` — for both `PACKAGED` and `CUSTOM` kinds, and `assertProductVisible(user, id)` throws `ProductNotFoundError` (→ `404`) unless it resolves. Every product-reading path (`productController`, `productEditController`, `productVerificationService`, `productEditService`, `ratingController`) goes through one of these instead of re-typing the `where` clause. Catalogue-only queries (OFF sync, OFF backfill, not yet built) filter on `kind: PACKAGED` explicitly — that is a different axis (manufactured-article-ness) from visibility.
+
+**Product serializer (`services/productSerializer.ts`, TICKET-P6-009).** `serializeProduct(product, user)` is an explicit allowlist, not a field spread — the pre-split `getProductByBarcode` spread the whole Prisma row, so a future internal column would have reached clients by accident. Emits `{ id, kind, name, brand, image (resolved), description, status, unverified, submittedByUserId? (registered callers only), packaged: {...} | null, submission? (unverified only, flat) }`. Rating responses embed a smaller `{ id, kind, name, brand, image }` via an explicit Prisma `select`, not this serializer — the GTIN isn't needed there.
 
 ---
 
@@ -150,18 +155,21 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 ### Products
 
+`:productId` is validated as a UUID by `router.param('productId', ...)` — a non-UUID value is `400 { code: 'invalid_product_id' }` before any controller runs (TICKET-P6-009).
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/products/:barcode` | Any | Fetch product (OFF fallback on miss). Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products are visible to every caller (P5-007), but the anonymous copy omits `submittedByUserId`. `REJECTED` products return `404` for every caller |
+| `GET` | `/products/gtin/:gtin` | Any | The only way to resolve a GTIN to a product (TICKET-P6-009, replaces `GET /products/:barcode`). Validates `^\d{8,13}$` (`400`), looks up `PackagedProduct.gtin`, falls back to Open Food Facts on a miss and creates `Product` + `PackagedProduct` in one transaction. A concurrent first scan of the same new GTIN hits `P2002` on `gtin`; the controller catches it and re-reads instead of 409ing — two people scanning the same new product at once is normal. Registered before `/:productId` in the router |
+| `GET` | `/products/:productId` | Any | Fetch product by id. Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products are visible to every caller (P5-007), but the anonymous copy omits `submittedByUserId`. `REJECTED` products return `404` for every caller (via `productVisibility`) |
 | `POST` | `/products/upload-image` | Registered | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ imageKey, name, brand, genericName }`; for `kind=label` returns `{ imageKey }`. `imageKey` is the `processed/{uuid}.jpg` S3 object key — echoed back as `productImageKey` in the submission. `requireRegistered` since ADR 0005 L-1 — the plausibility gate runs a paid Gemini call before anything is persisted, so anonymous sessions are turned away before they can spend it |
 | `POST` | `/products/extract-label` | Registered | Structure nutritional data from OCR text or label image; `VISION_MODE` selects the image pipeline (mock/live/llm) |
-| `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`) |
-| `PATCH` | `/products/:barcode` | Registered | Correct a `PENDING_REVIEW` product (resets verifications) |
-| `POST` | `/products/:barcode/verify` | Registered, non-submitter | Cast `APPROVE` vote; 2 net-approvals → `VERIFIED` |
-| `DELETE` | `/products/:barcode/verify` | Registered, non-submitter | Cast `REJECT` vote; 2 net-rejections → `REJECTED` |
-| `POST` | `/products/:barcode/edits` | Registered | Propose edit to `VERIFIED` product |
-| `GET` | `/products/:barcode/edits/pending` | Registered | Fetch pending edit + diff for reviewer |
-| `POST` | `/products/edits/:editId/votes` | Registered, non-author | Vote `APPROVE` or `REJECT` on an edit; 2 approvals apply it (sets `lastModifiedByUserId`), 2 rejections discard it |
+| `POST` | `/products` | Registered | Submit new product (`PENDING_REVIEW`). Body takes `gtin` (TICKET-P6-009, was `barcode`); returns `{ id, gtin, status }` |
+| `PATCH` | `/products/:productId` | Registered | Correct a `PENDING_REVIEW` product (resets verifications). Writes `Product` and (for a `PACKAGED` product) `PackagedProduct` in one transaction |
+| `POST` | `/products/:productId/verify` | Registered, non-submitter | Cast `APPROVE` vote; 2 net-approvals → `VERIFIED` |
+| `DELETE` | `/products/:productId/verify` | Registered, non-submitter | Cast `REJECT` vote; 2 net-rejections → `REJECTED` |
+| `POST` | `/products/:productId/edits` | Registered | Propose edit to `VERIFIED` product |
+| `GET` | `/products/:productId/edits/pending` | Registered | Fetch pending edit + diff for reviewer |
+| `POST` | `/products/edits/:editId/votes` | Registered, non-author | Vote `APPROVE` or `REJECT` on an edit; 2 approvals apply it to `Product` and/or `PackagedProduct` in one transaction (sets `lastModifiedByUserId`), 2 rejections discard it |
 | `DELETE` | `/products/edits/:editId/votes` | Registered | Retract own edit vote (while still `PENDING`) |
 | `POST` | `/products/edits/:editId/dismissals` | Registered | Dismiss the review banner for the caller (server-side, cross-device; not a vote) |
 
@@ -188,10 +196,11 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/ratings` | Auth | Upsert the caller's rating for a product. `201` on first submission, `200` on update of an existing `(userId, productId)` row. |
-| `GET` | `/ratings/me/:barcode` | Auth | Return the caller's rating for a product, or `404` if they haven't rated it yet. **No longer used by the app** — since P8-002 the product screen reads "my rating" out of the cached `/users/me/ratings` payload, saving a round trip per product open. Kept for API consumers and ad-hoc testing. |
-| `GET` | `/ratings/product/:barcode` | Auth | All ratings for a product (most recent first) with author id / username / avatar. |
+| `POST` | `/ratings` | Auth | Upsert the caller's rating for a product. Body `{ productId, taste, comment? }` (TICKET-P6-009, was `{ barcode, taste, comment? }`); `productId` must be a valid UUID (`400` otherwise). `201` on first submission, `200` on update of an existing `(userId, productId)` row. |
+| `GET` | `/ratings/product/:productId` | Auth | All ratings for a product (most recent first) with author id / username / avatar. `:productId` validated as a UUID (`400 invalid_product_id`). |
 | `DELETE` | `/ratings/:id` | Owner | Delete own rating |
+
+`GET /ratings/me/:barcode` was **deleted** in TICKET-P6-009 (unused by the app since P8-002 — the product screen reads "my rating" out of the cached `/users/me/ratings` payload instead), not re-keyed.
 
 ---
 
@@ -202,26 +211,26 @@ Submission flow for the Add Product screen (P5-002/P5-003):
 | Layer | File | Responsibility |
 |-------|------|----------------|
 | Route | `routes/productRoutes.ts` | `apiLimiter` → `requireAuth` → `requireRegistered` → `submitProduct` |
-| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only barcode (8–14 chars), non-negative numerics < 10000, `productImageKey` must match `processed/{uuid}.jpg` exactly (i.e. must be a server-issued key from `POST /products/upload-image`; absolute URLs are rejected). Throws `SubmissionValidationError(field, message)`. The product image is plausibility-checked at upload time (P5-005, see Image Processing); nutritional-value plausibility (kcal ranges, macro sums) is still deferred to a follow-up ticket. |
-| Controller | `controllers/productController.ts` | Maps validator errors → `422 { error, reason, field }`; maps service errors → `409 { error: <code> }`; otherwise delegates and returns `201` (created) or `200` (updated own submission). |
-| Service | `services/productService.ts#createSubmittedProduct` | Single Prisma transaction encapsulating the resubmission branches below. |
+| Validator | `validators/productSubmissionValidator.ts` | Schema validation only — required fields, digit-only `gtin` (8–14 chars, TICKET-P6-009, was `barcode`), non-negative numerics < 10000, `productImageKey` must match `processed/{uuid}.jpg` exactly (i.e. must be a server-issued key from `POST /products/upload-image`; absolute URLs are rejected). Throws `SubmissionValidationError(field, message)`. The product image is plausibility-checked at upload time (P5-005, see Image Processing); nutritional-value plausibility (kcal ranges, macro sums) is still deferred to a follow-up ticket. |
+| Controller | `controllers/productController.ts` | Maps validator errors → `422 { error, reason, field }`; maps service errors → `409 { error: <code> }`; otherwise delegates and returns `201` (created) or `200` (updated own submission) with `{ id, gtin, status }`. |
+| Service | `services/productService.ts#createSubmittedProduct` | Single Prisma transaction writing `Product` and `PackagedProduct` together, encapsulating the resubmission branches below. |
 
-**Resubmission semantics** (`createSubmittedProduct`, keyed on `barcode`):
+**Resubmission semantics** (`createSubmittedProduct`, keyed on `gtin` via `PackagedProduct.gtin`):
 
 | Existing row | Caller | Outcome |
 |--------------|--------|---------|
-| _none_ | — | `CREATE` → `PENDING_REVIEW`, `submittedByUserId = caller` (201) |
+| _none_ | — | `CREATE` both `Product` + `PackagedProduct` → `PENDING_REVIEW`, `submittedByUserId = caller` (201) |
 | `VERIFIED` | any | `ProductAlreadyVerifiedError` → 409 `product_already_verified` |
 | `REJECTED` | original submitter | `ProductPreviouslyRejectedError` → 409 `product_previously_rejected` |
-| `REJECTED` | different user | `UPDATE` in place (preserves `Product.id` + ratings), `submittedByUserId = caller`, status → `PENDING_REVIEW`, prior `ProductVerification` rows deleted (200) |
+| `REJECTED` | different user | `UPDATE` both tables in place (preserves `Product.id` + ratings), `submittedByUserId = caller`, status → `PENDING_REVIEW`, prior `ProductVerification` rows deleted (200) |
 | `PENDING_REVIEW` | different user | `ProductPendingByAnotherUserError` → 409 `submission_pending` |
-| `PENDING_REVIEW` | same submitter | `UPDATE` fields, prior `ProductVerification` rows deleted, submitter unchanged (200) |
+| `PENDING_REVIEW` | same submitter | `UPDATE` both tables, prior `ProductVerification` rows deleted, submitter unchanged (200) |
 
-A Prisma `P2002` (unique-violation race on `barcode`) is caught at the service boundary and translated to `ProductPendingByAnotherUserError` so the controller's 409 mapping handles it uniformly.
+A Prisma `P2002` (unique-violation race on `PackagedProduct.gtin`) is caught at the service boundary and translated to `ProductPendingByAnotherUserError` so the controller's 409 mapping handles it uniformly. (This is distinct from the race handled in `getProductByGtin`/`GET /products/gtin/:gtin`, which re-reads instead of erroring — that path is two people *discovering* the same new product, not two people *submitting* corrections to it.)
 
 The 422 body shape (`{ error, reason, field }`) is a wire contract with the client — the Add Product form keys field-level inline errors off `field`.
 
-**Product visibility on `GET /products/:barcode` (P5-007).** Status decides who sees what:
+**Product visibility on `GET /products/:productId` (P5-007, helper added in P6-009).** Status decides who sees what:
 
 | Status | Registered caller | Anonymous caller |
 |--------|-------------------|------------------|
@@ -229,7 +238,7 @@ The 422 body shape (`{ error, reason, field }`) is a wire contract with the clie
 | `PENDING_REVIEW` | full record, `unverified: true`, `submission` block, `submittedByUserId` | same **minus `submittedByUserId`** |
 | `REJECTED` | `404` | `404` |
 
-Anonymous callers used to get a `404` for `PENDING_REVIEW` (P5-003). That traded one failure for a worse one: a guest scanning a barcode a neighbour had just submitted was told the product did not exist. Showing it behind the client's "Needs review" banner is honest about the data quality, and the abuse surface is unchanged because every write path (`POST`/`DELETE /products/:barcode/verify`, `POST /products`, all edit routes) still runs through `requireRegistered`. `submittedByUserId` is withheld from anonymous callers because it links a user UUID to a piece of content (see `docs/architecture/data.md` §5.4) and only the registered client has a use for it — suppressing the banner on your own submission.
+Anonymous callers used to get a `404` for `PENDING_REVIEW` (P5-003). That traded one failure for a worse one: a guest scanning a barcode a neighbour had just submitted was told the product did not exist. Showing it behind the client's "Needs review" banner is honest about the data quality, and the abuse surface is unchanged because every write path (`POST`/`DELETE /products/:productId/verify`, `POST /products`, all edit routes) still runs through `requireRegistered`. `submittedByUserId` is withheld from anonymous callers because it links a user UUID to a piece of content (see `docs/architecture/data.md` §5.4) and only the registered client has a use for it — suppressing the banner on your own submission.
 
 `REJECTED` products stay invisible to everyone: peer review has already thrown that data out, and the resubmission path in the table above is reached through the client's "not found → add this product" flow.
 
@@ -237,18 +246,18 @@ Anonymous callers used to get a `404` for `PENDING_REVIEW` (P5-003). That traded
 
 ---
 
-## Peer Verification (`POST` / `DELETE /api/products/:barcode/verify`)
+## Peer Verification (`POST` / `DELETE /api/products/:productId/verify`)
 
-Both endpoints call `castVote(barcode, userId, vote)` in `services/productVerificationService.ts`, which runs inside a single Prisma transaction:
+Both endpoints call `castVote(productId, userId, vote)` in `services/productVerificationService.ts`, which runs inside a single Prisma transaction:
 
-1. **Fetch** the `Product` by barcode — `404` if not found.
+1. **Fetch** the `Product` by id, through `visibleProductWhere()` — `404` if not found *or* `REJECTED` (TICKET-P6-009: a vote on an already-rejected product now 404s via the visibility rule, rather than falling through to the "not pending" `409`).
 2. **Guard** — `409` if status is not `PENDING_REVIEW`; `403` if the caller is the original submitter.
 3. **Upsert** a `ProductVerification` row (`productId_userId` compound key) — a caller who already voted simply changes their vote.
 4. **Recount** all votes for the product.
 5. **Threshold flip** — if approvals ≥ 2 and approvals > rejections → `VERIFIED`; if rejections ≥ 2 and rejections > approvals → `REJECTED`. Otherwise status unchanged.
 6. Return `{ verifications: <approval count> }`.
 
-`DELETE /products/:barcode/verify` casts a `REJECT` vote (it does **not** retract a prior approval — it is an overloaded REJECT channel).
+`DELETE /products/:productId/verify` casts a `REJECT` vote (it does **not** retract a prior approval — it is an overloaded REJECT channel).
 
 ---
 
@@ -269,7 +278,7 @@ Because the gate runs before the S3 write, a rejected image is never persisted (
 
 `Product.image` stores either an **S3 object key** (`processed/{uuid}.jpg`, user uploads) or an **absolute external URL** (Open Food Facts catalogue images). Only keys are persisted for our own uploads — the environment-specific base is never frozen into rows.
 
-`imageService.resolveImageUrl(image)` converts the stored value to a client-usable URL at serialization time: values starting with `http(s)://` pass through; keys are prefixed with `ASSET_BASE_URL`. Every endpoint that returns a product applies it (`GET /products/:barcode`, rating responses that `include` the product).
+`imageService.resolveImageUrl(image)` converts the stored value to a client-usable URL at serialization time: values starting with `http(s)://` pass through; keys are prefixed with `ASSET_BASE_URL`. Every endpoint that returns a product applies it — for product reads, via `productSerializer.ts#serializeProduct` (`GET /products/gtin/:gtin`, `GET /products/:productId`, `PATCH /products/:productId`); rating responses that embed a product resolve it directly in `ratingController.ts`.
 
 `ASSET_BASE_URL` is the public base **including the bucket part**, so the path-style vs virtual-hosted addressing difference between LocalStack and AWS lives in configuration, not code:
 
@@ -384,5 +393,5 @@ Run inside the server process (started from `server.ts`):
 
 | Job | Schedule | Status | Purpose |
 |-----|----------|--------|---------|
-| Edit expiry | Daily (plain `setInterval`, first run at boot; `src/jobs/editExpiryJob.ts`) | Live | Marks voteless `PENDING` `ProductEdit` records past `expiresAt` (**2 years**) as `EXPIRED`, freeing the one-pending-edit-per-barcode slot |
+| Edit expiry | Daily (plain `setInterval`, first run at boot; `src/jobs/editExpiryJob.ts`) | Live | Marks voteless `PENDING` `ProductEdit` records past `expiresAt` (**2 years**) as `EXPIRED`, freeing the one-pending-edit-per-product slot |
 | OFF sync | Every 5 min (planned: node-cron) | Planned (P6-005) | Submits `VERIFIED` products/edits to Open Food Facts |

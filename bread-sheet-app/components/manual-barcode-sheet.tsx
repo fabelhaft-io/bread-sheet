@@ -31,9 +31,9 @@ type Props = {
    */
   initialValue?: string;
   /**
-   * Overrides the default navigation. The product screen passes `router.replace`
-   * semantics here so correcting a bad code does not stack a second product
-   * screen on top of the broken one.
+   * Overrides the default navigation. The `product/gtin/[gtin]` resolver
+   * passes `router.replace` semantics here so correcting a bad code does not
+   * stack a second resolver screen on top of the broken one.
    */
   onSubmit?: (barcode: string) => void;
   /** Replaces the default explanatory line, e.g. on the invalid-scan path. */
@@ -46,9 +46,9 @@ type Props = {
  * Before this, the only route into the Add Product flow was the 404 branch of a
  * *successfully scanned* barcode — a damaged label, an unsupported symbology or
  * a device without a camera left the user with no way in. The sheet lands on
- * `/(app)/product/<code>`, which is exactly where a scan lands, so every
- * downstream state (found, pending review, 404 "add this product", the P5-001
- * anonymous sign-up gate) is reached identically.
+ * `/(app)/product/gtin/<code>` (TICKET-P6-009), which is exactly where a scan
+ * lands, so every downstream state (found, pending review, 404 "add this
+ * product", the P5-001 anonymous sign-up gate) is reached identically.
  *
  * Validation is client-side and mirrors the server's `^\d{8,13}$` so the user
  * never sees a raw `400 Invalid barcode format`.
@@ -112,7 +112,7 @@ function SheetBody({
     const { barcode } = result;
     onClose();
     if (onSubmit) onSubmit(barcode);
-    else router.push(`/(app)/product/${barcode}`);
+    else router.push(`/(app)/product/gtin/${barcode}`);
   };
 
   return (
