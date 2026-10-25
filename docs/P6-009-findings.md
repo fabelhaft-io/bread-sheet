@@ -811,6 +811,8 @@ Everything else was executed.
 
 ### Follow-ups carried out of this ticket (not blocking)
 
+*Tracked in `FEATURES.md`:* N-6 → P9-007, N-7 → P6-011, item 4 → P6-002 (route name updated), lint scope → P9-008, e2e prerequisites → P9-006, `description`/`genericName` duplication → P6-010.
+
 1. **N-5** — a `CUSTOM` product's nutrition section does not exist yet because the product screen has
    never had one; the `packaged`-null branch that did land is the barcode chip. Real nutrition
    rendering arrives with P6-007.
