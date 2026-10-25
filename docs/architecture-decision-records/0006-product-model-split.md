@@ -1,6 +1,6 @@
 # Product Model: Slim Rateable Product + Packaged-Product Details
 
-* Status: **Accepted — not yet implemented** (implemented by [TICKET-P6-009], which is scheduled before P6-001)
+* Status: **Accepted — implemented** ([TICKET-P6-009])
 * Date: 2026-10-25
 * Supersedes: Decision 1 of [TICKET-P6-007] as drafted on 2026-07-30 (synthetic `x-` id in `Product.barcode`)
 * Amended: 2026-10-25, same day. Custom products became **public** (P6-007 revised). See the amendment below.

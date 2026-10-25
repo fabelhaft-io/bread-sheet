@@ -1,0 +1,44 @@
+meta {
+  name: Lookup product by GTIN
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/products/gtin/{{gtin}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+script:post-response {
+  if (res.getStatus() === 200) {
+    bru.setEnvVar("productId", res.getBody().id);
+  }
+}
+
+docs {
+  TICKET-P6-009 — the only way to resolve a GTIN to a product. On a local cache miss the server
+  falls back to Open Food Facts and creates the Product + PackagedProduct rows in one transaction.
+
+  Response shape: { id, kind, name, brand, image, description, status, unverified,
+  submittedByUserId?, packaged: { gtin, genericName, ...nutrition, ingredients } | null, submission? }.
+
+  - All products include unverified: boolean.
+  - VERIFIED products: unverified: false.
+  - PENDING_REVIEW products: unverified: true, plus a flat submission object, and submittedByUserId
+    for registered callers.
+
+  Visibility (P5-007, via services/productVisibility.ts):
+  - PENDING_REVIEW products are returned to every caller. The anonymous copy omits submittedByUserId.
+  - REJECTED products return 404 for every caller.
+  - Voting stays registered-only: POST/DELETE /products/:productId/verify answer an anonymous token with 403.
+
+  On success the post-response script stores `productId` for every chained request below (Get product
+  by id, Approve/Reject, Correct, Propose edit, Get pending edit, Create/update rating, Get ratings).
+
+  Errors: 400 (invalid GTIN format), 404 (not found / REJECTED).
+}

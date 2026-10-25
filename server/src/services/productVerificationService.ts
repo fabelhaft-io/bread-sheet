@@ -1,17 +1,13 @@
 import prisma from '../db.js';
 import { ProductStatus, VerificationVote } from '../generated/prisma_client/enums.js';
+import { ProductNotFoundError, visibleProductWhere } from './productVisibility.js';
 
-export class ProductNotFoundError extends Error {
-  readonly code = 'product_not_found';
-  constructor(barcode: string) {
-    super(`Product ${barcode} not found`);
-  }
-}
+export { ProductNotFoundError };
 
 export class ProductNotPendingError extends Error {
   readonly code = 'product_not_pending';
-  constructor(barcode: string) {
-    super(`Product ${barcode} is not in PENDING_REVIEW state`);
+  constructor(productId: string) {
+    super(`Product ${productId} is not in PENDING_REVIEW state`);
   }
 }
 
@@ -28,15 +24,20 @@ export interface CastVoteResult {
 }
 
 export async function castVote(
-  barcode: string,
+  productId: string,
   userId: string,
   vote: VerificationVote,
 ): Promise<CastVoteResult> {
   return prisma.$transaction(async (tx) => {
-    const product = await tx.product.findUnique({ where: { barcode } });
+    // `visibleProductWhere` filters out REJECTED rows, so a vote on an
+    // already-rejected product 404s (ADR 0006 visibility rule) rather than
+    // falling through to the "not pending" 409 below.
+    const product = await tx.product.findFirst({
+      where: { id: productId, ...visibleProductWhere() },
+    });
 
-    if (!product) throw new ProductNotFoundError(barcode);
-    if (product.status !== ProductStatus.PENDING_REVIEW) throw new ProductNotPendingError(barcode);
+    if (!product) throw new ProductNotFoundError(productId);
+    if (product.status !== ProductStatus.PENDING_REVIEW) throw new ProductNotPendingError(productId);
     if (product.submittedByUserId === userId) throw new SelfVerificationError();
 
     await tx.productVerification.upsert({

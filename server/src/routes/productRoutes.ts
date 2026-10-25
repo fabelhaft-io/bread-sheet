@@ -6,8 +6,10 @@ import {
 } from '../middlewares/authMiddleware.js';
 import { apiLimiter, userLimiter } from '../middlewares/rateLimit.js';
 import { requestDeadline } from '../middlewares/requestDeadline.js';
+import { isValidUuid } from '../validators/idValidator.js';
 import {
-  getProductByBarcode,
+  getProductByGtin,
+  getProductById,
   submitProduct,
   uploadImage,
   approveProduct,
@@ -42,7 +44,21 @@ function handleUploadError(
   next(err);
 }
 
-router.get('/:barcode', requireAuth, userLimiter, getProductByBarcode);
+// TICKET-P6-009: every product is keyed by Product.id (a UUID), not a GTIN.
+// Any route with a `:productId` segment 400s on a non-UUID value before the
+// controller runs.
+router.param('productId', (req: Request, res: Response, next: NextFunction, value: string) => {
+  if (!isValidUuid(value)) {
+    return res.status(400).json({ code: 'invalid_product_id' });
+  }
+  next();
+});
+
+// GET /gtin/:gtin is registered before /:productId — they're different
+// segment counts so Express wouldn't actually collide, but the ordering
+// keeps the two lookups visually (and historically) distinct.
+router.get('/gtin/:gtin', requireAuth, userLimiter, getProductByGtin);
+router.get('/:productId', requireAuth, userLimiter, getProductById);
 
 // The two synchronous Gemini paths. `requestDeadline` is the outer half of the
 // budget in ADR 0003 § step 0 — the inner half is `withGeminiDeadline` around
@@ -76,20 +92,21 @@ router.post(
 // submitProduct only works with registered users
 router.post('/', requireAuth, apiLimiter, requireRegistered, submitProduct);
 
-router.post('/:barcode/verify', requireAuth, apiLimiter, requireRegistered, approveProduct);
+router.post('/:productId/verify', requireAuth, apiLimiter, requireRegistered, approveProduct);
 // DELETE carries a REJECT vote — it does not retract an existing approval
-router.delete('/:barcode/verify', requireAuth, apiLimiter, requireRegistered, rejectProduct);
+router.delete('/:productId/verify', requireAuth, apiLimiter, requireRegistered, rejectProduct);
 
 // --- Product editing & peer review (TICKET-P5-006) ---
 // All write paths are registered-users-only. Static '/edits/...' segments never
-// collide with '/:barcode' — barcodes are numeric and the paths differ in shape.
+// collide with '/:productId' — the param is validated as a UUID, and 'edits'
+// is not one.
 
 // In-place correction of a PENDING_REVIEW submission (restarts the review cycle)
-router.patch('/:barcode', requireAuth, apiLimiter, requireRegistered, correctProduct);
+router.patch('/:productId', requireAuth, apiLimiter, requireRegistered, correctProduct);
 
 // Proposal flow for VERIFIED products
-router.post('/:barcode/edits', requireAuth, apiLimiter, requireRegistered, createProductEdit);
-router.get('/:barcode/edits/pending', requireAuth, userLimiter, getPendingProductEdit);
+router.post('/:productId/edits', requireAuth, apiLimiter, requireRegistered, createProductEdit);
+router.get('/:productId/edits/pending', requireAuth, userLimiter, getPendingProductEdit);
 
 // Peer review of a proposal
 router.post('/edits/:editId/votes', requireAuth, apiLimiter, requireRegistered, voteOnProductEdit);

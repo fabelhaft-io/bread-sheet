@@ -5,7 +5,7 @@ meta {
 }
 
 post {
-  url: {{baseUrl}}/api/products/{{barcode}}/verify
+  url: {{baseUrl}}/api/products/{{productId}}/verify
   body: none
   auth: bearer
 }
@@ -16,14 +16,16 @@ auth:bearer {
 
 docs {
   Cast an APPROVE vote on a PENDING_REVIEW product. Registered, non-submitter only.
+  `:productId` must be a UUID (400 { code: 'invalid_product_id' } otherwise).
 
   Once 2 net-approvals are recorded (approvals > rejections) the product status automatically flips to VERIFIED.
 
   Response: { verifications: <approval count> }
 
   Errors:
+  - 400 — non-UUID productId ({ code: 'invalid_product_id' })
   - 401 — unauthenticated
   - 403 — anonymous user or self-verification attempt ({ error: 'self_verification' })
-  - 404 — product not found ({ error: 'product_not_found' })
+  - 404 — product not found, including REJECTED ({ error: 'product_not_found' })
   - 409 — product is not PENDING_REVIEW ({ error: 'product_not_pending' })
 }

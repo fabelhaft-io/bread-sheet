@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import { fileTypeFromBuffer } from 'file-type';
 import prisma from '../db.js';
+import { Prisma } from '../generated/prisma_client/client.js';
 import {
   createSubmittedProduct,
   fetchFromOpenFoodFacts,
@@ -14,7 +15,9 @@ import {
   ProductNotPendingError,
   SelfVerificationError,
 } from '../services/productVerificationService.js';
-import { uploadImageToS3, resolveImageUrl, type ImageKind } from '../services/imageService.js';
+import { visibleProductWhere } from '../services/productVisibility.js';
+import { serializeProduct } from '../services/productSerializer.js';
+import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
 import { checkImage, type Verdict } from '../services/imagePlausibilityService.js';
 import logger from '../logger.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
@@ -22,7 +25,7 @@ import {
   SubmissionValidationError,
   validateProductSubmission,
 } from '../validators/productSubmissionValidator.js';
-import { ProductStatus, VerificationVote } from '../generated/prisma_client/enums.js';
+import { ProductKind, ProductStatus, VerificationVote } from '../generated/prisma_client/enums.js';
 
 const SUPPORTED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -33,7 +36,7 @@ const SUPPORTED_MIME_TYPES = new Set([
   'image/avif',
 ]);
 
-// Barcodes are EAN-8, UPC-A (12 digits), or EAN-13 — all numeric.
+// GTINs are EAN-8, UPC-A (12 digits), or EAN-13 — all numeric.
 const BARCODE_RE = /^\d{8,13}$/;
 
 // User-facing copy per rejection verdict. The model's own `reason` is kept
@@ -47,69 +50,106 @@ const REJECTION_MESSAGES: Record<Exclude<Verdict, 'ok'>, string> = {
   abuse: 'This image cannot be used.',
 };
 
-// GET /api/products/:barcode
-export const getProductByBarcode = async (req: AuthRequest, res: Response, next: NextFunction) => {
+// GET /api/products/gtin/:gtin — the only way to resolve a GTIN to a product.
+// On a cache miss, fetches from Open Food Facts and creates the Product +
+// PackagedProduct rows in one transaction (ADR 0006).
+export const getProductByGtin = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const barcode = req.params.barcode as string;
+    const gtin = req.params.gtin as string;
 
-    if (!BARCODE_RE.test(barcode)) {
+    if (!BARCODE_RE.test(gtin)) {
       return res.status(400).json({ message: 'Invalid barcode format' });
     }
 
     // 1. Check local cache first
-    const cached = await prisma.product.findUnique({ where: { barcode } });
+    const cached = await prisma.packagedProduct.findUnique({
+      where: { gtin },
+      include: { product: true },
+    });
     if (cached) {
       // REJECTED products are invisible to every caller — peer review has
       // already thrown this data out, and the resubmission path (P5-003) runs
       // through the "not found → add it" flow. PENDING_REVIEW products, by
-      // contrast, are visible to everyone since P5-007: an anonymous scanner
-      // gets the product behind the "Needs review" banner rather than a
-      // dead-end 404. Writes stay registered-only.
-      if (cached.status === ProductStatus.REJECTED) {
+      // contrast, are visible to everyone since P5-007.
+      if (cached.product.status === ProductStatus.REJECTED) {
         return res.status(404).json({ message: 'Product not found' });
       }
 
-      logger.info(`Product cache hit: ${barcode}`);
-      const unverified = cached.status !== ProductStatus.VERIFIED;
-      // `submittedByUserId` exists for the registered client's "don't show me a
-      // banner for my own submission" check. Anonymous users cannot submit, so
-      // it has no purpose for them — and it would hand a user UUID, linked to a
-      // piece of content, to an unauthenticated session (docs/architecture/data.md §5.4).
-      const { submittedByUserId: _submitter, ...withoutSubmitter } = cached;
-      const visible = req.user?.isAnonymous ? withoutSubmitter : cached;
-      return res.json({
-        ...visible,
-        image: resolveImageUrl(cached.image),
-        unverified,
-        ...(unverified && {
-          submission: {
-            name: cached.name,
-            brand: cached.brand,
-            genericName: cached.genericName,
-            energyKcal: cached.energyKcal,
-            fat: cached.fat,
-            saturatedFat: cached.saturatedFat,
-            carbohydrates: cached.carbohydrates,
-            sugars: cached.sugars,
-            protein: cached.protein,
-            salt: cached.salt,
-            servingSize: cached.servingSize,
-            ingredients: cached.ingredients,
-          },
-        }),
-      });
+      logger.info(`Product cache hit: ${gtin}`);
+      return res.json(
+        serializeProduct({ ...cached.product, packaged: cached }, req.user),
+      );
     }
 
     // 2. Fetch from Open Food Facts (always VERIFIED — came from the curated OFF catalogue)
-    const data = await fetchFromOpenFoodFacts(barcode);
+    const data = await fetchFromOpenFoodFacts(gtin);
     if (!data) {
       return res.status(404).json({ message: 'Product not found' });
     }
 
-    // 3. Cache in DB and return
-    const product = await prisma.product.create({ data });
-    logger.info(`Product fetched and cached: ${barcode}`);
-    res.json({ ...product, image: resolveImageUrl(product.image), unverified: false });
+    // 3. Cache in DB (Product + PackagedProduct, one transaction) and return
+    let createdProduct;
+    let createdPackaged;
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const product = await tx.product.create({
+          data: {
+            kind: ProductKind.PACKAGED,
+            name: data.name,
+            brand: data.brand,
+            image: data.image,
+            description: data.description,
+            status: ProductStatus.VERIFIED,
+          },
+        });
+        const packaged = await tx.packagedProduct.create({
+          data: { productId: product.id, gtin },
+        });
+        return { product, packaged };
+      });
+      createdProduct = result.product;
+      createdPackaged = result.packaged;
+      logger.info(`Product fetched and cached: ${gtin}`);
+    } catch (err) {
+      // Two concurrent first-scans of the same new GTIN are normal, not an
+      // error — re-read what the other request created instead of 409ing.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const reread = await prisma.packagedProduct.findUnique({
+          where: { gtin },
+          include: { product: true },
+        });
+        if (!reread) throw err;
+        createdProduct = reread.product;
+        createdPackaged = reread;
+      } else {
+        throw err;
+      }
+    }
+
+    res.json(
+      serializeProduct({ ...createdProduct, packaged: createdPackaged }, req.user),
+    );
+  } catch (error) {
+    logger.error(error);
+    next(error);
+  }
+};
+
+// GET /api/products/:productId
+export const getProductById = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const productId = req.params.productId as string;
+
+    const product = await prisma.product.findFirst({
+      where: { id: productId, ...visibleProductWhere(req.user) },
+      include: { packaged: true },
+    });
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+
+    logger.info(`Product cache hit: ${productId}`);
+    res.json(serializeProduct(product, req.user));
   } catch (error) {
     logger.error(error);
     next(error);
@@ -220,14 +260,14 @@ export const submitProduct = async (
   }
 };
 
-// POST /api/products/:barcode/verify
+// POST /api/products/:productId/verify
 export const approveProduct = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction,
 ) => {
   try {
-    const result = await castVote(req.params.barcode as string, req.user!.id, VerificationVote.APPROVE);
+    const result = await castVote(req.params.productId as string, req.user!.id, VerificationVote.APPROVE);
     res.json({ verifications: result.verifications });
   } catch (err) {
     if (err instanceof ProductNotFoundError) return res.status(404).json({ error: err.code });
@@ -237,14 +277,14 @@ export const approveProduct = async (
   }
 };
 
-// DELETE /api/products/:barcode/verify  (DELETE = REJECT vote, not retraction)
+// DELETE /api/products/:productId/verify  (DELETE = REJECT vote, not retraction)
 export const rejectProduct = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction,
 ) => {
   try {
-    const result = await castVote(req.params.barcode as string, req.user!.id, VerificationVote.REJECT);
+    const result = await castVote(req.params.productId as string, req.user!.id, VerificationVote.REJECT);
     res.json({ verifications: result.verifications });
   } catch (err) {
     if (err instanceof ProductNotFoundError) return res.status(404).json({ error: err.code });

@@ -20,18 +20,19 @@ headers {
 
 body:json {
   {
-    "barcode": "{{barcode}}",
+    "productId": "{{productId}}",
     "taste": 7.5,
     "comment": "Pretty good"
   }
 }
 
 docs {
-  Upsert the caller's rating for a product. taste is a Float in [0, 10] on 0.5 increments.
+  Upsert the caller's rating for a product. Body takes `productId` (TICKET-P6-009, was `barcode`) —
+  must be a UUID (400 otherwise). taste is a Float in [0, 10] on 0.5 increments.
 
   Response:
   - 201 Created — first rating for this (user, product) pair
   - 200 OK — existing rating overwritten (same id, createdAt preserved, updatedAt advanced)
-  - 404 — product not cached locally yet (run Get product by barcode first)
-  - 400 — validation error (missing fields, taste out of range, taste not on a 0.5 boundary)
+  - 404 — product not found (run Lookup product by GTIN first), or REJECTED
+  - 400 — validation error (missing fields, non-UUID productId, taste out of range, taste not on a 0.5 boundary)
 }

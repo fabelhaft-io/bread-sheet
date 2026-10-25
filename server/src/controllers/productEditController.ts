@@ -23,10 +23,10 @@ import {
   ProductNotVerifiedError,
   SelfEditVoteError,
 } from '../services/productEditService.js';
-import { ProductNotFoundError } from '../services/productVerificationService.js';
-import { resolveImageUrl } from '../services/imageService.js';
+import { ProductNotFoundError } from '../services/productVisibility.js';
+import { serializeProduct } from '../services/productSerializer.js';
 
-// PATCH /api/products/:barcode — in-place correction of a PENDING_REVIEW
+// PATCH /api/products/:productId — in-place correction of a PENDING_REVIEW
 // submission. Resets the review cycle (votes cleared, corrector becomes the
 // submitter). 409 on VERIFIED products — those go through the edit flow.
 export const correctProduct = async (
@@ -37,10 +37,10 @@ export const correctProduct = async (
   try {
     const payload = validateProductCorrection({
       ...(req.body as Record<string, unknown>),
-      barcode: req.params.barcode,
+      productId: req.params.productId,
     });
     const product = await correctPendingProduct(payload, req.user!.id);
-    res.json({ ...product, image: resolveImageUrl(product.image) });
+    res.json(serializeProduct(product, req.user));
   } catch (err) {
     if (err instanceof SubmissionValidationError) {
       return res
@@ -53,7 +53,7 @@ export const correctProduct = async (
   }
 };
 
-// POST /api/products/:barcode/edits — propose a change to a VERIFIED product.
+// POST /api/products/:productId/edits — propose a change to a VERIFIED product.
 export const createProductEdit = async (
   req: AuthRequest,
   res: Response,
@@ -61,10 +61,10 @@ export const createProductEdit = async (
 ) => {
   try {
     const changes = validateProductEditChanges(req.body);
-    const edit = await createEdit(req.params.barcode as string, req.user!.id, changes);
+    const edit = await createEdit(req.params.productId as string, req.user!.id, changes);
     res.status(201).json({
       editId: edit.id,
-      barcode: edit.barcode,
+      productId: edit.productId,
       status: edit.status,
       proposedChanges: edit.proposedChanges,
     });
@@ -81,7 +81,7 @@ export const createProductEdit = async (
   }
 };
 
-// GET /api/products/:barcode/edits/pending — current pending edit (or null).
+// GET /api/products/:productId/edits/pending — current pending edit (or null).
 // Drives the review banner and populates the diff screen.
 export const getPendingProductEdit = async (
   req: AuthRequest,
@@ -89,9 +89,10 @@ export const getPendingProductEdit = async (
   next: NextFunction,
 ) => {
   try {
-    const edit = await getPendingEdit(req.params.barcode as string, req.user!.id);
+    const edit = await getPendingEdit(req.params.productId as string, req.user!.id);
     res.json({ edit });
   } catch (err) {
+    if (err instanceof ProductNotFoundError) return res.status(404).json({ error: err.code });
     next(err);
   }
 };

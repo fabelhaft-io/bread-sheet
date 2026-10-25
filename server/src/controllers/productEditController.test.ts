@@ -72,9 +72,9 @@ import {
   ProductNotVerifiedError,
   SelfEditVoteError,
 } from '../services/productEditService.js';
-import { ProductNotFoundError } from '../services/productVerificationService.js';
+import { ProductNotFoundError } from '../services/productVisibility.js';
 
-const BARCODE = '1234567890123';
+const PRODUCT_ID = '11111111-1111-4111-8111-111111111111';
 const EDIT_ID = 'edit-1';
 
 const CORRECTION_BODY = {
@@ -101,79 +101,111 @@ beforeEach(() => {
   resetSession();
 });
 
-describe('PATCH /api/products/:barcode', () => {
+describe('PATCH /api/products/:productId', () => {
+  it('returns 400 for a non-UUID productId', async () => {
+    const res = await request(app).patch('/api/products/not-a-uuid').send(CORRECTION_BODY);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_product_id');
+  });
+
   it('returns 403 for anonymous users', async () => {
     session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
-    const res = await request(app).patch(`/api/products/${BARCODE}`).send(CORRECTION_BODY);
+    const res = await request(app).patch(`/api/products/${PRODUCT_ID}`).send(CORRECTION_BODY);
     expect(res.status).toBe(403);
     expect(mockCorrectPendingProduct).not.toHaveBeenCalled();
   });
 
   it('returns 422 for an invalid payload', async () => {
-    const res = await request(app).patch(`/api/products/${BARCODE}`).send({ name: '' });
+    const res = await request(app).patch(`/api/products/${PRODUCT_ID}`).send({ name: '' });
     expect(res.status).toBe(422);
   });
 
   it('returns 409 (product_verified) on a VERIFIED product', async () => {
-    mockCorrectPendingProduct.mockRejectedValue(new ProductIsVerifiedError(BARCODE));
-    const res = await request(app).patch(`/api/products/${BARCODE}`).send(CORRECTION_BODY);
+    mockCorrectPendingProduct.mockRejectedValue(new ProductIsVerifiedError(PRODUCT_ID));
+    const res = await request(app).patch(`/api/products/${PRODUCT_ID}`).send(CORRECTION_BODY);
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('product_verified');
   });
 
-  it('returns the corrected product on success', async () => {
+  it('returns 404 for an unknown product', async () => {
+    mockCorrectPendingProduct.mockRejectedValue(new ProductNotFoundError(PRODUCT_ID));
+    const res = await request(app).patch(`/api/products/${PRODUCT_ID}`).send(CORRECTION_BODY);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('product_not_found');
+  });
+
+  it('returns the corrected, serialized product on success', async () => {
     mockCorrectPendingProduct.mockResolvedValue({
-      barcode: BARCODE,
+      id: PRODUCT_ID,
+      kind: 'PACKAGED',
       name: 'Corrected Bread',
-      status: 'PENDING_REVIEW',
+      brand: null,
       image: null,
+      description: null,
+      status: 'PENDING_REVIEW',
+      submittedByUserId: 'user-1',
+      packaged: {
+        gtin: '1234567890123',
+        genericName: null,
+        energyKcal: null,
+        fat: null,
+        saturatedFat: null,
+        carbohydrates: null,
+        sugars: null,
+        protein: null,
+        salt: null,
+        servingSize: null,
+        ingredients: null,
+      },
     });
-    const res = await request(app).patch(`/api/products/${BARCODE}`).send(CORRECTION_BODY);
+    const res = await request(app).patch(`/api/products/${PRODUCT_ID}`).send(CORRECTION_BODY);
     expect(res.status).toBe(200);
     expect(res.body.name).toBe('Corrected Bread');
-    // Barcode comes from the URL, not the body.
-    expect(mockCorrectPendingProduct.mock.calls[0][0].barcode).toBe(BARCODE);
+    expect(res.body.id).toBe(PRODUCT_ID);
+    expect(res.body.packaged.gtin).toBe('1234567890123');
+    // productId comes from the URL, not the body.
+    expect(mockCorrectPendingProduct.mock.calls[0][0].productId).toBe(PRODUCT_ID);
     expect(mockCorrectPendingProduct.mock.calls[0][1]).toBe('user-1');
   });
 });
 
-describe('POST /api/products/:barcode/edits', () => {
+describe('POST /api/products/:productId/edits', () => {
   it('returns 403 for anonymous users', async () => {
     session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/edits`)
+      .post(`/api/products/${PRODUCT_ID}/edits`)
       .send({ name: 'New Name' });
     expect(res.status).toBe(403);
   });
 
   it('returns 409 (edit_pending) when an edit is already under review', async () => {
-    mockCreateEdit.mockRejectedValue(new PendingEditExistsError(BARCODE));
+    mockCreateEdit.mockRejectedValue(new PendingEditExistsError(PRODUCT_ID));
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/edits`)
+      .post(`/api/products/${PRODUCT_ID}/edits`)
       .send({ name: 'New Name' });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('edit_pending');
   });
 
   it('returns 409 (product_not_verified) on a PENDING_REVIEW product', async () => {
-    mockCreateEdit.mockRejectedValue(new ProductNotVerifiedError(BARCODE));
+    mockCreateEdit.mockRejectedValue(new ProductNotVerifiedError(PRODUCT_ID));
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/edits`)
+      .post(`/api/products/${PRODUCT_ID}/edits`)
       .send({ name: 'New Name' });
     expect(res.status).toBe(409);
     expect(res.body.error).toBe('product_not_verified');
   });
 
   it('returns 404 for an unknown product', async () => {
-    mockCreateEdit.mockRejectedValue(new ProductNotFoundError(BARCODE));
+    mockCreateEdit.mockRejectedValue(new ProductNotFoundError(PRODUCT_ID));
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/edits`)
+      .post(`/api/products/${PRODUCT_ID}/edits`)
       .send({ name: 'New Name' });
     expect(res.status).toBe(404);
   });
 
   it('returns 422 for a payload with no editable fields', async () => {
-    const res = await request(app).post(`/api/products/${BARCODE}/edits`).send({});
+    const res = await request(app).post(`/api/products/${PRODUCT_ID}/edits`).send({});
     expect(res.status).toBe(422);
     expect(mockCreateEdit).not.toHaveBeenCalled();
   });
@@ -181,31 +213,45 @@ describe('POST /api/products/:barcode/edits', () => {
   it('creates the edit and returns 201', async () => {
     mockCreateEdit.mockResolvedValue({
       id: EDIT_ID,
-      barcode: BARCODE,
+      productId: PRODUCT_ID,
       status: 'PENDING',
       proposedChanges: { name: 'New Name' },
     });
     const res = await request(app)
-      .post(`/api/products/${BARCODE}/edits`)
+      .post(`/api/products/${PRODUCT_ID}/edits`)
       .send({ name: 'New Name' });
     expect(res.status).toBe(201);
     expect(res.body.editId).toBe(EDIT_ID);
-    expect(mockCreateEdit).toHaveBeenCalledWith(BARCODE, 'user-1', { name: 'New Name' });
+    expect(res.body.productId).toBe(PRODUCT_ID);
+    expect(mockCreateEdit).toHaveBeenCalledWith(PRODUCT_ID, 'user-1', { name: 'New Name' });
   });
 });
 
-describe('GET /api/products/:barcode/edits/pending', () => {
+describe('GET /api/products/:productId/edits/pending', () => {
+  it('returns 400 for a non-UUID productId', async () => {
+    const res = await request(app).get('/api/products/not-a-uuid/edits/pending');
+    expect(res.status).toBe(400);
+    expect(mockGetPendingEdit).not.toHaveBeenCalled();
+  });
+
   it('returns { edit: null } when nothing is pending', async () => {
     mockGetPendingEdit.mockResolvedValue(null);
-    const res = await request(app).get(`/api/products/${BARCODE}/edits/pending`);
+    const res = await request(app).get(`/api/products/${PRODUCT_ID}/edits/pending`);
     expect(res.status).toBe(200);
     expect(res.body.edit).toBeNull();
+  });
+
+  it('returns 404 for a REJECTED (invisible) product', async () => {
+    mockGetPendingEdit.mockRejectedValue(new ProductNotFoundError(PRODUCT_ID));
+    const res = await request(app).get(`/api/products/${PRODUCT_ID}/edits/pending`);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('product_not_found');
   });
 
   it('returns the pending edit view', async () => {
     mockGetPendingEdit.mockResolvedValue({
       editId: EDIT_ID,
-      barcode: BARCODE,
+      productId: PRODUCT_ID,
       originalValues: { name: 'Old' },
       proposedChanges: { name: 'New' },
       approvals: 1,
@@ -213,9 +259,10 @@ describe('GET /api/products/:barcode/edits/pending', () => {
       createdAt: new Date().toISOString(),
       viewer: { isAuthor: false, vote: null, dismissed: false },
     });
-    const res = await request(app).get(`/api/products/${BARCODE}/edits/pending`);
+    const res = await request(app).get(`/api/products/${PRODUCT_ID}/edits/pending`);
     expect(res.status).toBe(200);
     expect(res.body.edit.editId).toBe(EDIT_ID);
+    expect(res.body.edit.productId).toBe(PRODUCT_ID);
   });
 });
 

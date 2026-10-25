@@ -2,15 +2,23 @@ import prisma from '../db.js';
 import { Prisma } from '../generated/prisma_client/client.js';
 import {
   ProductEditStatus,
+  ProductKind,
   ProductStatus,
   VerificationVote,
 } from '../generated/prisma_client/enums.js';
 import type { ProductCorrectionInput } from '../validators/productSubmissionValidator.js';
-import { ProductNotFoundError } from './productVerificationService.js';
+import { ProductNotFoundError, assertProductVisible, visibleProductWhere } from './productVisibility.js';
 import { resolveImageUrl } from './imageService.js';
+
+export { ProductNotFoundError };
 
 /**
  * TICKET-P5-006 — Product Editing & Peer-Review of Changes.
+ * TICKET-P6-009 — re-keyed from `barcode` to `Product.id`; the editable
+ * fields are now partitioned across `Product` and `PackagedProduct` (ADR
+ * 0006), so applying a correction or an edit writes both tables in one
+ * transaction. The stored `originalValues`/`proposedChanges` JSON stays flat,
+ * keyed by field name, regardless of which table the field lives on.
  *
  * Registered users propose corrections to VERIFIED products. Changes are not
  * applied immediately: two other registered users must approve the diff first.
@@ -21,10 +29,11 @@ import { resolveImageUrl } from './imageService.js';
 /** How long a voteless PENDING edit lives before the cleanup job expires it. */
 export const EDIT_EXPIRY_YEARS = 2;
 
-/** Product columns an edit may change. `image` carries a server-issued upload key. */
-export const EDITABLE_FIELDS = [
-  'name',
-  'brand',
+/** `Product` columns an edit may change. `image` carries a server-issued upload key. */
+export const PRODUCT_EDIT_FIELDS = ['name', 'brand', 'image'] as const;
+
+/** `PackagedProduct` columns an edit may change. No label fields exist for CUSTOM products. */
+export const PACKAGED_EDIT_FIELDS = [
   'genericName',
   'energyKcal',
   'fat',
@@ -35,7 +44,11 @@ export const EDITABLE_FIELDS = [
   'salt',
   'servingSize',
   'ingredients',
-  'image',
+] as const;
+
+export const EDITABLE_FIELDS = [
+  ...PRODUCT_EDIT_FIELDS,
+  ...PACKAGED_EDIT_FIELDS,
 ] as const;
 
 export type EditableField = (typeof EDITABLE_FIELDS)[number];
@@ -43,22 +56,22 @@ export type EditChanges = Partial<Record<EditableField, string | number | null>>
 
 export class ProductNotVerifiedError extends Error {
   readonly code = 'product_not_verified';
-  constructor(barcode: string) {
-    super(`Product ${barcode} is not VERIFIED; use the correction flow instead`);
+  constructor(productId: string) {
+    super(`Product ${productId} is not VERIFIED; use the correction flow instead`);
   }
 }
 
 export class ProductIsVerifiedError extends Error {
   readonly code = 'product_verified';
-  constructor(barcode: string) {
-    super(`Product ${barcode} is VERIFIED; propose an edit instead`);
+  constructor(productId: string) {
+    super(`Product ${productId} is VERIFIED; propose an edit instead`);
   }
 }
 
 export class PendingEditExistsError extends Error {
   readonly code = 'edit_pending';
-  constructor(barcode: string) {
-    super(`Product ${barcode} already has an edit under review`);
+  constructor(productId: string) {
+    super(`Product ${productId} already has an edit under review`);
   }
 }
 
@@ -104,85 +117,113 @@ export class NoChangesError extends Error {
   }
 }
 
-type ProductRecord = Record<EditableField, string | number | null> & {
-  id: string;
-  barcode: string;
-};
+type MergedRecord = Record<EditableField, string | number | null> & { id: string };
 
-function snapshotEditableFields(product: ProductRecord): EditChanges {
+interface ProductWithPackaged {
+  id: string;
+  kind: string;
+  name: string;
+  brand: string | null;
+  image: string | null;
+  packaged: Record<string, unknown> | null;
+}
+
+/** Merges a product's own columns with its `packaged` relation into one flat record keyed by `EditableField`. */
+function mergeEditableFields(product: ProductWithPackaged): MergedRecord {
+  const packaged = product.packaged ?? {};
+  const merged: Record<string, unknown> = {
+    id: product.id,
+    name: product.name,
+    brand: product.brand,
+    image: product.image,
+  };
+  for (const field of PACKAGED_EDIT_FIELDS) {
+    merged[field] = (packaged as Record<string, unknown>)[field] ?? null;
+  }
+  return merged as MergedRecord;
+}
+
+function snapshotEditableFields(merged: MergedRecord): EditChanges {
   const snapshot: EditChanges = {};
-  for (const field of EDITABLE_FIELDS) snapshot[field] = product[field] ?? null;
+  for (const field of EDITABLE_FIELDS) snapshot[field] = merged[field] ?? null;
   return snapshot;
 }
 
 /**
- * Narrows a stored `proposedChanges` JSON object into a Prisma product update.
- * The runtime shape is guaranteed by the edit validator at proposal time; the
- * cast re-asserts what the JSON column's static type cannot carry.
+ * Narrows a stored `proposedChanges` JSON object into the `Product` and
+ * `PackagedProduct` update inputs it spans. The runtime shape is guaranteed
+ * by the edit validator at proposal time; the cast re-asserts what the JSON
+ * column's static type cannot carry.
  */
-function changesToProductUpdate(changes: EditChanges): Prisma.ProductUncheckedUpdateInput {
-  const data: Record<string, string | number | null> = {};
-  for (const field of EDITABLE_FIELDS) {
-    if (field in changes) data[field] = changes[field] ?? null;
+function splitChanges(changes: EditChanges): {
+  productChanges: Prisma.ProductUncheckedUpdateInput;
+  packagedChanges: Prisma.PackagedProductUncheckedUpdateInput;
+} {
+  const productChanges: Record<string, string | number | null> = {};
+  const packagedChanges: Record<string, string | number | null> = {};
+
+  for (const field of PRODUCT_EDIT_FIELDS) {
+    if (field in changes) productChanges[field] = changes[field] ?? null;
+  }
+  for (const field of PACKAGED_EDIT_FIELDS) {
+    if (field in changes) packagedChanges[field] = changes[field] ?? null;
   }
   // `name` is a non-nullable column; the validator enforces a non-empty string.
-  if ('name' in data && typeof data.name !== 'string') delete data.name;
-  return data as Prisma.ProductUncheckedUpdateInput;
+  if ('name' in productChanges && typeof productChanges.name !== 'string') {
+    delete productChanges.name;
+  }
+
+  return {
+    productChanges: productChanges as Prisma.ProductUncheckedUpdateInput,
+    packagedChanges: packagedChanges as Prisma.PackagedProductUncheckedUpdateInput,
+  };
 }
 
-/** Drops fields whose proposed value equals the current product value. */
-function effectiveDiff(product: ProductRecord, changes: EditChanges): EditChanges {
+/** Drops fields whose proposed value equals the current merged value. */
+function effectiveDiff(merged: MergedRecord, changes: EditChanges): EditChanges {
   const diff: EditChanges = {};
   for (const field of EDITABLE_FIELDS) {
     if (!(field in changes)) continue;
     const proposed = changes[field] ?? null;
-    const current = product[field] ?? null;
+    const current = merged[field] ?? null;
     if (proposed !== current) diff[field] = proposed;
   }
   return diff;
 }
 
 // ---------------------------------------------------------------------------
-// PENDING_REVIEW correction path (PATCH /products/:barcode)
+// PENDING_REVIEW correction path (PATCH /products/:productId)
 // ---------------------------------------------------------------------------
 
 /**
  * In-place correction of a not-yet-verified submission. Resets the review cycle:
  * all existing verification votes are deleted and the corrector becomes the new
- * submitter. Only valid while the product is PENDING_REVIEW.
+ * submitter. Only valid while the product is PENDING_REVIEW. Writes `Product`
+ * and (for a PACKAGED product) `PackagedProduct` in one transaction.
  */
 export async function correctPendingProduct(
   payload: ProductCorrectionInput,
   userId: string,
 ) {
   return prisma.$transaction(async (tx) => {
-    const product = await tx.product.findUnique({
-      where: { barcode: payload.barcode },
+    const product = await tx.product.findFirst({
+      where: { id: payload.productId, ...visibleProductWhere() },
+      include: { packaged: true },
     });
 
-    if (!product) throw new ProductNotFoundError(payload.barcode);
+    if (!product) throw new ProductNotFoundError(payload.productId);
     if (product.status !== ProductStatus.PENDING_REVIEW) {
-      throw new ProductIsVerifiedError(payload.barcode);
+      throw new ProductIsVerifiedError(payload.productId);
     }
 
     // Review cycle restarts from zero.
     await tx.productVerification.deleteMany({ where: { productId: product.id } });
 
-    const updated = await tx.product.update({
+    const updatedProduct = await tx.product.update({
       where: { id: product.id },
       data: {
         name: payload.name,
         brand: payload.brand,
-        genericName: payload.genericName,
-        energyKcal: payload.energyKcal,
-        fat: payload.fat,
-        saturatedFat: payload.saturatedFat,
-        carbohydrates: payload.carbohydrates,
-        sugars: payload.sugars,
-        protein: payload.protein,
-        salt: payload.salt,
-        servingSize: payload.servingSize,
-        ingredients: payload.ingredients,
         // No key sent = photo not replaced = keep the current image.
         ...(payload.productImageKey ? { image: payload.productImageKey } : {}),
         submittedByUserId: userId,
@@ -190,11 +231,30 @@ export async function correctPendingProduct(
       },
     });
 
+    const updatedPackaged =
+      product.kind === ProductKind.PACKAGED
+        ? await tx.packagedProduct.update({
+            where: { productId: product.id },
+            data: {
+              genericName: payload.genericName,
+              energyKcal: payload.energyKcal,
+              fat: payload.fat,
+              saturatedFat: payload.saturatedFat,
+              carbohydrates: payload.carbohydrates,
+              sugars: payload.sugars,
+              protein: payload.protein,
+              salt: payload.salt,
+              servingSize: payload.servingSize,
+              ingredients: payload.ingredients,
+            },
+          })
+        : null;
+
     // TODO(P5-006-followup): in-app notification to the original submitter when
     // product.submittedByUserId !== userId — deferred until notification
     // infrastructure exists (decided 2026-07-03).
 
-    return updated;
+    return { ...updatedProduct, packaged: updatedPackaged };
   });
 }
 
@@ -203,26 +263,30 @@ export async function correctPendingProduct(
 // ---------------------------------------------------------------------------
 
 export async function createEdit(
-  barcode: string,
+  productId: string,
   userId: string,
   changes: EditChanges,
 ) {
   try {
     return await prisma.$transaction(async (tx) => {
-      const product = await tx.product.findUnique({ where: { barcode } });
+      const product = await tx.product.findFirst({
+        where: { id: productId, ...visibleProductWhere() },
+        include: { packaged: true },
+      });
 
-      if (!product) throw new ProductNotFoundError(barcode);
+      if (!product) throw new ProductNotFoundError(productId);
       if (product.status !== ProductStatus.VERIFIED) {
-        throw new ProductNotVerifiedError(barcode);
+        throw new ProductNotVerifiedError(productId);
       }
 
       const pending = await tx.productEdit.findFirst({
-        where: { barcode, status: ProductEditStatus.PENDING },
+        where: { productId, status: ProductEditStatus.PENDING },
         select: { id: true },
       });
-      if (pending) throw new PendingEditExistsError(barcode);
+      if (pending) throw new PendingEditExistsError(productId);
 
-      const diff = effectiveDiff(product as unknown as ProductRecord, changes);
+      const merged = mergeEditableFields(product);
+      const diff = effectiveDiff(merged, changes);
       if (Object.keys(diff).length === 0) throw new NoChangesError();
 
       const expiresAt = new Date();
@@ -230,11 +294,9 @@ export async function createEdit(
 
       return tx.productEdit.create({
         data: {
-          barcode,
+          productId,
           authorUserId: userId,
-          originalValues: snapshotEditableFields(
-            product as unknown as ProductRecord,
-          ) as Prisma.InputJsonObject,
+          originalValues: snapshotEditableFields(merged) as Prisma.InputJsonObject,
           proposedChanges: diff as Prisma.InputJsonObject,
           expiresAt,
         },
@@ -242,13 +304,13 @@ export async function createEdit(
     });
   } catch (err) {
     // The partial unique index (one_pending_edit_per_product) is the source of
-    // truth for the "one pending edit per barcode" rule; surface a race that
+    // truth for the "one pending edit per product" rule; surface a race that
     // slipped past the findFirst as the same 409.
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === 'P2002'
     ) {
-      throw new PendingEditExistsError(barcode);
+      throw new PendingEditExistsError(productId);
     }
     throw err;
   }
@@ -256,7 +318,7 @@ export async function createEdit(
 
 export interface PendingEditView {
   editId: string;
-  barcode: string;
+  productId: string;
   originalValues: EditChanges;
   proposedChanges: EditChanges;
   approvals: number;
@@ -279,11 +341,15 @@ function resolveImagesIn(values: EditChanges): EditChanges {
 }
 
 export async function getPendingEdit(
-  barcode: string,
+  productId: string,
   userId: string,
 ): Promise<PendingEditView | null> {
+  // Every product read goes through the visibility rule — a REJECTED
+  // product's pending-edit lookup 404s like every other product read.
+  await assertProductVisible(undefined, productId);
+
   const edit = await prisma.productEdit.findFirst({
-    where: { barcode, status: ProductEditStatus.PENDING },
+    where: { productId, status: ProductEditStatus.PENDING },
     include: {
       votes: { select: { userId: true, vote: true } },
       dismissals: { where: { userId }, select: { id: true } },
@@ -297,7 +363,7 @@ export async function getPendingEdit(
 
   return {
     editId: edit.id,
-    barcode: edit.barcode,
+    productId: edit.productId,
     originalValues: resolveImagesIn(edit.originalValues as EditChanges),
     proposedChanges: resolveImagesIn(edit.proposedChanges as EditChanges),
     approvals,
@@ -323,10 +389,12 @@ export interface EditVoteResult {
 
 /**
  * Records a vote and resolves the edit when a side reaches 2:
- * 2 approvals → proposed changes are applied to the Product (same `id`, so all
- * Rating rows stay attached), `lastModifiedByUserId` is set to the edit author
- * (`submittedByUserId` untouched), edit flips to APPLIED. 2 rejections → edit
- * flips to REJECTED, changes discarded. Mixed 1–1 waits for a third voter.
+ * 2 approvals → proposed changes are applied to `Product` and (if any changed
+ * field is packaged-only) `PackagedProduct` in one transaction (same
+ * `Product.id`, so all Rating rows stay attached), `lastModifiedByUserId` is
+ * set to the edit author (`submittedByUserId` untouched), edit flips to
+ * APPLIED. 2 rejections → edit flips to REJECTED, changes discarded. Mixed
+ * 1–1 waits for a third voter.
  */
 export async function castEditVote(
   editId: string,
@@ -353,13 +421,19 @@ export async function castEditVote(
 
       if (approvals >= 2 && approvals > rejections) {
         status = ProductEditStatus.APPLIED;
+        const { productChanges, packagedChanges } = splitChanges(
+          edit.proposedChanges as EditChanges,
+        );
         await tx.product.update({
-          where: { barcode: edit.barcode },
-          data: {
-            ...changesToProductUpdate(edit.proposedChanges as EditChanges),
-            lastModifiedByUserId: edit.authorUserId,
-          },
+          where: { id: edit.productId },
+          data: { ...productChanges, lastModifiedByUserId: edit.authorUserId },
         });
+        if (Object.keys(packagedChanges).length > 0) {
+          await tx.packagedProduct.update({
+            where: { productId: edit.productId },
+            data: packagedChanges,
+          });
+        }
         await tx.productEdit.update({ where: { id: editId }, data: { status } });
         // TODO(P6-005): enqueue OFF sync for the changed fields here.
         // TODO(P5-006-followup): in-app notification to the edit author.
@@ -430,7 +504,7 @@ export async function dismissEdit(editId: string, userId: string): Promise<void>
 
 /**
  * Flips voteless PENDING edits past their `expiresAt` (2 years) to EXPIRED so
- * stale proposals stop blocking the one-pending-edit-per-barcode slot.
+ * stale proposals stop blocking the one-pending-edit-per-product slot.
  * Returns the number of edits expired.
  */
 export async function expireStaleEdits(now: Date = new Date()): Promise<number> {

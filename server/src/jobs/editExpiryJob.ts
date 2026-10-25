@@ -23,7 +23,7 @@ async function runOnce(): Promise<void> {
 /**
  * Daily cleanup (TICKET-P5-006): voteless PENDING ProductEdits past their
  * `expiresAt` (2 years) flip to EXPIRED so stale proposals stop occupying the
- * one-pending-edit-per-barcode slot. Runs inside the server process.
+ * one-pending-edit-per-product slot. Runs inside the server process.
  *
  * Returns the interval handle so tests (or a graceful shutdown path) can stop it.
  */

@@ -1,4 +1,4 @@
-import { ProductStatus } from '../generated/prisma_client/enums.js';
+import { ProductKind, ProductStatus } from '../generated/prisma_client/enums.js';
 import prisma from '../db.js';
 import { Prisma } from '../generated/prisma_client/client.js';
 const OFF_API = 'https://world.openfoodfacts.org/api/v2/product';
@@ -14,26 +14,26 @@ interface OFFResponse {
 }
 
 export interface ProductData {
-  barcode: string;
+  gtin: string;
   name: string;
   brand: string | null;
   image: string | null;
   description: string | null;
 }
 
-// Returns null if the product does not exist in OFF.
+// Returns null if the GTIN does not exist in OFF.
 // Throws if the OFF API itself is unavailable or returns an error.
 export async function fetchFromOpenFoodFacts(
-  barcode: string,
+  gtin: string,
 ): Promise<ProductData | null> {
   const res = await fetch(
-    `${OFF_API}/${barcode}?fields=product_name,brands,image_url,generic_name`,
+    `${OFF_API}/${gtin}?fields=product_name,brands,image_url,generic_name`,
     {
       signal: AbortSignal.timeout(5000),
     },
   );
 
-  // OFF returns 404 when the barcode is not in its catalogue. That's an expected
+  // OFF returns 404 when the GTIN is not in its catalogue. That's an expected
   // outcome — surface it as `null` so the caller can fall through to the
   // user-submission flow. Other non-OK statuses (5xx, etc.) are genuine failures.
   if (res.status === 404) return null;
@@ -51,7 +51,7 @@ export async function fetchFromOpenFoodFacts(
   const { product } = data;
 
   return {
-    barcode,
+    gtin,
     name: product.product_name?.trim() || 'Unknown Product',
     brand: product.brands?.trim() || null,
     image: product.image_url || null,
@@ -60,7 +60,7 @@ export async function fetchFromOpenFoodFacts(
 }
 
 export interface ProductSubmissionInput {
-  barcode: string;
+  gtin: string;
   name: string;
   brand: string | null;
   genericName: string | null;
@@ -82,52 +82,57 @@ export type SubmissionAction = 'created' | 'updated';
 export interface CreateSubmittedProductResult {
   action: SubmissionAction;
   product: {
-    barcode: string;
+    id: string;
+    gtin: string;
     status: ProductStatus;
   };
 }
 
 export class ProductAlreadyVerifiedError extends Error {
   readonly code = 'product_already_verified';
-  constructor(public readonly barcode: string) {
-    super(`Product ${barcode} is already verified`);
+  constructor(public readonly gtin: string) {
+    super(`Product ${gtin} is already verified`);
   }
 }
 
 export class ProductPendingByAnotherUserError extends Error {
   readonly code = 'submission_pending';
-  constructor(public readonly barcode: string) {
-    super(`Product ${barcode} has a pending submission by another user`);
+  constructor(public readonly gtin: string) {
+    super(`Product ${gtin} has a pending submission by another user`);
   }
 }
 
 export class ProductPreviouslyRejectedError extends Error {
   readonly code = 'product_previously_rejected';
-  constructor(public readonly barcode: string) {
-    super(`Product ${barcode} was rejected; original submitter cannot re-submit`);
+  constructor(public readonly gtin: string) {
+    super(`Product ${gtin} was rejected; original submitter cannot re-submit`);
   }
 }
 
-// Persist user-generated product submission
+// Persist a user-generated PACKAGED product submission. Writes the `Product`
+// and `PackagedProduct` rows in one transaction (ADR 0006): a failure leaves
+// neither behind.
 export async function createSubmittedProduct(
   payload: ProductSubmissionInput,
   userId: string,
 ): Promise<CreateSubmittedProductResult> {
   try {
     return await prisma.$transaction(async (tx) => {
-      const existing = await tx.product.findUnique({
-        where: { barcode: payload.barcode },
+      const existingPackaged = await tx.packagedProduct.findUnique({
+        where: { gtin: payload.gtin },
+        include: { product: true },
       });
+      const existing = existingPackaged?.product ?? null;
 
       if (existing && existing.status === ProductStatus.VERIFIED) {
-        throw new ProductAlreadyVerifiedError(payload.barcode);
+        throw new ProductAlreadyVerifiedError(payload.gtin);
       }
 
-      // Branch 2: barcode was REJECTED by peers.
+      // Branch 2: GTIN was REJECTED by peers.
       // Other users may overwrite with a fresh submission; the original submitter is blocked
       if (existing && existing.status === ProductStatus.REJECTED) {
         if (existing.submittedByUserId === userId) {
-          throw new ProductPreviouslyRejectedError(payload.barcode);
+          throw new ProductPreviouslyRejectedError(payload.gtin);
         }
 
         // reset votes
@@ -140,25 +145,29 @@ export async function createSubmittedProduct(
         const resubmitted = await tx.product.update({
           where: { id: existing.id },
           data: {
-            ...mapPayloadToProduct(payload),
+            ...toProductData(payload),
             status: ProductStatus.PENDING_REVIEW,
             submittedByUserId: userId,
           },
         });
+        await tx.packagedProduct.update({
+          where: { productId: existing.id },
+          data: toPackagedData(payload),
+        });
 
         return {
           action: 'updated' as const,
-          product: { barcode: resubmitted.barcode, status: resubmitted.status },
+          product: { id: resubmitted.id, gtin: payload.gtin, status: resubmitted.status },
         };
       }
 
-      // Branch 3: barcode has a pending submission from someone else → 409
+      // Branch 3: GTIN has a pending submission from someone else → 409
       if (
         existing &&
         existing.status === ProductStatus.PENDING_REVIEW &&
         existing.submittedByUserId !== userId
       ) {
-        throw new ProductPendingByAnotherUserError(payload.barcode);
+        throw new ProductPendingByAnotherUserError(payload.gtin);
       }
 
       // Branch 4: same user re-submitting their own pending product → UPDATE
@@ -174,26 +183,37 @@ export async function createSubmittedProduct(
 
         const updated = await tx.product.update({
           where: { id: existing.id },
-          data: mapPayloadToProduct(payload),
+          data: toProductData(payload),
+        });
+        await tx.packagedProduct.update({
+          where: { productId: existing.id },
+          data: toPackagedData(payload),
         });
         return {
           action: 'updated' as const,
-          product: { barcode: updated.barcode, status: updated.status },
+          product: { id: updated.id, gtin: payload.gtin, status: updated.status },
         };
       }
 
-      // Branch 5: brand-new barcode → CREATE
+      // Branch 5: brand-new GTIN → CREATE both rows
       const created = await tx.product.create({
         data: {
-          barcode: payload.barcode,
-          ...mapPayloadToProduct(payload),
+          kind: ProductKind.PACKAGED,
+          ...toProductData(payload),
           status: ProductStatus.PENDING_REVIEW,
           submittedByUserId: userId,
         },
       });
+      await tx.packagedProduct.create({
+        data: {
+          productId: created.id,
+          gtin: payload.gtin,
+          ...toPackagedData(payload),
+        },
+      });
       return {
         action: 'created' as const,
-        product: { barcode: created.barcode, status: created.status },
+        product: { id: created.id, gtin: payload.gtin, status: created.status },
       };
     });
   } catch (err) {
@@ -201,17 +221,22 @@ export async function createSubmittedProduct(
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === 'P2002'
     ) {
-      throw new ProductPendingByAnotherUserError(payload.barcode);
+      throw new ProductPendingByAnotherUserError(payload.gtin);
     }
     throw err;
   }
 }
 
-function mapPayloadToProduct(payload: ProductSubmissionInput) {
+function toProductData(payload: ProductSubmissionInput) {
   return {
     name: payload.name,
     brand: payload.brand,
     image: payload.productImageKey, // wire `productImageKey` → schema `image` (key, resolved to a URL at read time)
+  };
+}
+
+function toPackagedData(payload: ProductSubmissionInput) {
+  return {
     genericName: payload.genericName,
     energyKcal: payload.energyKcal,
     fat: payload.fat,

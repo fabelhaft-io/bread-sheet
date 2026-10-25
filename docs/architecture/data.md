@@ -29,7 +29,7 @@ Anonymous (guest) users have a Supabase UUID and session but no email or usernam
 | Rating comment | `Rating.comment` | Potentially | Free text; may contain personal info |
 | Product photo | S3 `processed/product/` | No (product image, not selfie) | May be synced to Open Food Facts |
 | Nutritional label photo | S3 `raw/label/` (temporary) | No | Used only for OCR; not permanently stored |
-| Product submission fields | `Product.*` | No | Name, brand, nutritional data — not PII |
+| Product submission fields | `Product.*` / `PackagedProduct.*` | No | Name, brand on `Product`; GTIN, nutritional data, ingredients on `PackagedProduct` (TICKET-P6-009) — not PII |
 | `submittedByUserId` | `Product.submittedByUserId` | Pseudonymous | Links product to user UUID |
 | Edit proposals | `ProductEdit.*` | No (content); pseudonymous (authorUserId) | |
 | Edit votes | `ProductEditVote.*` | Pseudonymous | `userId` only; vote itself is not PII |
@@ -139,18 +139,28 @@ User ─────────────────────────
  │                                                  │
  ├─── ProductVerification (productId, userId, vote)  │
  │                                                  │
- ├─── ProductEdit (id, barcode, authorUserId,       │
+ ├─── ProductEdit (id, productId, authorUserId,     │
  │        originalValues, proposedChanges, status)  │
  │         │                                        │
  │         ├─── ProductEditVote (editId, userId)    │
  │         └─── ProductEditDismissal (editId, userId)
  │                                                  │
- └─── Product (barcode PK, name, brand,  ◄──────────┘
-          imageUrl, status,               (submittedByUserId)
-          submittedByUserId?,
-          offSyncStatus, offSyncAttempts,
-          offRetryAt?, offProductUrl?)
+ └─── Product (id PK, kind PACKAGED|CUSTOM, name,  ◄┘
+          brand, image, status,        (submittedByUserId)
+          submittedByUserId?)
+               │
+               └─── PackagedProduct (productId 1:1 FK, gtin unique,
+                        genericName, nutrition fields, ingredients)
+                        — PACKAGED only; a CUSTOM product has no row here.
+                        offSyncStatus/offSyncAttempts/offRetryAt/offProductUrl
+                        (P6-005, not yet built) will land here, not on Product.
 ```
+
+TICKET-P6-009 (ADR 0006) split the single `Product` table above: the GTIN,
+nutrition and ingredient fields moved to the 1:1 `PackagedProduct` table so
+that a future `CUSTOM` product (P6-007, not yet built — no rows exist yet)
+cannot hold label data at all. `submittedByUserId` and the peer-review /
+edit lifecycle are unchanged and still live on `Product`.
 
 Full schema with types and constraints: `server/prisma/schema.prisma`.
 

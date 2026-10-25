@@ -5,7 +5,7 @@ import {
 } from './productSubmissionValidator.js';
 
 const VALID_PAYLOAD = {
-  barcode: '1234567890123',
+  gtin: '1234567890123',
   name: 'Sourdough Bread',
   brand: 'BakeryCo',
   genericName: 'Bread',
@@ -40,7 +40,7 @@ describe('validateProductSubmission', () => {
 
     it('accepts null values for all optional fields', () => {
       const result = validateProductSubmission({
-        barcode: '1234567890123',
+        gtin: '1234567890123',
         name: 'Sourdough',
         brand: null,
         genericName: null,
@@ -64,7 +64,7 @@ describe('validateProductSubmission', () => {
 
     it('accepts undefined optional fields and coerces them to null', () => {
       const result = validateProductSubmission({
-        barcode: '1234567890123',
+        gtin: '1234567890123',
         name: 'Sourdough',
         productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
       });
@@ -96,17 +96,17 @@ describe('validateProductSubmission', () => {
     it('accepts 8-digit (EAN-8) barcodes', () => {
       const result = validateProductSubmission({
         ...VALID_PAYLOAD,
-        barcode: '12345678',
+        gtin: '12345678',
       });
-      expect(result.barcode).toBe('12345678');
+      expect(result.gtin).toBe('12345678');
     });
 
     it('accepts 14-digit (GTIN-14) barcodes', () => {
       const result = validateProductSubmission({
         ...VALID_PAYLOAD,
-        barcode: '12345678901234',
+        gtin: '12345678901234',
       });
-      expect(result.barcode).toBe('12345678901234');
+      expect(result.gtin).toBe('12345678901234');
     });
   });
 
@@ -137,50 +137,50 @@ describe('validateProductSubmission', () => {
 
   describe('barcode', () => {
     it('throws when barcode is missing', () => {
-      const { barcode: _b, ...rest } = VALID_PAYLOAD;
+      const { gtin: _g, ...rest } = VALID_PAYLOAD;
       try {
         validateProductSubmission(rest);
         throw new Error('expected throw');
       } catch (err) {
         expect(err).toBeInstanceOf(SubmissionValidationError);
-        expect((err as SubmissionValidationError).field).toBe('barcode');
+        expect((err as SubmissionValidationError).field).toBe('gtin');
       }
     });
 
     it('throws when barcode is not a string', () => {
       try {
-        validateProductSubmission({ ...VALID_PAYLOAD, barcode: 1234567890123 });
+        validateProductSubmission({ ...VALID_PAYLOAD, gtin: 1234567890123 });
         throw new Error('expected throw');
       } catch (err) {
-        expect((err as SubmissionValidationError).field).toBe('barcode');
+        expect((err as SubmissionValidationError).field).toBe('gtin');
       }
     });
 
     it('throws when barcode is too short (< 8 digits)', () => {
       try {
-        validateProductSubmission({ ...VALID_PAYLOAD, barcode: '1234567' });
+        validateProductSubmission({ ...VALID_PAYLOAD, gtin: '1234567' });
         throw new Error('expected throw');
       } catch (err) {
-        expect((err as SubmissionValidationError).field).toBe('barcode');
+        expect((err as SubmissionValidationError).field).toBe('gtin');
         expect((err as Error).message).toMatch(/8.{1,3}14 digits/);
       }
     });
 
     it('throws when barcode contains non-digits', () => {
       try {
-        validateProductSubmission({ ...VALID_PAYLOAD, barcode: 'abc12345' });
+        validateProductSubmission({ ...VALID_PAYLOAD, gtin: 'abc12345' });
         throw new Error('expected throw');
       } catch (err) {
-        expect((err as SubmissionValidationError).field).toBe('barcode');
+        expect((err as SubmissionValidationError).field).toBe('gtin');
       }
     });
 
     it('throws when barcode is whitespace only', () => {
       try {
-        validateProductSubmission({ ...VALID_PAYLOAD, barcode: '          ' });
+        validateProductSubmission({ ...VALID_PAYLOAD, gtin: '          ' });
         throw new Error('expected throw');
       } catch (err) {
-        expect((err as SubmissionValidationError).field).toBe('barcode');
+        expect((err as SubmissionValidationError).field).toBe('gtin');
       }
     });
   });

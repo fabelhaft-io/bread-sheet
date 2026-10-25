@@ -20,7 +20,7 @@ headers {
 
 body:json {
   {
-    "barcode": "{{barcode}}",
+    "gtin": "{{gtin}}",
     "name": "Sample Cereal",
     "brand": "BreadSheet Test",
     "genericName": "Breakfast cereal",
@@ -35,13 +35,23 @@ body:json {
   }
 }
 
+script:post-response {
+  if (res.getStatus() === 201 || res.getStatus() === 200) {
+    bru.setEnvVar("productId", res.getBody().id);
+  }
+}
+
 docs {
-  Submit a new product in PENDING_REVIEW state. Registered users only.
+  Submit a new product in PENDING_REVIEW state. Registered users only. Body takes `gtin`
+  (TICKET-P6-009, was `barcode`) and writes the Product + PackagedProduct rows in one transaction.
 
   - 201 on first submission
   - 200 on resubmission (own pending product or another user's rejected product)
   - 422 with { error, reason, field } on validation failure
   - 409 with { error: 'product_already_verified' | 'product_previously_rejected' | 'submission_pending' } on conflicts
+
+  Response: { id, gtin, status }. The post-response script stores `id` as `productId` for the
+  chained verify/correct/edit requests.
 
   productImageKey must be a server-issued processed/{uuid}.jpg key — populate it by
   running Upload image first.

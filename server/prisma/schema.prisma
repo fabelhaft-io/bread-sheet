@@ -57,9 +57,19 @@ enum ProductEditStatus {
   EXPIRED
 }
 
+enum ProductKind {
+  PACKAGED
+  CUSTOM
+}
+
+// Everything that can be rated. Identity is `id` — server-generated, the only
+// key the API and app use. A manufactured article's GTIN, nutrition and
+// ingredients live on the 1:1 `PackagedProduct` below (ADR 0006); a CUSTOM
+// product (P6-007, not yet built) has no `PackagedProduct` row and therefore
+// cannot hold that data.
 model Product {
-  id          String   @id @default(uuid())
-  barcode     String   @unique
+  id          String      @id @default(uuid())
+  kind        ProductKind
   name        String
   brand       String?
   image       String?
@@ -77,21 +87,34 @@ model Product {
   lastModifiedByUserId String?
   lastModifiedBy       User?        @relation("ProductLastModifier", fields: [lastModifiedByUserId], references: [id])
 
-  genericName         String?
-  energyKcal          Float?
-  fat                 Float?
-  saturatedFat        Float?
-  carbohydrates       Float?
-  sugars              Float?
-  protein             Float?
-  salt                Float?
-  servingSize         String?
-  ingredients         String?
-
   plausibilityFlag    Boolean  @default(false)
 
+  packaged             PackagedProduct?
   verifications       ProductVerification[]
   edits               ProductEdit[]
+}
+
+// The manufactured article behind a PACKAGED product: what the label and the
+// GS1 registry say. 1:1 with `Product` by `productId`; a CUSTOM product has
+// no row here. The invariant `kind = PACKAGED ⇔ exactly one PackagedProduct
+// row` can't be expressed as a CHECK constraint — it is enforced by writing
+// both rows in the same transaction wherever a Product is created or resolved
+// from a GTIN (see productService.ts), and covered by a test.
+model PackagedProduct {
+  productId   String   @id
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  gtin        String   @unique // EAN-8 / UPC-A / EAN-13 (incl. ISBN-13); ^\d{8,13}$ today
+
+  genericName   String?
+  energyKcal    Float?
+  fat           Float?
+  saturatedFat  Float?
+  carbohydrates Float?
+  sugars        Float?
+  protein       Float?
+  salt          Float?
+  servingSize   String?
+  ingredients   String?
 }
 
 model Rating {
@@ -119,14 +142,14 @@ model Rating {
 // `originalValues` snapshots the product fields at submission time so the diff
 // screen always shows the correct baseline even if the product changes later.
 //
-// Invariant: at most ONE PENDING edit per barcode. Enforced at the DATABASE
+// Invariant: at most ONE PENDING edit per product. Enforced at the DATABASE
 // layer by a partial unique index (`one_pending_edit_per_product`, see the
 // migration — Prisma cannot express partial indexes in the schema DSL). The
 // API's 409 is a friendly mirror of that constraint, not the source of truth.
 model ProductEdit {
   id              String            @id @default(uuid())
-  barcode         String
-  product         Product           @relation(fields: [barcode], references: [barcode], onDelete: Cascade)
+  productId       String
+  product         Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
   authorUserId    String
   author          User              @relation(fields: [authorUserId], references: [id], onDelete: Cascade)
   originalValues  Json              // snapshot of the editable product fields at proposal time
@@ -138,7 +161,7 @@ model ProductEdit {
   votes           ProductEditVote[]
   dismissals      ProductEditDismissal[]
 
-  @@index([barcode, status])
+  @@index([productId, status])
 }
 
 model ProductEditVote {

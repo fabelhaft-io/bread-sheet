@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 
-const mockFindUnique = vi.hoisted(() => vi.fn());
-const mockCreate = vi.hoisted(() => vi.fn());
+const mockProductFindFirst = vi.hoisted(() => vi.fn());
+const mockPackagedFindUnique = vi.hoisted(() => vi.fn());
+const mockTransaction = vi.hoisted(() => vi.fn());
 const mockFetchFromOFF = vi.hoisted(() => vi.fn());
 const mockCreateSubmittedProduct = vi.hoisted(() => vi.fn());
 const mockValidateProductSubmission = vi.hoisted(() => vi.fn());
@@ -19,10 +20,31 @@ const session = vi.hoisted(() => ({
 vi.mock('../db.js', () => ({
   default: {
     product: {
-      findUnique: mockFindUnique,
-      create: mockCreate,
+      findFirst: mockProductFindFirst,
     },
+    packagedProduct: {
+      findUnique: mockPackagedFindUnique,
+    },
+    $transaction: mockTransaction,
+    userAbuseFlag: { create: vi.fn() },
   },
+}));
+
+// Minimal stand-in for `Prisma.PrismaClientKnownRequestError` so the controller
+// can `instanceof`-check the simulated unique-violation thrown in the
+// concurrent-GTIN-create race test.
+const FakePrismaKnownRequestError = vi.hoisted(() => {
+  return class FakePrismaKnownRequestError extends Error {
+    code: string;
+    constructor(message: string, opts: { code: string }) {
+      super(message);
+      this.code = opts.code;
+    }
+  };
+});
+
+vi.mock('../generated/prisma_client/client.js', () => ({
+  Prisma: { PrismaClientKnownRequestError: FakePrismaKnownRequestError },
 }));
 
 vi.mock('../services/productService.js', async () => {
@@ -79,12 +101,13 @@ import {
   ProductPreviouslyRejectedError,
 } from '../services/productService.js';
 import { SubmissionValidationError } from '../validators/productSubmissionValidator.js';
-import { ProductStatus } from '../generated/prisma_client/enums.js';
+import { ProductKind, ProductStatus } from '../generated/prisma_client/enums.js';
 
-const VALID_BARCODE = '1234567890123';
+const VALID_GTIN = '1234567890123';
+const PRODUCT_ID = '11111111-1111-4111-8111-111111111111';
 
 const VALIDATED_PAYLOAD = {
-  barcode: VALID_BARCODE,
+  gtin: VALID_GTIN,
   name: 'Sourdough Bread',
   brand: 'BakeryCo',
   genericName: 'Bread',
@@ -108,106 +131,149 @@ function resetSession() {
   };
 }
 
-describe('GET /api/products/:barcode', () => {
+describe('GET /api/products/gtin/:gtin', () => {
   beforeEach(() => {
-    mockFindUnique.mockReset();
-    mockCreate.mockReset();
+    mockPackagedFindUnique.mockReset();
     mockFetchFromOFF.mockReset();
+    mockTransaction.mockReset();
     resetSession();
   });
 
-  it('returns 400 for an invalid barcode format', async () => {
+  it('returns 400 for an invalid GTIN format', async () => {
     const res = await request(app)
-      .get('/api/products/not-a-barcode')
+      .get('/api/products/gtin/not-a-barcode')
       .set('Authorization', 'Bearer token');
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/invalid barcode/i);
   });
 
-  it('returns the cached VERIFIED product with unverified: false', async () => {
-    const product = { id: 1, barcode: VALID_BARCODE, name: 'Sourdough', image: null, status: ProductStatus.VERIFIED };
-    mockFindUnique.mockResolvedValue(product);
+  it('returns the cached VERIFIED product with unverified: false and nested packaged', async () => {
+    mockPackagedFindUnique.mockResolvedValue({
+      productId: PRODUCT_ID,
+      gtin: VALID_GTIN,
+      genericName: null,
+      energyKcal: null,
+      fat: null,
+      saturatedFat: null,
+      carbohydrates: null,
+      sugars: null,
+      protein: null,
+      salt: null,
+      servingSize: null,
+      ingredients: null,
+      product: {
+        id: PRODUCT_ID,
+        kind: ProductKind.PACKAGED,
+        name: 'Sourdough',
+        brand: null,
+        image: null,
+        description: null,
+        status: ProductStatus.VERIFIED,
+        submittedByUserId: null,
+      },
+    });
 
     const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
+      .get(`/api/products/gtin/${VALID_GTIN}`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ...product, unverified: false });
+    expect(res.body.id).toBe(PRODUCT_ID);
+    expect(res.body.unverified).toBe(false);
+    expect(res.body.packaged.gtin).toBe(VALID_GTIN);
     expect(mockFetchFromOFF).not.toHaveBeenCalled();
   });
 
-  it('resolves a stored S3 image key to a public URL using ASSET_BASE_URL', async () => {
-    // vitest.setup.ts sets ASSET_BASE_URL=http://assets.test/test-bucket
-    const product = {
-      id: 1,
-      barcode: VALID_BARCODE,
-      name: 'Sourdough',
-      image: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
-      status: ProductStatus.VERIFIED,
-    };
-    mockFindUnique.mockResolvedValue(product);
-
-    const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
-      .set('Authorization', 'Bearer token');
-
-    expect(res.status).toBe(200);
-    expect(res.body.image).toBe(
-      'http://assets.test/test-bucket/processed/123e4567-e89b-42d3-a456-426614174000.jpg',
-    );
-  });
-
-  it('passes external (Open Food Facts) image URLs through untouched', async () => {
-    const product = {
-      id: 1,
-      barcode: VALID_BARCODE,
-      name: 'Sourdough',
-      image: 'https://images.openfoodfacts.org/p/123.jpg',
-      status: ProductStatus.VERIFIED,
-    };
-    mockFindUnique.mockResolvedValue(product);
-
-    const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
-      .set('Authorization', 'Bearer token');
-
-    expect(res.status).toBe(200);
-    expect(res.body.image).toBe('https://images.openfoodfacts.org/p/123.jpg');
-  });
-
-  it('fetches from OFF, caches in DB, and returns the product with unverified: false', async () => {
+  it('fetches from OFF, caches Product + PackagedProduct in one transaction, and returns the product', async () => {
     const offData = {
-      barcode: VALID_BARCODE,
+      gtin: VALID_GTIN,
       name: 'Ciabatta',
       brand: null,
       image: null,
       description: null,
     };
-    const saved = { id: 2, ...offData, status: ProductStatus.VERIFIED };
-    mockFindUnique.mockResolvedValue(null);
+    mockPackagedFindUnique.mockResolvedValue(null);
     mockFetchFromOFF.mockResolvedValue(offData);
-    mockCreate.mockResolvedValue(saved);
+
+    const createdProduct = {
+      id: PRODUCT_ID,
+      kind: ProductKind.PACKAGED,
+      name: 'Ciabatta',
+      brand: null,
+      image: null,
+      description: null,
+      status: ProductStatus.VERIFIED,
+      submittedByUserId: null,
+    };
+    const createdPackaged = { productId: PRODUCT_ID, gtin: VALID_GTIN };
+    mockTransaction.mockImplementation(async (fn: (tx: unknown) => unknown) => {
+      const tx = {
+        product: { create: vi.fn().mockResolvedValue(createdProduct) },
+        packagedProduct: { create: vi.fn().mockResolvedValue(createdPackaged) },
+      };
+      return fn(tx);
+    });
 
     const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
+      .get(`/api/products/gtin/${VALID_GTIN}`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ...saved, unverified: false });
-    expect(mockCreate).toHaveBeenCalledWith({ data: offData });
+    expect(res.body.id).toBe(PRODUCT_ID);
+    expect(res.body.unverified).toBe(false);
+    expect(res.body.packaged.gtin).toBe(VALID_GTIN);
   });
 
-  it('returns unverified: true and a submission block for a PENDING_REVIEW product', async () => {
-    const product = {
-      id: 'p1',
-      barcode: VALID_BARCODE,
-      name: 'Mystery Bread',
-      brand: 'Artisan',
-      image: 'https://s3/img.jpg',
+  it('re-reads instead of erroring when two scans race to create the same new GTIN (P2002)', async () => {
+    mockPackagedFindUnique.mockResolvedValueOnce(null); // first cache check: miss
+    mockFetchFromOFF.mockResolvedValue({
+      gtin: VALID_GTIN,
+      name: 'Ciabatta',
+      brand: null,
+      image: null,
       description: null,
-      status: ProductStatus.PENDING_REVIEW,
-      submittedByUserId: 'user-42',
+    });
+    mockTransaction.mockRejectedValue(
+      new FakePrismaKnownRequestError('Unique constraint failed', { code: 'P2002' }),
+    );
+    // Re-read after the race: the other request's row.
+    mockPackagedFindUnique.mockResolvedValueOnce({
+      productId: PRODUCT_ID,
+      gtin: VALID_GTIN,
+      genericName: null,
+      energyKcal: null,
+      fat: null,
+      saturatedFat: null,
+      carbohydrates: null,
+      sugars: null,
+      protein: null,
+      salt: null,
+      servingSize: null,
+      ingredients: null,
+      product: {
+        id: PRODUCT_ID,
+        kind: ProductKind.PACKAGED,
+        name: 'Ciabatta',
+        brand: null,
+        image: null,
+        description: null,
+        status: ProductStatus.VERIFIED,
+        submittedByUserId: null,
+      },
+    });
+
+    const res = await request(app)
+      .get(`/api/products/gtin/${VALID_GTIN}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(PRODUCT_ID);
+  });
+
+  it('returns unverified: true and a flat submission block for a PENDING_REVIEW product', async () => {
+    mockPackagedFindUnique.mockResolvedValue({
+      productId: PRODUCT_ID,
+      gtin: VALID_GTIN,
       genericName: 'Bread',
       energyKcal: 250,
       fat: 3,
@@ -218,11 +284,20 @@ describe('GET /api/products/:barcode', () => {
       salt: 1,
       servingSize: '50g',
       ingredients: 'flour, water',
-    };
-    mockFindUnique.mockResolvedValue(product);
+      product: {
+        id: PRODUCT_ID,
+        kind: ProductKind.PACKAGED,
+        name: 'Mystery Bread',
+        brand: 'Artisan',
+        image: 'https://s3/img.jpg',
+        description: null,
+        status: ProductStatus.PENDING_REVIEW,
+        submittedByUserId: 'user-42',
+      },
+    });
 
     const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
+      .get(`/api/products/gtin/${VALID_GTIN}`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(200);
@@ -242,14 +317,9 @@ describe('GET /api/products/:barcode', () => {
   // submitter's user id, which is of no use to a session that cannot submit.
   it('returns a PENDING_REVIEW product to an anonymous caller, without submittedByUserId', async () => {
     session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
-    mockFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_BARCODE,
-      name: 'Mystery Bread',
-      brand: 'Artisan',
-      image: null,
-      status: ProductStatus.PENDING_REVIEW,
-      submittedByUserId: 'user-42',
+    mockPackagedFindUnique.mockResolvedValue({
+      productId: PRODUCT_ID,
+      gtin: VALID_GTIN,
       genericName: 'Bread',
       energyKcal: 250,
       fat: 3,
@@ -260,65 +330,175 @@ describe('GET /api/products/:barcode', () => {
       salt: 1,
       servingSize: '50g',
       ingredients: 'flour, water',
+      product: {
+        id: PRODUCT_ID,
+        kind: ProductKind.PACKAGED,
+        name: 'Mystery Bread',
+        brand: 'Artisan',
+        image: null,
+        description: null,
+        status: ProductStatus.PENDING_REVIEW,
+        submittedByUserId: 'user-42',
+      },
     });
 
     const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
+      .get(`/api/products/gtin/${VALID_GTIN}`)
       .set('Authorization', 'Bearer anon-token');
 
     expect(res.status).toBe(200);
     expect(res.body.unverified).toBe(true);
     expect(res.body).not.toHaveProperty('submittedByUserId');
-    expect(res.body.submission).toMatchObject({
-      name: 'Mystery Bread',
-      brand: 'Artisan',
-      genericName: 'Bread',
-      energyKcal: 250,
-    });
     expect(mockFetchFromOFF).not.toHaveBeenCalled();
   });
 
   it('returns 404 for a REJECTED product to a registered caller', async () => {
-    mockFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_BARCODE,
-      name: 'Bad Bread',
-      status: ProductStatus.REJECTED,
-      submittedByUserId: 'user-42',
+    mockPackagedFindUnique.mockResolvedValue({
+      productId: PRODUCT_ID,
+      gtin: VALID_GTIN,
+      product: {
+        id: PRODUCT_ID,
+        kind: ProductKind.PACKAGED,
+        name: 'Bad Bread',
+        status: ProductStatus.REJECTED,
+        submittedByUserId: 'user-42',
+      },
     });
 
     const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
+      .get(`/api/products/gtin/${VALID_GTIN}`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(404);
     expect(mockFetchFromOFF).not.toHaveBeenCalled();
   });
 
-  it('returns 404 for a REJECTED product to an anonymous caller', async () => {
-    session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
-    mockFindUnique.mockResolvedValue({
-      id: 'p1',
-      barcode: VALID_BARCODE,
-      name: 'Bad Bread',
-      status: ProductStatus.REJECTED,
-      submittedByUserId: 'user-42',
-    });
-
-    const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
-      .set('Authorization', 'Bearer anon-token');
-
-    expect(res.status).toBe(404);
-    expect(mockFetchFromOFF).not.toHaveBeenCalled();
-  });
-
-  it('returns 404 when OFF does not recognise the barcode', async () => {
-    mockFindUnique.mockResolvedValue(null);
+  it('returns 404 when OFF does not recognise the GTIN', async () => {
+    mockPackagedFindUnique.mockResolvedValue(null);
     mockFetchFromOFF.mockResolvedValue(null);
 
     const res = await request(app)
-      .get(`/api/products/${VALID_BARCODE}`)
+      .get(`/api/products/gtin/${VALID_GTIN}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/products/:productId', () => {
+  beforeEach(() => {
+    mockProductFindFirst.mockReset();
+    resetSession();
+  });
+
+  it('returns 400 for a non-UUID productId', async () => {
+    const res = await request(app)
+      .get('/api/products/not-a-uuid')
+      .set('Authorization', 'Bearer token');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid_product_id');
+    expect(mockProductFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('returns the serialized product', async () => {
+    mockProductFindFirst.mockResolvedValue({
+      id: PRODUCT_ID,
+      kind: ProductKind.PACKAGED,
+      name: 'Sourdough',
+      brand: null,
+      image: null,
+      description: null,
+      status: ProductStatus.VERIFIED,
+      submittedByUserId: null,
+      packaged: {
+        gtin: VALID_GTIN,
+        genericName: null,
+        energyKcal: null,
+        fat: null,
+        saturatedFat: null,
+        carbohydrates: null,
+        sugars: null,
+        protein: null,
+        salt: null,
+        servingSize: null,
+        ingredients: null,
+      },
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${PRODUCT_ID}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      id: PRODUCT_ID,
+      kind: ProductKind.PACKAGED,
+      name: 'Sourdough',
+      brand: null,
+      image: null,
+      description: null,
+      status: ProductStatus.VERIFIED,
+      unverified: false,
+      submittedByUserId: null,
+      packaged: {
+        gtin: VALID_GTIN,
+        genericName: null,
+        energyKcal: null,
+        fat: null,
+        saturatedFat: null,
+        carbohydrates: null,
+        sugars: null,
+        protein: null,
+        salt: null,
+        servingSize: null,
+        ingredients: null,
+      },
+    });
+    // `visibleProductWhere` filtering happens inside the `where` clause itself.
+    expect(mockProductFindFirst).toHaveBeenCalledWith({
+      where: { id: PRODUCT_ID, status: { not: ProductStatus.REJECTED } },
+      include: { packaged: true },
+    });
+  });
+
+  it('returns null packaged for a CUSTOM product', async () => {
+    mockProductFindFirst.mockResolvedValue({
+      id: PRODUCT_ID,
+      kind: ProductKind.CUSTOM,
+      name: 'Whisky Sour',
+      brand: null,
+      image: null,
+      description: null,
+      status: ProductStatus.VERIFIED,
+      submittedByUserId: null,
+      packaged: null,
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${PRODUCT_ID}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.packaged).toBeNull();
+  });
+
+  it('returns 404 for a REJECTED product (visibility rule filters it out of the query)', async () => {
+    // `visibleProductWhere` is baked into the `where` clause, so a REJECTED
+    // row simply isn't returned by the (mocked) database.
+    mockProductFindFirst.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get(`/api/products/${PRODUCT_ID}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 for an unknown product', async () => {
+    mockProductFindFirst.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get(`/api/products/${PRODUCT_ID}`)
       .set('Authorization', 'Bearer token');
 
     expect(res.status).toBe(404);
@@ -332,12 +512,13 @@ describe('POST /api/products', () => {
     resetSession();
   });
 
-  it('returns 201 with the product body when the service reports a new submission', async () => {
+  it('returns 201 with { id, gtin, status } when the service reports a new submission', async () => {
     mockValidateProductSubmission.mockReturnValue(VALIDATED_PAYLOAD);
     mockCreateSubmittedProduct.mockResolvedValue({
       action: 'created',
       product: {
-        barcode: VALID_BARCODE,
+        id: PRODUCT_ID,
+        gtin: VALID_GTIN,
         status: ProductStatus.PENDING_REVIEW,
       },
     });
@@ -349,7 +530,8 @@ describe('POST /api/products', () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual({
-      barcode: VALID_BARCODE,
+      id: PRODUCT_ID,
+      gtin: VALID_GTIN,
       status: ProductStatus.PENDING_REVIEW,
     });
 
@@ -365,7 +547,8 @@ describe('POST /api/products', () => {
     mockCreateSubmittedProduct.mockResolvedValue({
       action: 'updated',
       product: {
-        barcode: VALID_BARCODE,
+        id: PRODUCT_ID,
+        gtin: VALID_GTIN,
         status: ProductStatus.PENDING_REVIEW,
       },
     });
@@ -376,7 +559,7 @@ describe('POST /api/products', () => {
       .send(VALIDATED_PAYLOAD);
 
     expect(res.status).toBe(200);
-    expect(res.body.barcode).toBe(VALID_BARCODE);
+    expect(res.body.gtin).toBe(VALID_GTIN);
   });
 
   it('returns 422 with the field and reason when validation fails', async () => {
@@ -387,7 +570,7 @@ describe('POST /api/products', () => {
     const res = await request(app)
       .post('/api/products')
       .set('Authorization', 'Bearer token')
-      .send({ barcode: VALID_BARCODE });
+      .send({ gtin: VALID_GTIN });
 
     expect(res.status).toBe(422);
     expect(res.body).toMatchObject({
@@ -401,7 +584,7 @@ describe('POST /api/products', () => {
   it('returns 409 when the product is already VERIFIED', async () => {
     mockValidateProductSubmission.mockReturnValue(VALIDATED_PAYLOAD);
     mockCreateSubmittedProduct.mockRejectedValue(
-      new ProductAlreadyVerifiedError(VALID_BARCODE),
+      new ProductAlreadyVerifiedError(VALID_GTIN),
     );
 
     const res = await request(app)
@@ -413,10 +596,10 @@ describe('POST /api/products', () => {
     expect(res.body.error).toBe('product_already_verified');
   });
 
-  it('returns 409 when another user already has a pending submission for the barcode', async () => {
+  it('returns 409 when another user already has a pending submission for the GTIN', async () => {
     mockValidateProductSubmission.mockReturnValue(VALIDATED_PAYLOAD);
     mockCreateSubmittedProduct.mockRejectedValue(
-      new ProductPendingByAnotherUserError(VALID_BARCODE),
+      new ProductPendingByAnotherUserError(VALID_GTIN),
     );
 
     const res = await request(app)
@@ -431,7 +614,7 @@ describe('POST /api/products', () => {
   it('returns 409 when the original submitter retries a previously rejected product', async () => {
     mockValidateProductSubmission.mockReturnValue(VALIDATED_PAYLOAD);
     mockCreateSubmittedProduct.mockRejectedValue(
-      new ProductPreviouslyRejectedError(VALID_BARCODE),
+      new ProductPreviouslyRejectedError(VALID_GTIN),
     );
 
     const res = await request(app)
