@@ -53,7 +53,7 @@ resource "aws_ecs_task_definition" "server" {
     # service. It is the image the stack comes back on after a Tier 3 pause; re-point it at the
     # running revision before resuming (see infrastructure.md § Pausing / Resuming the Dev Stack).
     #
-    image     = "ghcr.io/fabelhaft-io/bread-sheet-server:04c6a55df0dfde789b0482c7f62bd10faa06d81b"
+    image     = "ghcr.io/fabelhaft-io/bread-sheet-server:aaf9297fc0e94eb49aefcb7e15d83f04c5a80959"
     essential = true
 
     portMappings = [{
