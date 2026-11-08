@@ -3,7 +3,12 @@ import { act, renderHook } from '@testing-library/react-native';
 import { searchProducts } from '@/features/search/api';
 import { ApiError, NetworkError } from '@/lib/api';
 
-import { useProductSearch } from './use-product-search';
+import { useProductSearch, type ProductSearchState } from './use-product-search';
+
+/** Props shape for every `renderHook` call below — RNTL 14 infers `unknown`
+ * without an explicit type argument, which is what made `npm run typecheck`
+ * (the `tsconfig.test.json` project) fail even though Jest itself passes. */
+type SearchProps = { query: string };
 
 // `features/search/api` pulls in `lib/api` → `lib/supabase`, which throws at
 // import time without env vars (same reason `features/products/api.test.ts`
@@ -46,7 +51,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
   });
 
   it('makes no request while inactive (Mine scope)', async () => {
-    const { result } = await renderHook(({ query }) => useProductSearch(query, false), {
+    const { result } = await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, false), {
       initialProps: { query: 'cola' },
     });
 
@@ -59,7 +64,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
   });
 
   it('does not request below the 2-character minimum', async () => {
-    await renderHook(({ query }) => useProductSearch(query, true), { initialProps: { query: 'c' } });
+    await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), { initialProps: { query: 'c' } });
 
     await act(async () => {
       jest.advanceTimersByTime(1000);
@@ -70,7 +75,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
 
   it('debounces 300ms before sending a request', async () => {
     mockSearch.mockResolvedValue(page(['1']));
-    await renderHook(({ query }) => useProductSearch(query, true), { initialProps: { query: 'cola' } });
+    await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), { initialProps: { query: 'cola' } });
 
     await act(async () => {
       jest.advanceTimersByTime(299);
@@ -102,7 +107,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
     });
     mockSearch.mockImplementationOnce(() => Promise.resolve(page(['2'])));
 
-    const { result, rerender } = await renderHook(({ query }) => useProductSearch(query, true), {
+    const { result, rerender } = await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), {
       initialProps: { query: 'cola' },
     });
 
@@ -130,7 +135,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
 
   it('reports offline and clears results on a NetworkError', async () => {
     mockSearch.mockRejectedValue(new NetworkError());
-    const { result } = await renderHook(({ query }) => useProductSearch(query, true), {
+    const { result } = await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), {
       initialProps: { query: 'cola' },
     });
 
@@ -144,7 +149,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
 
   it('surfaces a non-network failure as `error`', async () => {
     mockSearch.mockRejectedValue(new ApiError(500, 'boom', {}));
-    const { result } = await renderHook(({ query }) => useProductSearch(query, true), {
+    const { result } = await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), {
       initialProps: { query: 'cola' },
     });
 
@@ -158,7 +163,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
 
   it('paginates: loadMore appends the next page using the returned cursor', async () => {
     mockSearch.mockResolvedValueOnce(page(['1', '2'], 'cursor-1'));
-    const { result } = await renderHook(({ query }) => useProductSearch(query, true), {
+    const { result } = await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), {
       initialProps: { query: 'cola' },
     });
 
@@ -180,7 +185,7 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
 
   it('does not call loadMore again while a page is already loading', async () => {
     mockSearch.mockResolvedValueOnce(page(['1'], 'cursor-1'));
-    const { result } = await renderHook(({ query }) => useProductSearch(query, true), {
+    const { result } = await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), {
       initialProps: { query: 'cola' },
     });
     await act(async () => {

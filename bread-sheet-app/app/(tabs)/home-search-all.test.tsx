@@ -17,10 +17,22 @@ import HomeScreen from './index';
  * don't need them — aren't run under a faked clock.
  */
 
-const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), setParams: jest.fn() };
+let mockParams: Record<string, string | undefined> = {};
+
+// `setParams` mutates the same `mockParams` object `useLocalSearchParams` reads
+// back out — a mock that just recorded the call (and left `mockParams` frozen
+// at `{ focusSearch: 'all' }`) would pass the hand-off test below even if the
+// screen called `setParams` on every render instead of once.
+const mockRouter = {
+  push: jest.fn(),
+  replace: jest.fn(),
+  back: jest.fn(),
+  setParams: jest.fn((updates: Record<string, string | undefined>) => {
+    mockParams = { ...mockParams, ...updates };
+  }),
+};
 const mockUseSession = jest.fn();
 const mockUseOutbox = jest.fn();
-let mockParams: Record<string, string | undefined> = {};
 
 jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
@@ -238,14 +250,23 @@ describe('HomeScreen — All products scope search (TICKET-P6-008 Slice B)', () 
   });
 
   describe('scan tab hand-off', () => {
-    it('switches to the All-products scope when arriving with ?focusSearch=all', async () => {
+    it('switches to the All-products scope when arriving with ?focusSearch=all, consuming the param exactly once', async () => {
       mockParams = { focusSearch: 'all' };
-      const { getByTestId } = await render(<HomeScreen />);
+      const { getByTestId, rerender } = await render(<HomeScreen />);
 
       await waitFor(() =>
         expect(getByTestId('home-search-scope-all').props.accessibilityState?.selected).toBe(true),
       );
+      expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
       expect(mockRouter.setParams).toHaveBeenCalledWith({ focusSearch: undefined });
+      // The mock actually mutated `mockParams` — a real router would have, too.
+      expect(mockParams.focusSearch).toBeUndefined();
+
+      // Re-render (e.g. the tab regaining focus) with the param now cleared:
+      // the hand-off must not fire again, or `setParams` would be called a
+      // second time.
+      await rerender(<HomeScreen />);
+      expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
     });
   });
 });

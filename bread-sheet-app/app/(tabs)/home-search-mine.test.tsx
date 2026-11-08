@@ -197,12 +197,12 @@ describe('HomeScreen — Mine scope search (TICKET-P6-008 Slice A)', () => {
     await findByText('Negroni');
   });
 
-  it('composes with the category chips — deferred (TICKET-P6-003 not built)', () => {
-    // See features/search/match.ts: filterRatingsByQuery's categoryPredicate
-    // is already the AND-composition point P6-003's chips will plug into;
-    // there is nothing to exercise end-to-end until chips exist.
-    expect(true).toBe(true);
-  });
+  // "Composes with the category chips" (deferred, TICKET-P6-003 not built):
+  // no chips exist yet, so there is nothing to exercise end-to-end at the
+  // screen level. `filterRatingsByQuery`'s `categoryPredicate` is already the
+  // AND-composition point P6-003's chips will plug into, and that composition
+  // is covered for real in `features/search/match.test.ts` ("composes with an
+  // optional category predicate").
 
   it('does not persist the query across a remount (cold start)', async () => {
     mockApiGet.mockResolvedValue([rating('p1', 'Coca-Cola', null), rating('p2', 'Rye Bread', null)]);
