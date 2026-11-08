@@ -569,4 +569,68 @@ describe('runner regressions (TICKET-P9-003)', () => {
     });
   });
 
+  // A debug APK loads its JS from Metro, so CI reuses one across runs whose native inputs are
+  // unchanged (test-native-e2e.yml keys the cache on @expo/fingerprint). The runner's half of
+  // that contract: refuse an APK that can't be right, and never let a failed build out.
+  describe('prebuilt APK reuse (MAESTRO_APK / MAESTRO_APK_OUT)', () => {
+    const saved = process.env.MAESTRO_APK;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.MAESTRO_APK;
+      else process.env.MAESTRO_APK = saved;
+    });
+
+    /** A stand-in APK: only the zip entry names matter to the ABI check. */
+    function fakeApk(entries) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'maestro-apk-'));
+      const apk = path.join(dir, 'app-debug.apk');
+      fs.writeFileSync(apk, `PK\u0003\u0004${entries.join('\0')}\0`);
+      return apk;
+    }
+
+    test('unset means build as usual', () => {
+      delete process.env.MAESTRO_APK;
+      expect(runner.resolvePrebuiltApk('x86_64')).toBeNull();
+    });
+
+    test('a missing file is a hard error, not a silent rebuild', () => {
+      process.env.MAESTRO_APK = path.join(os.tmpdir(), 'no-such-dir', 'app-debug.apk');
+      expect(() => runner.resolvePrebuiltApk('x86_64')).toThrow(runner.RunnerError);
+      expect(() => runner.resolvePrebuiltApk('x86_64')).toThrow(/does not exist/);
+    });
+
+    test('an APK without the AVD ABI is refused before anything boots', () => {
+      process.env.MAESTRO_APK = fakeApk(['lib/arm64-v8a/libreactnative.so', 'classes.dex']);
+      expect(() => runner.resolvePrebuiltApk('x86_64')).toThrow(/no native libraries for x86_64/);
+    });
+
+    test('an APK carrying the AVD ABI is accepted as an absolute path', () => {
+      const apk = fakeApk(['lib/x86_64/libreactnative.so', 'classes.dex']);
+      process.env.MAESTRO_APK = path.relative(process.cwd(), apk);
+      expect(runner.resolvePrebuiltApk('x86_64')).toBe(apk);
+    });
+
+    test('an unknown AVD ABI skips the check rather than refusing every APK', () => {
+      process.env.MAESTRO_APK = fakeApk(['lib/arm64-v8a/libreactnative.so']);
+      expect(runner.resolvePrebuiltApk(null)).toBe(process.env.MAESTRO_APK);
+    });
+
+    test('the prebuilt branch skips the build and installs the prebuilt file', () => {
+      const code = codeOnly(RUNNER_SRC);
+      const branch = code.slice(code.indexOf('if (prebuiltApk) {'), code.indexOf('} else if (canOverlapBuildAndBoot())'));
+      expect(branch).toMatch(/bootEmulator\(/);
+      expect(branch).not.toMatch(/assembleDebug\(/);
+      expect(code).toMatch(/installDebugApk\(sdk, serial, prebuiltApk \|\| DEBUG_APK\)/);
+      // Resolved with the prerequisites, so a bad path fails in a second, not after the boot.
+      expect(code.indexOf('resolvePrebuiltApk(targetAbi)')).toBeLessThan(code.indexOf('MAESTRO_PREREQS_ONLY'));
+    });
+
+    test('a built APK is exported only after Gradle and the existence check succeeded', () => {
+      const code = codeOnly(RUNNER_SRC);
+      const body = code.slice(code.indexOf('async function assembleDebug('), code.indexOf('function exportBuiltApk('));
+      const exported = body.indexOf('exportBuiltApk()');
+      expect(exported).toBeGreaterThan(body.indexOf('Gradle :app:assembleDebug failed'));
+      expect(exported).toBeGreaterThan(body.indexOf('Gradle reported success but'));
+    });
+  });
+
 });

@@ -88,6 +88,37 @@ function readS3BucketName(): string {
   return v;
 }
 
+// The Supabase project every Bearer token is verified against (authMiddleware's
+// `auth.getUser`). On dev both come from SSM (`/breadsheet/dev/SUPABASE_*`, see
+// infrastructure.md § Hosted Supabase project). Missing used to fall through to
+// `createClient('', '')`, which only failed with supabase-js's own
+// "supabaseUrl is required." — this names the variable instead.
+function readSupabaseUrl(): string {
+  const v = process.env.SUPABASE_URL;
+  if (!v) {
+    throw new Error(
+      'Missing required environment variable: SUPABASE_URL ' +
+        '(the Supabase project URL, e.g. https://<project-ref>.supabase.co, ' +
+        'or http://127.0.0.1:54321 for a local `supabase start` stack)',
+    );
+  }
+  if (!/^https?:\/\//.test(v)) {
+    throw new Error(`Invalid SUPABASE_URL "${v}". Must start with http:// or https://`);
+  }
+  return v;
+}
+
+function readSupabasePublishableKey(): string {
+  const v = process.env.SUPABASE_PUBLISHABLE_DEFAULT_KEY;
+  if (!v) {
+    throw new Error(
+      'Missing required environment variable: SUPABASE_PUBLISHABLE_DEFAULT_KEY ' +
+        "(the Supabase project's publishable key, sb_publishable_…)",
+    );
+  }
+  return v;
+}
+
 interface Config {
   port: number;
   nodeEnv: string;
@@ -97,6 +128,8 @@ interface Config {
   s3BucketName: string;
   assetBaseUrl: string;
   appDeepLinkScheme: string;
+  supabaseUrl: string;
+  supabasePublishableKey: string;
   geminiDailyCallCap: number | null;
   originVerifySecret: string | null;
 }
@@ -159,6 +192,8 @@ const config: Config = {
   s3BucketName: readS3BucketName(),
   assetBaseUrl: readAssetBaseUrl(),
   appDeepLinkScheme,
+  supabaseUrl: readSupabaseUrl(),
+  supabasePublishableKey: readSupabasePublishableKey(),
   geminiDailyCallCap,
   originVerifySecret: process.env.ORIGIN_VERIFY_SECRET || null,
 };

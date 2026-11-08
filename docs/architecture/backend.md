@@ -381,6 +381,8 @@ A Postman collection covering every endpoint lives at `docs/postman/breadsheet.p
 
 **Mode-style variables** (e.g. `VISION_MODE` = `'mock' | 'live' | 'llm'`, `PLAUSIBILITY_MODE` = `'mock' | 'gemini'`) must be validated against an explicit allowlist. Any value outside the allowlist — including an absent value — is a startup error. Conditional secrets that a mode requires (e.g. `GEMINI_API_KEY` when `VISION_MODE=llm` or `PLAUSIBILITY_MODE=gemini`) are also validated at startup in `config.ts`, and so is `GEMINI_DAILY_CALL_CAP` (ADR 0005 § L2) — a positive integer, required under the same condition, `null` in `config.ts` (and never consulted) otherwise.
 
+**Required connection settings** follow the same rule. `SUPABASE_URL` (must be `http(s)://`) and `SUPABASE_PUBLISHABLE_DEFAULT_KEY` are read in `config.ts` (TICKET-P9-010), and `authMiddleware` builds its token-verifying Supabase client from `config`. They used to be read with `|| ''`, and the only error was supabase-js's own `supabaseUrl is required.`. Which project dev points at, and how to restore or rotate it: `infrastructure.md` § Hosted Supabase project.
+
 **Local-dev values** belong in `.env` (git-ignored), not hardcoded in source.
 
 This rule exists because silent defaults produce invisible misconfiguration: a server that assumes `mock` mode when `VISION_MODE` is unset will return fixture data in production without any log or alert.

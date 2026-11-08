@@ -25,6 +25,11 @@
  *   MAESTRO_SKIP_ENV_CHECK=1          don't require bread-sheet-app/.env
  *   MAESTRO_PREREQS_ONLY=1            resolve prerequisites, then exit 0 without
  *                                     booting/building (a fast machine check)
+ *   MAESTRO_APK=<path>                install this prebuilt debug APK instead of
+ *                                     running prebuild + Gradle (a missing file, or
+ *                                     one without the AVD's ABI, is a hard error)
+ *   MAESTRO_APK_OUT=<path>            copy the APK here after a successful build
+ *                                     (CI caches it under a native fingerprint)
  *   MAESTRO_GRADLE_TIMEOUT_MS / MAESTRO_BOOT_TIMEOUT_MS / MAESTRO_METRO_TIMEOUT_MS
  *
  * Prerequisites for a full run: JDK 17+, an Android SDK with emulator +
@@ -952,6 +957,56 @@ async function assembleDebug(sdk, java, abi) {
   if (!fs.existsSync(DEBUG_APK)) {
     fail(`Gradle reported success but ${DEBUG_APK} is missing.`);
   }
+  exportBuiltApk();
+}
+
+/**
+ * Reusing a debug APK across runs (MAESTRO_APK / MAESTRO_APK_OUT).
+ *
+ * A debug build does not embed the JS bundle; the app loads it from Metro at launch (see
+ * startMetro). So the APK depends only on the native inputs: autolinked native modules,
+ * config plugins and app.json. CI keys a cache on `@expo/fingerprint` over exactly those
+ * (.github/workflows/test-native-e2e.yml). A PR that only changes JS, which is nearly every
+ * PR that triggers this suite, then installs the cached APK instead of spending ~9 minutes
+ * in Gradle. The cache key, not this runner, decides whether a cached APK is still valid.
+ *
+ * Exported only from here, after Gradle and the existence check both succeeded, so a failed
+ * or partial build can never reach the cache.
+ */
+function exportBuiltApk() {
+  const out = process.env.MAESTRO_APK_OUT;
+  if (!out) return;
+  const dest = path.resolve(out);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(DEBUG_APK, dest);
+  log(`copied the debug APK to ${dest} (MAESTRO_APK_OUT)`);
+}
+
+/**
+ * The prebuilt APK named by MAESTRO_APK, checked before anything boots. The file must exist
+ * and carry native libraries for the AVD's ABI: an APK built for another ABI installs fine
+ * and then crashes on launch, which reads as a flow failure rather than a wrong artifact.
+ * Zip entry names are stored uncompressed, so a byte search for `lib/<abi>/` is enough
+ * without unpacking anything.
+ */
+function resolvePrebuiltApk(abi) {
+  const raw = process.env.MAESTRO_APK;
+  if (!raw) return null;
+  const apk = path.resolve(raw);
+  if (!fs.existsSync(apk)) {
+    fail(`MAESTRO_APK=${raw} does not exist. Unset it to build the debug APK instead.`);
+  }
+  if (abi && !apkHasAbi(apk, abi)) {
+    fail(
+      `MAESTRO_APK=${raw} has no native libraries for ${abi}, the ABI of the AVD this run ` +
+        'boots, so it was built for another ABI. Unset MAESTRO_APK to rebuild.'
+    );
+  }
+  return apk;
+}
+
+function apkHasAbi(apk, abi) {
+  return fs.readFileSync(apk).includes(Buffer.from(`lib/${abi}/`));
 }
 
 /**
@@ -961,9 +1016,9 @@ async function assembleDebug(sdk, java, abi) {
  * well as the status — a silently failed install would surface much later as a flow timing
  * out on a screen belonging to the previous build.
  */
-function installDebugApk(sdk, serial) {
-  log('installing debug APK…');
-  const res = adb(sdk, ['install', '-r', '-d', DEBUG_APK], serial);
+function installDebugApk(sdk, serial, apk = DEBUG_APK) {
+  log(`installing debug APK ${apk}…`);
+  const res = adb(sdk, ['install', '-r', '-d', apk], serial);
   const output = `${res.stdout || ''}${res.stderr || ''}`;
   if (res.status !== 0 || /Failure|Error:/i.test(output)) {
     fail(`adb install of the debug APK failed. ${output.trim()}`);
@@ -1019,6 +1074,10 @@ async function main() {
 
   const avd = ensureAvd(sdk, path.isAbsolute(java) ? path.dirname(path.dirname(java)) : undefined);
   log(`AVD: ${avd}`);
+  // Read before anything boots: the APK must match the device it will be installed on.
+  const targetAbi = avdAbi(avd);
+  const prebuiltApk = resolvePrebuiltApk(targetAbi);
+  if (prebuiltApk) log(`prebuilt APK: ${prebuiltApk} (MAESTRO_APK), skipping prebuild and Gradle`);
 
   // Lets a machine verify that it *can* run the suite (SDK, JDK, Maestro, AVD
   // all resolved) in a second, instead of finding out 40 minutes into a Gradle
@@ -1041,10 +1100,10 @@ async function main() {
     // compiling. Observed on a 2-vCPU GitHub runner — "emulator did not attach to adb within
     // 300s" with Kotlin tasks still printing after teardown. So overlap only where there are
     // cores to spare, and otherwise build first and boot into an idle machine.
-    // Read before anything boots: the APK must match the device it will be installed on.
-    const targetAbi = avdAbi(avd);
-
-    if (canOverlapBuildAndBoot()) {
+    if (prebuiltApk) {
+      emulatorChild = bootEmulator(sdk, avd);
+      serial = waitForBoot(sdk, preexistingSerials);
+    } else if (canOverlapBuildAndBoot()) {
       emulatorChild = bootEmulator(sdk, avd);
       const assembling = assembleDebug(sdk, java, targetAbi);
       serial = waitForBoot(sdk, preexistingSerials);
@@ -1063,7 +1122,7 @@ async function main() {
     // (no CAMERA pre-grant) and never wipe anything on a repeat run — leaving
     // the previous run's guest session behind, which lands the app in the tabs
     // and stalls both flows on "Continue as Guest".
-    installDebugApk(sdk, serial);
+    installDebugApk(sdk, serial, prebuiltApk || DEBUG_APK);
 
     // Fresh app data (wipes any leftover session from a previous run)…
     const cleared = adb(sdk, ['shell', 'pm', 'clear', APP_ID], serial);
@@ -1157,6 +1216,9 @@ if (require.main === module) {
     adb,
     bootEmulator,
     assembleDebug,
+    apkHasAbi,
+    exportBuiltApk,
+    resolvePrebuiltApk,
     canOverlapBuildAndBoot,
     cpuCount,
     ensureNativeProject,

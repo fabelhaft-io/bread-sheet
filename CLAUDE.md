@@ -228,6 +228,10 @@ DB_AUTH=password                              # password | iam  (defaults to pas
 # DB_USER=breadsheet_iam
 # DB_NAME=breadsheet
 
+# Supabase project every Bearer token is verified against (authMiddleware). Both required,
+# no default — config.ts refuses to start without them; SUPABASE_URL must be http(s)://.
+# Dev reads them from SSM; which project that is and how to restore/rotate it:
+# infrastructure.md § Hosted Supabase project.
 SUPABASE_URL=...
 SUPABASE_PUBLISHABLE_DEFAULT_KEY=...
 

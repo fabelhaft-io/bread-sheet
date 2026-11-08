@@ -39,6 +39,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The flows sign in as a guest against the hosted Supabase project the dev API trusts
+      # (SSM /breadsheet/dev/SUPABASE_URL; the repo variables below must name the same
+      # project). It is a free-tier project, which Supabase pauses when it sees no traffic.
+      # In Nov 2026 that showed up as every guest sign-in timing out. Check it up front, for
+      # the same reason as the dev API check below: fail, don't skip, and say why.
+      # Restore / rotate runbook: docs/architecture/infrastructure.md § Hosted Supabase project.
+      - name: Preflight — is the hosted Supabase project up?
+        env:
+          SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
+        run: |
+          test -n "$SUPABASE_URL" || { echo "::error::EXPO_PUBLIC_SUPABASE_URL repo variable is not set"; exit 1; }
+          test -n "$SUPABASE_KEY" || { echo "::error::EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY repo variable is not set"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 3 --retry-all-errors \
+            -H "apikey: $SUPABASE_KEY" "$SUPABASE_URL/auth/v1/health" || true)
+          case "$code" in
+            2??) echo "Supabase auth is up (HTTP $code)" ;;
+            *)
+              echo "::error title=Supabase project unreachable::$SUPABASE_URL/auth/v1/health answered HTTP ${code:-000} (000 = no answer, e.g. DNS). The hosted project is most likely paused — restore it in the Supabase dashboard (docs/architecture/infrastructure.md § Hosted Supabase project) or every guest sign-in will time out."
+              exit 1
+              ;;
+          esac
+
       # The flows run against the real dev API, which is paused most of the time (Tier 3,
       # dev-auto-teardown.yml). While it is paused, the scan flows fail in ways that look like
       # regressions. Check up front, before ~10 minutes of emulator boot and Gradle build. This
@@ -94,29 +117,26 @@ jobs:
       # them, so without this every run re-downloads them. Keyed on the image coordinates: a
       # different API or flavour must miss, since booting the wrong image is exactly the
       # failure this suite hit during development (Play-Store images hang Maestro's inputText).
-      # ~/.android/avd rides along so the AVD survives too; the runner wipes app data after
-      # install and both flows launch with clearState, so inherited userdata cannot leak in.
-      # Its qcow2 overlays are excluded: they are the disk state of the last boot, and the next
-      # run never reads them back — the emulator boots with -no-snapshot and recreates them
-      # from userdata-qemu.img. Worth only ~40 MiB here (3.22 → 3.18 GiB), because a CI AVD
-      # boots once and writes little; a developer's AVD accumulates gigabytes of overlay, which
-      # is what this exclusion keeps out should the key ever be primed from one. The entry is
-      # dominated by the emulator package and system image, not the AVD. The exclusion must
-      # stay inside the block scalar and unquoted — a `#` line here is a pattern, not a
-      # comment.
+      #
+      # The AVD is deliberately NOT cached; the runner creates a fresh one each run in seconds.
+      # Up to -v2, ~/.android/avd rode along (minus its *.qcow2 overlays). Because a cache is
+      # saved at job END, the entry held an AVD that had already been booted and used, without
+      # the overlays its disk state belonged to. The first run on a cold cache passed. Every
+      # run that restored the entry booted into "System UI isn't responding" over the login
+      # screen and failed both flows at "Continue as Guest" (PR #200: a fresh AVD passed, the
+      # restored one failed twice, with and without the APK cache). Only immutable, downloaded
+      # inputs belong in this entry.
       # The -vN suffix moves whenever the path list does: an entry is immutable once written,
       # so a narrowed path list against an unchanged key keeps restoring the old, wider entry
-      # and never saves the new one. Expect one slow run after a bump — it re-downloads the
-      # emulator and system image, then every run after it restores roughly half as much.
-      - name: Cache Android emulator, system image and AVD
+      # and never saves the new one. Expect one slow run after a bump: it re-downloads the
+      # emulator and system image.
+      - name: Cache Android emulator and system image
         uses: actions/cache@v6
         with:
           path: |
             ${{ env.ANDROID_SDK_PATH }}/emulator
             ${{ env.ANDROID_SDK_PATH }}/system-images/android-35/google_apis/x86_64
-            ~/.android/avd
-            !~/.android/avd/*.avd/*.qcow2
-          key: android-emu-${{ runner.os }}-api35-google_apis-x86_64-v2
+          key: android-emu-${{ runner.os }}-api35-google_apis-x86_64-v3
 
       # ubuntu-24.04 ships the SDK, cmdline-tools and platform-tools but NOT the emulator,
       # and no system image — so scripts/test-maestro.js correctly refuses to start. Install
@@ -151,7 +171,35 @@ jobs:
           curl -Ls "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
+      # A debug APK does not embed the JS bundle: the app loads it from Metro at launch. So the
+      # APK depends only on the native inputs, and a PR that changes only JS, which is nearly
+      # every PR that triggers this workflow, can install the APK an earlier run built and skip
+      # prebuild + Gradle (~9 of this job's ~13 minutes). @expo/fingerprint hashes exactly those
+      # inputs: autolinked native modules and their versions, config plugins, app.json, icons
+      # and package.json scripts. It ignores JS-only dependencies, and android/ is gitignored
+      # here, so its absence before prebuild doesn't move the hash. The key adds the runner
+      # script, which owns the Gradle arguments, and the ABI the AVD below runs. No
+      # EXPO_PUBLIC_* value reaches the APK (Metro inlines them into the JS), so a cache entry
+      # holds no secret. Bump -v1 to discard every entry.
+      - name: Fingerprint the native inputs
+        id: native
+        run: |
+          hash=$(node -e "require('@expo/fingerprint').createFingerprintAsync('.', { platforms: ['android'] }).then((f) => console.log(f.hash))")
+          test -n "$hash" || { echo "::error::@expo/fingerprint produced no hash"; exit 1; }
+          echo "native fingerprint: $hash"
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the debug APK for these native inputs
+        id: apk
+        uses: actions/cache/restore@v6
+        with:
+          path: .maestro-apk
+          key: maestro-apk-${{ runner.os }}-x86_64-${{ steps.native.outputs.hash }}-${{ hashFiles('bread-sheet-app/scripts/test-maestro.js') }}-v1
+
+      # Only a build needs Gradle's caches; on an APK hit this restore and its ~40 s post-save
+      # are pure overhead.
       - name: Cache Gradle
+        if: steps.apk.outputs.cache-hit != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -162,8 +210,10 @@ jobs:
 
       # The runner provisions its own AVD when cmdline-tools are present, which they are on
       # this image. Supabase config comes from repo *variables*, not secrets: both are
-      # EXPO_PUBLIC_* values Expo bakes into the client bundle, so they are already public —
-      # the same reasoning as the Playwright job in test.yml.
+      # EXPO_PUBLIC_* values Expo bakes into the client bundle, so they are already public.
+      # Unlike the Playwright job in test.yml, which runs on a local `supabase start` stack,
+      # these flows can't use a throwaway Supabase: the dev API verifies every token
+      # against its own hosted project, so the app has to sign in to that one.
       - name: Run Maestro flows
         run: npm run test:maestro
         env:
@@ -174,6 +224,10 @@ jobs:
           # A cold boot of a fresh AVD on a 2-vCPU runner is slower than any developer machine;
           # the default 5 minutes is comfortable locally and tight here.
           MAESTRO_BOOT_TIMEOUT_MS: '600000'
+          # A hit installs the restored APK and skips the build. A miss builds, and the runner
+          # copies the APK out only after Gradle succeeded. Empty means unset to the runner.
+          MAESTRO_APK: ${{ steps.apk.outputs.cache-hit == 'true' && format('{0}/.maestro-apk/app-debug.apk', github.workspace) || '' }}
+          MAESTRO_APK_OUT: ${{ steps.apk.outputs.cache-hit != 'true' && format('{0}/.maestro-apk/app-debug.apk', github.workspace) || '' }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
           EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
@@ -181,6 +235,16 @@ jobs:
           # GitHub-hosted runners aren't. Sent as X-Edge-Bypass (lib/api.ts), matched
           # by the WAF's "edge-bypass" rule
           EXPO_PUBLIC_EDGE_BYPASS_SECRET: ${{ secrets.EDGE_BYPASS_SECRET }}
+
+      # Saved even when a flow failed: the runner only exports an APK whose build succeeded, and
+      # a flaky flow shouldn't throw away a 9-minute build. The file is missing (so nothing is
+      # saved) when the build itself failed or the run never reached it.
+      - name: Save the debug APK for these native inputs
+        if: ${{ !cancelled() && steps.apk.outputs.cache-hit != 'true' && hashFiles('.maestro-apk/app-debug.apk') != '' }}
+        uses: actions/cache/save@v6
+        with:
+          path: .maestro-apk
+          key: ${{ steps.apk.outputs.cache-primary-key }}
 
       # Screenshots and per-step view hierarchies live in Maestro's own run directory, not in
       # the repo — the hierarchy JSON is what distinguishes "view was off-screen" from "wrong

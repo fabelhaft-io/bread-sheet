@@ -9,9 +9,50 @@ on:
 permissions:
   contents: read
 
+# A second push to a PR supersedes the first rather than racing it. Never cancel on main.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # Each job below runs only when its area changed. Gated per *job* (a skipped job reports as
+  # passing), not with workflow-level `paths:` — a workflow that never starts leaves a required
+  # check pending forever, should main ever get one. Pushes to main always run everything, so
+  # main stays fully tested whatever a PR's filter decided. Every filter includes this file.
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read # paths-filter lists a PR's files through the API, without a checkout
+    outputs:
+      server: ${{ github.event_name != 'pull_request' || steps.filter.outputs.server == 'true' }}
+      app: ${{ github.event_name != 'pull_request' || steps.filter.outputs.app == 'true' }}
+      e2e: ${{ github.event_name != 'pull_request' || steps.filter.outputs.e2e == 'true' }}
+      ops: ${{ github.event_name != 'pull_request' || steps.filter.outputs.ops == 'true' }}
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        if: github.event_name == 'pull_request'
+        id: filter
+        with:
+          filters: |
+            server:
+              - 'server/**'
+              - '.github/workflows/test.yml'
+            app:
+              - 'bread-sheet-app/**'
+              - '.github/workflows/test.yml'
+            e2e:
+              - 'bread-sheet-app/**'
+              - 'supabase/**'
+              - '.github/workflows/test.yml'
+            ops:
+              - 'scripts/ops/**'
+              - '.github/workflows/test.yml'
+
   server:
     name: Server unit & integration tests
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -42,6 +83,8 @@ jobs:
 
   app:
     name: App unit tests
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -67,6 +110,8 @@ jobs:
 
   ops:
     name: Ops script tests (dev auto-teardown)
+    needs: changes
+    if: needs.changes.outputs.ops == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -82,6 +127,8 @@ jobs:
 
   e2e:
     name: App E2E tests (Playwright, Expo web)
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -105,6 +152,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Installed from npm by the action. 2.122.0 is the CLI supabase/config.toml was
+      # generated with; the action is pinned by commit (v3.0.1).
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.122.0
+
+      # `supabase start` is the slowest step (image pulls, Postgres init, schema init) and
+      # depends on nothing the npm/Playwright installs produce, so it runs in the background
+      # while they do and "Wait for local Supabase" joins it before anything reads its config.
+      # A background process outlives its step; the runner reaps it at job end. The exit code is
+      # written to a temp name and moved into place so the waiter never reads a half-written
+      # file. Postgres can't be excluded; gotrue and kong are the only other services kept.
+      # Without --ignore-health-check, an unhealthy container exits non-zero.
+      - name: Start local Supabase in the background (db, auth, gateway)
+        working-directory: ${{ github.workspace }}
+        run: |
+          nohup bash -c '
+            supabase start --exclude "$SUPABASE_EXCLUDE"
+            echo $? > "$RUNNER_TEMP/supabase-start.exit.tmp"
+            mv "$RUNNER_TEMP/supabase-start.exit.tmp" "$RUNNER_TEMP/supabase-start.exit"
+          ' > "$RUNNER_TEMP/supabase-start.log" 2>&1 &
+
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -114,21 +184,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Headless runs use chromium-headless-shell, so the full headed Chromium is never
+      # launched here — --only-shell skips downloading it.
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
 
-      # Installed from npm by the action. 2.122.0 is the CLI supabase/config.toml was
-      # generated with; the action is pinned by commit (v3.0.1).
-      - name: Set up Supabase CLI
-        uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
-        with:
-          version: 2.122.0
-
-      # Postgres can't be excluded; gotrue and kong are the only other services kept.
-      # Without --ignore-health-check, an unhealthy container exits non-zero here.
-      - name: Start local Supabase (db, auth, gateway)
-        working-directory: ${{ github.workspace }}
-        run: supabase start --exclude "$SUPABASE_EXCLUDE"
+      - name: Wait for local Supabase
+        run: |
+          exit_file="$RUNNER_TEMP/supabase-start.exit"
+          for _ in $(seq 1 300); do
+            [ -f "$exit_file" ] && break
+            sleep 1
+          done
+          echo "::group::supabase start output"
+          cat "$RUNNER_TEMP/supabase-start.log"
+          echo "::endgroup::"
+          [ -f "$exit_file" ] || { echo "::error::supabase start did not finish within 300 s (output above)"; exit 1; }
+          code="$(cat "$exit_file")"
+          [ "$code" = 0 ] || { echo "::error::supabase start exited with status $code (output above)"; exit 1; }
 
       # PUBLISHABLE_KEY (sb_publishable_…) rather than the legacy ANON_KEY JWT: it is the
       # key type the app's variable is named for and what the hosted project handed it.
@@ -170,7 +243,3 @@ jobs:
           path: bread-sheet-app/playwright-report/
           retention-days: 14
 
-      - name: Stop local Supabase
-        if: always()
-        working-directory: ${{ github.workspace }}
-        run: supabase stop --no-backup

@@ -488,9 +488,13 @@ That file is the stock `supabase init` template (CLI 2.122.0) with one change,
 
 1. installs the CLI with `supabase/setup-cli` (action pinned by commit, CLI pinned to
    `2.122.0`);
-2. runs `supabase start --exclude …`, excluding every service except Postgres (not
-   excludable), `gotrue` and `kong`. The names come from that version's
-   `supabase start --help`;
+2. runs `supabase start --exclude …` **in the background**, overlapping `npm ci` and the
+   Playwright install (it needs neither), and joins it in a "Wait for local Supabase" step
+   that prints its output and fails on a non-zero exit or after 300 s. The exclude list keeps
+   only Postgres (not excludable), `gotrue` and `kong`; the names come from that version's
+   `supabase start --help`. `[realtime]` and `[storage]` are also `enabled = false` in
+   `config.toml`, because `--exclude` does not stop the CLI running those services' schema
+   migrations (it pulls both images to do so, ~30 s on a runner);
 3. reads `API_URL` and `PUBLISHABLE_KEY` from `supabase status -o json`, checks both are
    non-empty and that GoTrue's `/auth/v1/settings` reports `external.anonymous_users: true`,
    and writes them to `$GITHUB_ENV` as `EXPO_PUBLIC_SUPABASE_URL` /
@@ -498,8 +502,12 @@ That file is the stock `supabase init` template (CLI 2.122.0) with one change,
    because Expo inlines `EXPO_PUBLIC_*` when the web server starts. The `sb_publishable_…`
    key is used rather than the legacy `ANON_KEY` JWT because it is the key type the app's
    variable names, and supabase-js accepts it;
-4. runs the specs, uploads the Playwright report, and `supabase stop --no-backup` in an
-   `if: always()` step.
+4. runs the specs and uploads the Playwright report. There is no `supabase stop`: the
+   hosted runner is discarded with the job.
+
+The job runs only when a PR touches `bread-sheet-app/`, `supabase/` or the workflow file. A
+`changes` job (`dorny/paths-filter`) gates every job in `test.yml` by area, and a push to
+`main` runs all of them.
 
 Each step fails the job with a named error rather than falling back to anything. The job
 used to read a hosted project's URL and key from repo variables. When that free-tier
@@ -571,6 +579,20 @@ mid-build), the `MAESTRO_*_TIMEOUT_MS` budgets, and `MAESTRO_INSTALL=1` to opt *
 to the runner installing the Maestro CLI via `curl … | bash`. That install is
 opt-in, not opt-out: piping a remote script into bash is a supply-chain surface, so
 by default the runner fails and prints the command for you to run.
+
+**Reusing the debug APK:** `MAESTRO_APK=<path>` installs a prebuilt debug APK and skips
+`expo prebuild` and Gradle. It is resolved with the prerequisites, and a missing file, or
+an APK without native libraries for the AVD's ABI, is a hard error rather than a silent
+rebuild. `MAESTRO_APK_OUT=<path>` copies the APK there, but only after `assembleDebug` and
+its existence check both succeeded, so a failed build can't escape. This works because a
+debug build doesn't embed the JS bundle: the app loads it from Metro, so the APK depends
+only on the native inputs. CI (`test-native-e2e.yml`) keys an `actions/cache` entry on
+`@expo/fingerprint` for Android (autolinked native modules, config plugins, `app.json`,
+icons, `package.json` scripts; JS-only dependencies excluded) plus the runner script's hash
+and the ABI. A PR that only changes JS restores the APK and skips ~9 of the job's ~13
+minutes, including the Gradle cache restore. A miss builds as before and saves the APK even
+when a flow fails. No `EXPO_PUBLIC_*` value is in the APK (Metro inlines them into the JS),
+so a cache entry holds no secret.
 
 `scripts/test-maestro-wiring.test.js` guards all of this from jest — the npm script
 string, the runner's syntax, flow structure (app id, `clearState`, testID-based
