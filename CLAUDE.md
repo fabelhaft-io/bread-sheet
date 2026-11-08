@@ -21,7 +21,10 @@ npm run android     # Android emulator
 npm run web         # Web browser
 npm run lint        # ESLint
 npm test            # Jest unit tests
-npm run test:e2e    # Playwright E2E against Expo web
+npm run test:e2e    # Playwright E2E against Expo web. Specs sign in as a guest against a
+                    # *local* Supabase (`supabase start` from the repo root, config in
+                    # supabase/config.toml — anonymous sign-ins on); CI starts the same stack
+                    # inside the job, no hosted project or repo variables. See README.md.
 npm run test:maestro  # Native E2E (Maestro on an Android emulator) — camera/scan flows.
                       # Needs a JDK 17-21, an Android SDK and the Maestro CLI; see README.md.
                       # MAESTRO_PREREQS_ONLY=1 checks the machine in ~1s without building.

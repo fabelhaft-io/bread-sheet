@@ -1,9 +1,9 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Golden path: guest sign-in lands on the tab navigator. Requires a working
- * bread-sheet-app/.env (Supabase project reachable) — this hits real auth, same as the
- * manual testing flow documented in README.md.
+ * Golden path: guest sign-in lands on the tab navigator. This hits real Supabase auth —
+ * the local `supabase start` stack in CI and in README.md's E2E instructions — so it
+ * needs anonymous sign-ins enabled there (supabase/config.toml).
  */
 test('guest can sign in and reach the Home tab', async ({ page }) => {
   await page.goto('/');
