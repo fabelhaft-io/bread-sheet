@@ -358,6 +358,21 @@ Per the repo's convention these belong in `FEATURES.md` as tickets, but a review
 write scope is this ticket's checkboxes only (`guardrails.md` § Scope), so they are filed here for
 the coordinator or a human to promote. **Items 1 and 2 are the ones worth promoting first.**
 
+**Promoted to `FEATURES.md` (coordinator, 2026-11-08):**
+
+| # | Home in `FEATURES.md` |
+|---|---|
+| 1 | new **TICKET-P9-011** — real-Postgres integration tests in CI |
+| 2 | note + acceptance criterion on **TICKET-P9-006**, which already tracked the "can't fork" failure |
+| 3 | done in `2c14493`; no ticket |
+| 4 | note on **TICKET-P6-003** (closes P6-008's chip-composition box) |
+| 5 | new **TICKET-P9-012** — prove the rate limiters throttle |
+| 6 | new **TICKET-P6-012** — rank brand matches fairly |
+| 7 | implementation bullet on **TICKET-P9-007** |
+| 8 | widened **TICKET-P9-008** to the app and to a CI lint step |
+
+The other open Slice A box (P6-007 item findable) is now an acceptance criterion on **TICKET-P6-007**.
+
 1. **Give the `server` CI job a Postgres service**, so `pg_trgm` behaviour, the visibility filter and
    the trigram indexes are verified continuously instead of twice by hand. Every server test mocks
    `../db.js` (repo-wide convention; CI has no Postgres), so the claims proved by the reviewer's
