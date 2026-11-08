@@ -580,6 +580,20 @@ to the runner installing the Maestro CLI via `curl … | bash`. That install is
 opt-in, not opt-out: piping a remote script into bash is a supply-chain surface, so
 by default the runner fails and prints the command for you to run.
 
+**Reusing the debug APK:** `MAESTRO_APK=<path>` installs a prebuilt debug APK and skips
+`expo prebuild` and Gradle. It is resolved with the prerequisites, and a missing file, or
+an APK without native libraries for the AVD's ABI, is a hard error rather than a silent
+rebuild. `MAESTRO_APK_OUT=<path>` copies the APK there, but only after `assembleDebug` and
+its existence check both succeeded, so a failed build can't escape. This works because a
+debug build doesn't embed the JS bundle: the app loads it from Metro, so the APK depends
+only on the native inputs. CI (`test-native-e2e.yml`) keys an `actions/cache` entry on
+`@expo/fingerprint` for Android (autolinked native modules, config plugins, `app.json`,
+icons, `package.json` scripts; JS-only dependencies excluded) plus the runner script's hash
+and the ABI. A PR that only changes JS restores the APK and skips ~9 of the job's ~13
+minutes, including the Gradle cache restore. A miss builds as before and saves the APK even
+when a flow fails. No `EXPO_PUBLIC_*` value is in the APK (Metro inlines them into the JS),
+so a cache entry holds no secret.
+
 `scripts/test-maestro-wiring.test.js` guards all of this from jest — the npm script
 string, the runner's syntax, flow structure (app id, `clearState`, testID-based
 landing assertions), plus regression tests on the runner's exported helpers (AVD

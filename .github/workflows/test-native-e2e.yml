@@ -174,7 +174,35 @@ jobs:
           curl -Ls "https://get.maestro.mobile.dev" | bash
           echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
 
+      # A debug APK does not embed the JS bundle: the app loads it from Metro at launch. So the
+      # APK depends only on the native inputs, and a PR that changes only JS, which is nearly
+      # every PR that triggers this workflow, can install the APK an earlier run built and skip
+      # prebuild + Gradle (~9 of this job's ~13 minutes). @expo/fingerprint hashes exactly those
+      # inputs: autolinked native modules and their versions, config plugins, app.json, icons
+      # and package.json scripts. It ignores JS-only dependencies, and android/ is gitignored
+      # here, so its absence before prebuild doesn't move the hash. The key adds the runner
+      # script, which owns the Gradle arguments, and the ABI the AVD below runs. No
+      # EXPO_PUBLIC_* value reaches the APK (Metro inlines them into the JS), so a cache entry
+      # holds no secret. Bump -v1 to discard every entry.
+      - name: Fingerprint the native inputs
+        id: native
+        run: |
+          hash=$(node -e "require('@expo/fingerprint').createFingerprintAsync('.', { platforms: ['android'] }).then((f) => console.log(f.hash))")
+          test -n "$hash" || { echo "::error::@expo/fingerprint produced no hash"; exit 1; }
+          echo "native fingerprint: $hash"
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the debug APK for these native inputs
+        id: apk
+        uses: actions/cache/restore@v6
+        with:
+          path: .maestro-apk
+          key: maestro-apk-${{ runner.os }}-x86_64-${{ steps.native.outputs.hash }}-${{ hashFiles('bread-sheet-app/scripts/test-maestro.js') }}-v1
+
+      # Only a build needs Gradle's caches; on an APK hit this restore and its ~40 s post-save
+      # are pure overhead.
       - name: Cache Gradle
+        if: steps.apk.outputs.cache-hit != 'true'
         uses: actions/cache@v6
         with:
           path: |
@@ -199,6 +227,10 @@ jobs:
           # A cold boot of a fresh AVD on a 2-vCPU runner is slower than any developer machine;
           # the default 5 minutes is comfortable locally and tight here.
           MAESTRO_BOOT_TIMEOUT_MS: '600000'
+          # A hit installs the restored APK and skips the build. A miss builds, and the runner
+          # copies the APK out only after Gradle succeeded. Empty means unset to the runner.
+          MAESTRO_APK: ${{ steps.apk.outputs.cache-hit == 'true' && format('{0}/.maestro-apk/app-debug.apk', github.workspace) || '' }}
+          MAESTRO_APK_OUT: ${{ steps.apk.outputs.cache-hit != 'true' && format('{0}/.maestro-apk/app-debug.apk', github.workspace) || '' }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
           EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
@@ -206,6 +238,16 @@ jobs:
           # GitHub-hosted runners aren't. Sent as X-Edge-Bypass (lib/api.ts), matched
           # by the WAF's "edge-bypass" rule
           EXPO_PUBLIC_EDGE_BYPASS_SECRET: ${{ secrets.EDGE_BYPASS_SECRET }}
+
+      # Saved even when a flow failed: the runner only exports an APK whose build succeeded, and
+      # a flaky flow shouldn't throw away a 9-minute build. The file is missing (so nothing is
+      # saved) when the build itself failed or the run never reached it.
+      - name: Save the debug APK for these native inputs
+        if: ${{ !cancelled() && steps.apk.outputs.cache-hit != 'true' && hashFiles('.maestro-apk/app-debug.apk') != '' }}
+        uses: actions/cache/save@v6
+        with:
+          path: .maestro-apk
+          key: ${{ steps.apk.outputs.cache-primary-key }}
 
       # Screenshots and per-step view hierarchies live in Maestro's own run directory, not in
       # the repo — the hierarchy JSON is what distinguishes "view was off-screen" from "wrong
