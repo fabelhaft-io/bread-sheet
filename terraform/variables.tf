@@ -87,6 +87,22 @@ variable "db_snapshot_identifier" {
   default     = ""
 }
 
+variable "server_image" {
+  type        = string
+  description = <<-EOT
+    Server container image for aws_ecs_task_definition.server, e.g.
+    ghcr.io/fabelhaft-io/bread-sheet-server:<git-sha>. No default, so it fails fast. It is
+    consumed only when the task definition is created (container_definitions is in
+    ignore_changes), which in practice means a Tier 3 resume. Don't pass it by hand: use
+    scripts/dev-stack.sh resume|plan|apply, which reads it from the snapshot's `image` tag or
+    from the live service. See docs/architecture/infrastructure.md § Pausing / Resuming the Dev Stack.
+  EOT
+  validation {
+    condition     = can(regex("^ghcr\\.io/fabelhaft-io/bread-sheet-server(:[A-Za-z0-9_.-]+|@sha256:[0-9a-f]{64})$", var.server_image))
+    error_message = "server_image must be ghcr.io/fabelhaft-io/bread-sheet-server:<tag> or @sha256:<digest>."
+  }
+}
+
 variable "db_iam_user" {
   type        = string
   description = "PostgreSQL username granted rds_iam for IAM database authentication."

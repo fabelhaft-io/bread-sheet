@@ -1,0 +1,140 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.15.9",
+  "variables": {
+    "server_image": {
+      "value": "ghcr.io/fabelhaft-io/bread-sheet-server:aaf9297fc0e94eb49aefcb7e15d83f04c5a80959"
+    }
+  },
+  "planned_values": {
+    "root_module": {}
+  },
+  "resource_changes": [
+    {
+      "address": "aws_budgets_budget_action.stop_rds",
+      "mode": "managed",
+      "type": "aws_budgets_budget_action",
+      "name": "stop_rds",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "action_id": "0f2c6a1e-5b7d-4c3a-9e21-7d4b8f0a1c55",
+          "budget_name": "breadsheet-dev-monthly",
+          "action_type": "RUN_SSM_DOCUMENTS"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_db_instance.main",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "identifier": "breadsheet-dev-database-1",
+          "engine": "postgres",
+          "engine_version": "18.3",
+          "instance_class": "db.t4g.micro",
+          "skip_final_snapshot": true
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_ecs_service.server",
+      "mode": "managed",
+      "type": "aws_ecs_service",
+      "name": "server",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "name": "breadsheet-dev-server-service",
+          "desired_count": 1,
+          "launch_type": "FARGATE"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_ecs_task_definition.server",
+      "mode": "managed",
+      "type": "aws_ecs_task_definition",
+      "name": "server",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "family": "breadsheet-dev-server",
+          "revision": 48
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_iam_role_policy.ecs_task_rds_iam",
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "ecs_task_rds_iam",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "name": "RdsIamConnect",
+          "role": "breadsheet-dev-ecs-task"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ],
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.15.9",
+    "values": {
+      "root_module": {}
+    }
+  },
+  "configuration": {
+    "provider_config": {
+      "aws": {
+        "name": "aws",
+        "full_name": "registry.terraform.io/hashicorp/aws"
+      }
+    },
+    "root_module": {}
+  },
+  "relevant_attributes": [],
+  "timestamp": "2026-11-08T02:19:04Z",
+  "applyable": true,
+  "complete": true,
+  "errored": false
+}

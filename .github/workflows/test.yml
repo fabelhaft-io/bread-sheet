@@ -65,6 +65,21 @@ jobs:
       - name: Run tests
         run: npm test
 
+  ops:
+    name: Ops script tests (dev auto-teardown)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # Dependency-free (node:test), so no npm ci. Covers the gate, plan-assertion and
+      # snapshot-prune decisions behind .github/workflows/dev-auto-teardown.yml.
+      - name: Run tests
+        run: node --test 'scripts/ops/*.test.mjs'
+
   e2e:
     name: App E2E tests (Playwright, Expo web)
     runs-on: ubuntu-latest

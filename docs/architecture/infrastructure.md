@@ -301,7 +301,9 @@ Two steps, and both are needed:
 # 1. Force a new revision. `ignore_changes` does not apply to a create, so the
 #    replacement is built entirely from config. Any top-level attribute change
 #    (cpu, memory) forces this on its own; otherwise ask for it explicitly.
-terraform apply -var-file=environments/dev.tfvars -replace=aws_ecs_task_definition.server
+#    The script supplies `server_image` from the live service, so the new
+#    revision keeps running the image that is deployed now (see § Pausing / Resuming).
+scripts/dev-stack.sh apply -- -replace=aws_ecs_task_definition.server
 
 # 2. Roll it out. The service ignores `task_definition`, so Terraform will not.
 #    The family name resolves to the latest ACTIVE revision.
@@ -431,12 +433,13 @@ CloudFront URL until the forced task replacement rolls out. Worse, the first `-r
 this rollout used the stale image pin still in `ecs.tf` at the time, silently redeploying an older
 commit whose migration step crashed on every launch (`P1013: invalid port number` in the RDS IAM
 token) — ECS's circuit breaker rolled each attempt back automatically, so the service stayed up, but
-the image gap stayed open for longer than it should have. **Update the image pin to the currently-live
-tag before running `-replace` on the task definition, every time**, then do both steps back to back:
+the image gap stayed open for longer than it should have. That pin is gone (TICKET-P9-009). The
+image is now `var.server_image`, which `scripts/dev-stack.sh apply` reads from the live service, so a
+`-replace` keeps the deployed image. Do both steps back to back:
 
 ```sh
-terraform apply -var-file=environments/dev.tfvars
-terraform apply -var-file=environments/dev.tfvars -replace=aws_ecs_task_definition.server
+scripts/dev-stack.sh apply
+scripts/dev-stack.sh apply -- -replace=aws_ecs_task_definition.server
 aws ecs update-service --cluster breadsheet-server-dev \
   --service breadsheet-dev-server-service \
   --task-definition breadsheet-dev-server --force-new-deployment
@@ -640,6 +643,13 @@ error metric:
 aws lambda invoke --function-name breadsheet-dev-vpclink-keepalive /dev/stdout
 ```
 
+**While dev is paused (Tier 3), the keepalive cannot keep the link warm.** No task is registered
+in Cloud Map, so the request never crosses the VPC link and the function errors every week
+(nothing alarms on its errors, so this raises no false alert). Since TICKET-P9-009 dev spends most
+of its time paused. A resume after **more than 60 days** paused can therefore find the link
+`INACTIVE`: the first requests fail for a few minutes while API Gateway reprovisions it, then
+recover on their own. Wait it out. Nothing needs fixing.
+
 ### RDS IAM bootstrap (required on any fresh instance)
 
 The app authenticates with IAM tokens (`DB_AUTH=iam`, passwordless `DATABASE_URL`), so the master
@@ -794,12 +804,18 @@ aws s3api put-bucket-versioning --bucket breadsheet-tfstate \
 # Init selects the backend + downloads modules. Re-run when switching environments.
 terraform -chdir=terraform init -backend-config=environments/dev.s3.tfbackend
 
-# Plan (always review before apply)
-terraform -chdir=terraform plan -var-file=environments/dev.tfvars
-
-# Apply
-terraform -chdir=terraform apply -var-file=environments/dev.tfvars
+# Plan (always review before apply). Both wrap
+#   terraform -chdir=terraform plan|apply -var-file=environments/dev.tfvars -var server_image=<live image>
+# The image comes from the running service. Terraform args go after `--`.
+scripts/dev-stack.sh plan
+scripts/dev-stack.sh apply
 ```
+
+`var.server_image` has no default, so a bare `terraform plan` stops and asks for it. It is consumed
+only when the task definition is *created* (`container_definitions` is in `ignore_changes`), so
+any valid value plans no change on a running stack. The script exists so that nobody has to choose
+one. While the stack is paused the script refuses: a plain apply would then create an **empty**
+database. Use `scripts/dev-stack.sh resume` instead (§ Pausing / Resuming).
 
 To validate config without AWS credentials (no apply): `init -backend=false` then `validate`.
 
@@ -811,7 +827,12 @@ prevent drift fights:
 - `aws_ecs_service.server` has `lifecycle { ignore_changes = [task_definition] }` — Terraform owns the
   service; CD owns which revision it runs.
 - `aws_ecs_task_definition.server` has `lifecycle { ignore_changes = [container_definitions] }` —
-  Terraform owns the structure; CD updates the image tag.
+  Terraform owns the structure; CD updates the image tag. `var.server_image` is therefore read
+  only when the resource is created (a Tier 3 resume, or a `-replace`).
+- **While dev is paused, `deploy-dev` skips the rollout instead of failing.** Its first step reads
+  the service status. If the service isn't `ACTIVE`, it writes a job-summary notice with the
+  `scripts/dev-stack.sh resume --image …:<sha>` command for the image it just pushed, and skips the
+  remaining steps. The build job still pushes the image either way.
 
 ### S3 Bucket Layout
 
@@ -875,86 +896,171 @@ nothing else.
 > `https://server.dev.bread-sheet.com/` is enough to prevent that, and replaces the alerting the ALB
 > health check used to provide. It must traverse the custom domain, not hit the task directly.
 
-**Tier 3 — snapshot and delete RDS (long pauses; sheds DB storage too):**
+**Tier 3 — snapshot and delete RDS (the default resting state; sheds DB storage too):**
 
-For a pause of a month or more, stopping is the wrong tool: AWS force-restarts a stopped instance
-after 7 days, and stopped or not you keep paying for the 20 GB gp3 volume and Performance Insights.
-Deleting the instance leaves only manual-snapshot storage, billed on *used* data — cents for a dev
-DB. With the ALB gone, RDS is now the largest single line item, so this tier is the main lever:
+For a pause of more than a few days, stopping is the wrong tool. AWS force-restarts a stopped
+instance after 7 days, and stopped or not, you keep paying for the 20 GB gp3 volume and Performance
+Insights. Deleting the instance leaves only manual-snapshot storage, which is billed on *used* data:
+cents for a dev DB. With the ALB gone, RDS is the largest single line item, so this tier is the
+main lever. Since TICKET-P9-009 it **runs automatically**.
+
+#### Tier 3, automated (`dev-auto-teardown.yml`)
+
+A resumed stack that someone forgets keeps billing RDS + Fargate (~\$24/mo) until the next
+teardown by hand. `.github/workflows/dev-auto-teardown.yml` runs Tier 3 **every night at 02:17 UTC
+(03:17 CET) whenever the stack is running**, so a forgotten resume costs about a day at most.
+
+**Cadence.** The schedule is daily, and the only condition is that RDS exists. There is deliberately
+no minimum uptime: dev is a daytime tool, and the stack comes back with one `resume` in the morning.
+To keep it up overnight (a long-running test, a demo the next morning), set `DEV_KEEP_ALIVE_UNTIL`.
+If GitHub delays or drops a scheduled run, the next night's run catches up.
+
+**Switches.** Both are repo variables, so flipping them needs no AWS access and no Terraform:
+
+| Variable | Values | Effect |
+| --- | --- | --- |
+| `DEV_AUTO_TEARDOWN` | `off` \| `dry-run` \| `on` | master switch. **Unset or unknown fails the run**: no silent default either way |
+| `DEV_KEEP_ALIVE_UNTIL` | `YYYY-MM-DD` (UTC) or unset | no teardown on or before that day; expires by itself. A malformed date fails the run |
+
+```sh
+gh variable set DEV_AUTO_TEARDOWN --body on
+gh variable set DEV_KEEP_ALIVE_UNTIL --body 2026-11-20    # keep it up for a demo
+gh variable delete DEV_KEEP_ALIVE_UNTIL
+gh workflow run dev-auto-teardown.yml -f dry_run=true     # assert the plan now, change nothing
+gh workflow run dev-auto-teardown.yml                     # tear down now (if running)
+```
+
+Why it isn't a tag on the instance: a tag added by hand shows up as drift, and the next apply
+removes it.
+
+**What a run does.** These are the manual steps below, in order, with one check added:
+
+1. Mode and keep-alive gates (before any credentials), then OIDC into **`breadsheet-dev-teardown`**.
+2. Running gate. If RDS is `NotFound` the stack is already paused, and the run is a green no-op.
+3. `plan -destroy -target=aws_db_instance.main -out=tier3.tfplan`, rendered with `show -json` and
+   **asserted in code**: every change must be a `delete`, and the addresses must be *exactly* the five
+   in the cascade table below. Anything extra, missing or not a delete (a new resource that
+   interpolates the DB, a provider upgrade that turns a delete into a replace) fails the run before
+   anything is touched. `dry-run` stops here and puts the plan in the job summary.
+4. Manual snapshot `breadsheet-dev-auto-YYYYMMDD-HHMM` (UTC), tagged `created-by=dev-auto-teardown`,
+   `image=<live image>`, `task-def-revision`, `git-sha`. If the backup window is running, it waits
+   until that finishes. Then it waits for `available`.
+5. `terraform apply tier3.tfplan`, the asserted saved plan, never a fresh `destroy`. Then it
+   verifies RDS is `NotFound` and the service is `INACTIVE`.
+6. Prunes `created-by=dev-auto-teardown` snapshots beyond the **newest two**. One is the copy that
+   matters, the other covers a resume that turns out bad. Manual `breadsheet-dev-pause-*`
+   snapshots are never pruned. They are listed in the job summary so they stay visible.
+
+The decisions (steps 1–3 and 6) are pure functions in `scripts/ops/dev-teardown.mjs`, tested by
+`node --test 'scripts/ops/*.test.mjs'` (the `ops` job in `test.yml`). The plan assertion is tested
+against `terraform show -json` fixtures, including one with an extra address and one with a replace.
+**When the cascade grows legitimately, change `EXPECTED_DESTROY_SET` there and the table below in the
+same PR.**
+
+The run shares the `deploy-dev` concurrency group with CD, so it never overlaps a rollout. A failed
+scheduled run emails whoever last edited the cron line (GitHub's default), which is enough with one
+developer.
+
+**The teardown role** (`iam.tf`, `aws_iam_role.teardown`) has the same OIDC trust as the deployer
+(`ref:refs/heads/main` only). It is separate so that `breadsheet-dev-deployer`, which every CD run
+assumes, never gets `rds:DeleteDBInstance`. Writes are scoped to the five resources, the
+`dev/terraform.tfstate` key and its lockfile, and `snapshot:breadsheet-dev-auto-*`. Snapshot deletion
+additionally requires the tag `created-by=dev-auto-teardown`, so a `pause` snapshot is excluded twice
+over. Check that with the CLI under the role:
+
+```sh
+aws rds delete-db-snapshot --db-snapshot-identifier breadsheet-dev-pause-YYYY-MM-DD   # want AccessDenied
+```
+
+**Resume** is a human, local action. Automating it would give a CI role create permissions across RDS,
+ECS and IAM, and nothing needs a hands-free resume.
+
+```sh
+scripts/dev-stack.sh status        # paused?, uptime, what tonight's run will do, switches, snapshots
+scripts/dev-stack.sh resume        # newest available auto/pause snapshot, on its `image` tag
+scripts/dev-stack.sh resume --image ghcr.io/fabelhaft-io/bread-sheet-server:<sha>   # e.g. latest main
+scripts/dev-stack.sh plan          # afterwards: expect "No changes"
+```
+
+`resume` refuses if the instance exists. It picks the newest `available` snapshot (or
+`--snapshot <id>`) and reads its `image` tag. A manual pause snapshot has no such tag, so it needs
+`--image`. It then checks that GHCR serves that manifest (`200`), and runs **one** apply:
+`-var db_snapshot_identifier=<id> -var server_image=<image>`. Migrations are forward-only and run on
+start, so a newer image on an older snapshot is fine. The other way round (an older image on a DB
+that a newer image has already migrated) is not, which is why the default is the snapshot's own tag.
+
+**Knock-on effects of a stack that is mostly down:** `deploy-dev` skips while paused (§ Terraform ↔
+CD Ownership Split). The Maestro job fails its preflight with *"dev stack is paused"* rather than
+producing failures that look like regressions. The VPC link may need a few minutes after a long
+pause (§ VPC link keepalive).
+
+**Rollout.** Run about a week on `dry-run` to confirm the gate decisions and the plan assertion against
+real state. Then do one dispatched run with `on` while watching, then let the schedule run.
+
+#### What the destroy cascades to
+
+| Resource | Why it's dragged in | On resume |
+| --- | --- | --- |
+| `aws_db_instance.main` | the target | restored from the snapshot |
+| `aws_ecs_service.server` | depends on the task definition | recreated at `desired_count = 1` |
+| `aws_ecs_task_definition.server` | `ecs.tf` interpolates `aws_db_instance.main.address` into `DB_HOST` / `DATABASE_URL` | re-rendered against the restored endpoint, on `var.server_image` |
+| `aws_iam_role_policy.ecs_task_rds_iam` | `iam.tf` scopes `rds-db:connect` to `aws_db_instance.main.resource_id` | re-scoped to the new resource ID |
+| `aws_budgets_budget_action.stop_rds` | `backstops-budget.tf` interpolates `aws_db_instance.main.identifier` into the L4 stop-RDS action | recreated against the same identifier |
+
+The first manual run (2026-11-07) found the fifth row. It was missing from this table, which is
+exactly why an unattended run asserts the set rather than trusting the documentation.
+
+#### The image on resume: `var.server_image`
+
+`aws_ecs_task_definition.server` has `lifecycle.ignore_changes = [container_definitions]`, so the
+revisions CI push-deploys are never reconciled into state. That is harmless while the stack runs,
+but it decides the outcome here, because a resume *creates* a task definition, from config rather
+than from the live revision. The image used to be a hardcoded pin in `ecs.tf`, and it drifted behind
+the live service twice: once to a SHA that existed nowhere, which would have failed on
+`CannotPullContainerError` *after* the DB restore and made a healthy snapshot look like the culprit,
+and once to a three-week-old commit. It is now `image = var.server_image` with **no default and no
+value in `dev.tfvars`**. `resume` passes the snapshot's `image` tag (the image that was live at
+teardown), and `plan` / `apply` pass the live service's image.
+
+#### Manual fallback
+
+What the workflow does, by hand. Use it if the workflow is broken or the role is missing:
 
 ```sh
 # ── Pause ─────────────────────────────────────────────────────────────────────
 # 1. Manual snapshot. Manual (not automated) matters: automated backups are deleted with
 #    the instance, manual snapshots outlive it and are not managed by Terraform.
+#    Tag the live image so `dev-stack.sh resume` can come back on it without --image.
+IMAGE=$(aws ecs describe-task-definition --region eu-west-1 --task-definition breadsheet-dev-server \
+  --query 'taskDefinition.containerDefinitions[0].image' --output text)
 aws rds create-db-snapshot --region eu-west-1 \
   --db-instance-identifier breadsheet-dev-database-1 \
-  --db-snapshot-identifier breadsheet-dev-pause-$(date +%F)
+  --db-snapshot-identifier breadsheet-dev-pause-$(date +%F) \
+  --tags Key=image,Value="$IMAGE"
 aws rds wait db-snapshot-completed --region eu-west-1 \
   --db-snapshot-identifier breadsheet-dev-pause-$(date +%F)
 
-# 2. Destroy the instance. `db_skip_final_snapshot = true` (the dev default) is fine — the
-#    manual snapshot from step 1 is the copy that matters. Review the plan first.
-terraform -chdir=terraform plan -destroy -var-file=environments/dev.tfvars -target=aws_db_instance.main
-terraform -chdir=terraform destroy -var-file=environments/dev.tfvars -target=aws_db_instance.main
+# 2. Destroy the instance. `db_skip_final_snapshot = true` (the dev default) is fine, because the
+#    manual snapshot from step 1 is the copy that matters. Check the plan is exactly the five
+#    deletes in the cascade table above.
+scripts/dev-stack.sh plan -- -destroy -target=aws_db_instance.main
+scripts/dev-stack.sh apply -- -destroy -target=aws_db_instance.main
 
 # ── Resume ────────────────────────────────────────────────────────────────────
-# 3. Find the snapshot (the filter still works after the source instance is gone).
-aws rds describe-db-snapshots --region eu-west-1 \
-  --db-instance-identifier breadsheet-dev-database-1 --snapshot-type manual \
-  --query 'sort_by(DBSnapshots,&SnapshotCreateTime)[-1].DBSnapshotIdentifier' --output text
+scripts/dev-stack.sh resume        # or: --snapshot breadsheet-dev-pause-YYYY-MM-DD --image <ref>
 
-# 4. BEFORE applying: check the image pin in ecs.tf against the revision that was live when
-#    you paused. Terraform's task definition is created from ecs.tf, not from CI's latest
-#    revision — see "the image pin drifts" below. Note the tag from the pre-pause service:
-aws ecs describe-task-definition --region eu-west-1 --task-definition breadsheet-dev-server \
-  --query 'taskDefinition.containerDefinitions[0].image' --output text
-
-# 5. Recreate everything from the snapshot — one apply, no manual reconnection.
-#    Restoring matters for more than the data: the `breadsheet_iam` role and its
-#    `rds_iam` grant live INSIDE the database. A fresh (non-restored) instance has
-#    neither, so the task will crash-loop on connect until they are recreated by
-#    hand over the master credential (see § RDS IAM bootstrap).
-terraform -chdir=terraform apply -var-file=environments/dev.tfvars \
-  -var db_snapshot_identifier=breadsheet-dev-pause-YYYY-MM-DD
-
-# 6. Verify, then delete the snapshot to stop paying for it.
+# Verify, then delete a manual snapshot once you no longer need it (the workflow never does).
 aws rds describe-db-instances --region eu-west-1 --db-instance-identifier breadsheet-dev-database-1 \
   --query 'DBInstances[0].{status:DBInstanceStatus,endpoint:Endpoint.Address}' --output table
-terraform -chdir=terraform plan -var-file=environments/dev.tfvars    # "No changes" once fully resumed
+scripts/dev-stack.sh plan          # "No changes" once fully resumed
 aws rds delete-db-snapshot --region eu-west-1 --db-snapshot-identifier breadsheet-dev-pause-YYYY-MM-DD
 ```
 
 `db_snapshot_identifier` (`variables.tf`, default `""`) feeds `aws_db_instance.main.snapshot_identifier`.
-Pass it **only on the resuming apply** — it is consumed at create time and is in the resource's
-`lifecycle.ignore_changes`, so leaving it out of later applies is correct and will not plan a
-replacement. Adding it to `dev.tfvars` instead would be a standing hazard: any future recreate would
-silently restore month-old data.
-
-What the destroy cascades to, and why that is the point:
-
-| Resource | Why it's dragged in | On resume |
-| --- | --- | --- |
-| `aws_ecs_service.server` | depends on the task definition | recreated at `desired_count = 1` |
-| `aws_ecs_task_definition.server` | `ecs.tf` interpolates `aws_db_instance.main.address` into `DB_HOST` / `DATABASE_URL` | re-rendered against the restored endpoint |
-| `aws_iam_role_policy.ecs_task_rds_iam` | `iam.tf` scopes `rds-db:connect` to `aws_db_instance.main.resource_id` | re-scoped to the new resource ID |
-
-**The image pin drifts — check it before every resume.** `aws_ecs_task_definition.server` has
-`lifecycle.ignore_changes = [container_definitions]`, so the revisions CI push-deploys are never
-reconciled into state: Terraform's copy stays frozen at whatever it last created, while the live
-service moves on. That is harmless during normal operation (Terraform never touches the running
-task definition) but decisive here, because the resume *creates* a task definition — from
-`ecs.tf`, not from the live revision. Whatever `ecs.tf:42` pins is what the stack comes back on.
-This was already wrong once: the pin was a SHA that is neither a commit in the repo nor a tag in
-GHCR, so a resume would have failed on `CannotPullContainerError` and tripped the deployment
-circuit breaker — *after* the DB restore, making a healthy snapshot look like the culprit. Confirm
-the tag resolves before applying:
-
-```sh
-TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:fabelhaft-io/bread-sheet-server:pull&service=ghcr.io" | jq -r .token)
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
-  -H 'Accept: application/vnd.oci.image.index.v1+json' \
-  https://ghcr.io/v2/fabelhaft-io/bread-sheet-server/manifests/<sha>   # want 200, not 404
-```
+Pass it **only on the resuming apply**, which `resume` does for you. It is consumed at create time
+and is in the resource's `lifecycle.ignore_changes`, so leaving it out of later applies is correct
+and doesn't plan a replacement. Adding it to `dev.tfvars` instead would be a standing hazard: any
+future recreate would silently restore month-old data.
 
 A restored instance gets a **new `resource_id`** (`db-XXXX…`) even when the identifier and endpoint
 hostname are unchanged. Since the IAM policy interpolates it, `apply` fixes it for free — but a
@@ -964,7 +1070,7 @@ restore done by hand in the console would leave the old ID in place and IAM auth
 Two more notes on the restore:
 - Reusing the same `identifier` in the same account+region normally yields the **same endpoint
   hostname**, but nothing depends on that: `DB_HOST` is interpolated, not hardcoded. Confirm with the
-  `describe-db-instances` query in step 5 rather than assuming.
+  `describe-db-instances` query in the manual fallback above rather than assuming.
 - `db_name`, `username` and the master password come from the snapshot; RDS ignores those arguments
   on a restore. The `breadsheet_iam` user and its `rds_iam` grant live *inside* the database, so they
   come back with it — no re-grant needed. `aws_ecs_task_definition.server` has

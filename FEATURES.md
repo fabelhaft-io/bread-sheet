@@ -1572,6 +1572,16 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - [ ] `npx eslint .` in `server/` exits 0.
 - [ ] `npm run lint` and `npx eslint .` report the same result.
 
+### [TICKET-P9-009] Scheduled Tier 3 Teardown of the Dev Stack
+**Goal:** A dev stack left running is torn down automatically after 3 days of uptime, so it can never quietly bill RDS + Fargate for weeks.
+**Context:** Tier 3 (`infrastructure.md` § Pausing / Resuming) is the main dev cost lever, but it only runs when someone remembers. The first hand run (2026-11-07) also found a fifth cascaded resource (`aws_budgets_budget_action.stop_rds`) missing from the runbook table, a drifted `ecs.tf` image pin, and a three-month-old pause snapshot still billing. Full plan: `docs/P9-009-implementation-plan.md`.
+**Implementation:**
+- Daily scheduled GitHub Actions workflow running the runbook's Terraform steps under a new destroy-scoped OIDC role (`breadsheet-dev-teardown`), gated on RDS `InstanceCreateTime` ≥ 72 h, `DEV_AUTO_TEARDOWN=off|dry-run|on` (unset fails) and `DEV_KEEP_ALIVE_UNTIL`.
+- Plan asserted in code (exactly five `delete`s) before snapshotting; snapshots tagged with the live image; automatic snapshots pruned to the newest two.
+- `var.server_image` replaces the hardcoded pin; `scripts/dev-stack.sh resume` restores from the newest snapshot on its tagged image.
+- `deploy-dev` skips while paused; Maestro fails fast with a "dev is paused" message.
+**Acceptance Criteria:** see `docs/P9-009-implementation-plan.md` § Acceptance criteria.
+
 # Future Plans and Ideas
 
 ## ADR 003 - Improve operations cost!!!
