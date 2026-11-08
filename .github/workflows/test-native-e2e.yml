@@ -117,29 +117,26 @@ jobs:
       # them, so without this every run re-downloads them. Keyed on the image coordinates: a
       # different API or flavour must miss, since booting the wrong image is exactly the
       # failure this suite hit during development (Play-Store images hang Maestro's inputText).
-      # ~/.android/avd rides along so the AVD survives too; the runner wipes app data after
-      # install and both flows launch with clearState, so inherited userdata cannot leak in.
-      # Its qcow2 overlays are excluded: they are the disk state of the last boot, and the next
-      # run never reads them back — the emulator boots with -no-snapshot and recreates them
-      # from userdata-qemu.img. Worth only ~40 MiB here (3.22 → 3.18 GiB), because a CI AVD
-      # boots once and writes little; a developer's AVD accumulates gigabytes of overlay, which
-      # is what this exclusion keeps out should the key ever be primed from one. The entry is
-      # dominated by the emulator package and system image, not the AVD. The exclusion must
-      # stay inside the block scalar and unquoted — a `#` line here is a pattern, not a
-      # comment.
+      #
+      # The AVD is deliberately NOT cached; the runner creates a fresh one each run in seconds.
+      # Up to -v2, ~/.android/avd rode along (minus its *.qcow2 overlays). Because a cache is
+      # saved at job END, the entry held an AVD that had already been booted and used, without
+      # the overlays its disk state belonged to. The first run on a cold cache passed. Every
+      # run that restored the entry booted into "System UI isn't responding" over the login
+      # screen and failed both flows at "Continue as Guest" (PR #200: a fresh AVD passed, the
+      # restored one failed twice, with and without the APK cache). Only immutable, downloaded
+      # inputs belong in this entry.
       # The -vN suffix moves whenever the path list does: an entry is immutable once written,
       # so a narrowed path list against an unchanged key keeps restoring the old, wider entry
-      # and never saves the new one. Expect one slow run after a bump — it re-downloads the
-      # emulator and system image, then every run after it restores roughly half as much.
-      - name: Cache Android emulator, system image and AVD
+      # and never saves the new one. Expect one slow run after a bump: it re-downloads the
+      # emulator and system image.
+      - name: Cache Android emulator and system image
         uses: actions/cache@v6
         with:
           path: |
             ${{ env.ANDROID_SDK_PATH }}/emulator
             ${{ env.ANDROID_SDK_PATH }}/system-images/android-35/google_apis/x86_64
-            ~/.android/avd
-            !~/.android/avd/*.avd/*.qcow2
-          key: android-emu-${{ runner.os }}-api35-google_apis-x86_64-v2
+          key: android-emu-${{ runner.os }}-api35-google_apis-x86_64-v3
 
       # ubuntu-24.04 ships the SDK, cmdline-tools and platform-tools but NOT the emulator,
       # and no system image — so scripts/test-maestro.js correctly refuses to start. Install
