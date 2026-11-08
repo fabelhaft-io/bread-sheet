@@ -58,7 +58,10 @@ export async function castVote(
     if (approvals >= 2 && approvals > rejections) {
       newStatus = ProductStatus.VERIFIED;
       await tx.product.update({ where: { id: product.id }, data: { status: ProductStatus.VERIFIED } });
-      // TODO(P5-003-followup): enqueue OFF sync here
+      // TODO(P5-003-followup): enqueue OFF sync here. TICKET-P6-007: OFF sync
+      // only ever applies to kind === PACKAGED — a CUSTOM product has no
+      // PackagedProduct row to sync — so this must stay gated on `product.kind`
+      // once it is implemented.
     } else if (rejections >= 2 && rejections > approvals) {
       newStatus = ProductStatus.REJECTED;
       await tx.product.update({ where: { id: product.id }, data: { status: ProductStatus.REJECTED } });

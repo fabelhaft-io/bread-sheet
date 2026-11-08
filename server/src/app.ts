@@ -6,6 +6,7 @@ import { requestLogger } from './middlewares/requestLogger.js';
 import { requireOriginSecret } from './middlewares/requireOriginSecret.js';
 import userRoutes from './routes/userRoutes.js';
 import productRoutes from './routes/productRoutes.js';
+import customProductRoutes from './routes/customProductRoutes.js';
 import ratingRoutes from './routes/ratingRoutes.js';
 import config from './configs/config.js';
 
@@ -70,6 +71,7 @@ app.get('/auth/callback', (req, res) => {
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/custom-products', customProductRoutes);
 app.use('/api/ratings', ratingRoutes);
 
 // Global error handler (must be last)

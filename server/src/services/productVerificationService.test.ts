@@ -189,4 +189,62 @@ describe('castVote', () => {
     expect(result.status).toBe(ProductStatus.PENDING_REVIEW);
     expect(mockTxProductUpdate).not.toHaveBeenCalled();
   });
+
+  // TICKET-P6-007: castVote never reads `kind` — the lifecycle must be
+  // identical for a CUSTOM product. These mirror the PACKAGED cases above
+  // exactly, just with `kind: 'CUSTOM'` on the fetched row.
+  describe('a CUSTOM product', () => {
+    const PENDING_CUSTOM = { ...PENDING_PRODUCT, kind: 'CUSTOM' };
+
+    it('flips to VERIFIED on 2 net approvals', async () => {
+      mockTxProductFindFirst.mockResolvedValue(PENDING_CUSTOM);
+      mockTxVerificationUpsert.mockResolvedValue({});
+      mockTxVerificationFindMany.mockResolvedValue(
+        makeVotes(VerificationVote.APPROVE, VerificationVote.APPROVE),
+      );
+      mockTxProductUpdate.mockResolvedValue({});
+
+      const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE);
+
+      expect(result.status).toBe(ProductStatus.VERIFIED);
+      expect(mockTxProductUpdate).toHaveBeenCalledWith({
+        where: { id: PRODUCT_ID },
+        data: { status: ProductStatus.VERIFIED },
+      });
+    });
+
+    it('flips to REJECTED on 2 net rejections', async () => {
+      mockTxProductFindFirst.mockResolvedValue(PENDING_CUSTOM);
+      mockTxVerificationUpsert.mockResolvedValue({});
+      mockTxVerificationFindMany.mockResolvedValue(
+        makeVotes(VerificationVote.REJECT, VerificationVote.REJECT),
+      );
+      mockTxProductUpdate.mockResolvedValue({});
+
+      const result = await castVote(PRODUCT_ID, USER_ID, VerificationVote.REJECT);
+
+      expect(result.status).toBe(ProductStatus.REJECTED);
+      expect(mockTxProductUpdate).toHaveBeenCalledWith({
+        where: { id: PRODUCT_ID },
+        data: { status: ProductStatus.REJECTED },
+      });
+    });
+
+    it('a REJECTED custom product is invisible (ProductNotFoundError) to a later vote attempt', async () => {
+      // Same mechanism as the PACKAGED REJECTED-is-invisible test above:
+      // visibleProductWhere() filters it out of the findFirst.
+      mockTxProductFindFirst.mockResolvedValue(null);
+      await expect(castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE)).rejects.toBeInstanceOf(
+        ProductNotFoundError,
+      );
+    });
+
+    it('rejects a self-vote by the submitter', async () => {
+      mockTxProductFindFirst.mockResolvedValue({ ...PENDING_CUSTOM, submittedByUserId: USER_ID });
+      await expect(castVote(PRODUCT_ID, USER_ID, VerificationVote.APPROVE)).rejects.toBeInstanceOf(
+        SelfVerificationError,
+      );
+      expect(mockTxVerificationUpsert).not.toHaveBeenCalled();
+    });
+  });
 });

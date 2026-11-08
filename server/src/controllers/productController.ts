@@ -193,7 +193,7 @@ export const uploadImage = async (
     }
 
     const kind = req.body.kind as string;
-    if (kind !== 'product' && kind !== 'label') {
+    if (kind !== 'product' && kind !== 'label' && kind !== 'item') {
       return res.status(400).json({ error: 'invalid_kind' });
     }
 
@@ -244,6 +244,12 @@ export const uploadImage = async (
         brand: result.brand,
         genericName: result.genericName,
       });
+    }
+    // TICKET-P6-007: a custom item has no brand or packaging-derived
+    // category, so only a name suggestion (if any) is returned — the
+    // add-custom-product form has one field to pre-fill.
+    if (kind === 'item') {
+      return res.json({ imageKey, name: result.name });
     }
     res.json({ imageKey });
   } catch (err) {

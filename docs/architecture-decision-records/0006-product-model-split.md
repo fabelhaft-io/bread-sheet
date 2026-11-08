@@ -1,9 +1,11 @@
 # Product Model: Slim Rateable Product + Packaged-Product Details
 
-* Status: **Accepted — implemented** ([TICKET-P6-009])
+* Status: **Accepted — implemented** ([TICKET-P6-009], [TICKET-P6-007])
 * Date: 2026-10-25
 * Supersedes: Decision 1 of [TICKET-P6-007] as drafted on 2026-07-30 (synthetic `x-` id in `Product.barcode`)
 * Amended: 2026-10-25, same day. Custom products became **public** (P6-007 revised). See the amendment below.
+* Update: 2026-11-08. [TICKET-P6-007] shipped `kind: CUSTOM` and `Product.nameKey` exactly as sketched
+  below, including the hand-written partial unique index. See `docs/architecture/backend.md#custom-products-post-apicustom-products-ticket-p6-007`.
 
 > **Amendment (2026-10-25).** This ADR was first written against P6-007's private, owner-scoped custom
 > items. Later the same day, P6-007 was revised so that custom products are a public catalogue, peer

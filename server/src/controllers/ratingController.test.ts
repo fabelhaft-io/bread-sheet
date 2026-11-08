@@ -17,9 +17,15 @@ vi.mock('../db.js', () => ({
   },
 }));
 
+// Mutable per-test "session" so a test can switch to an anonymous caller
+// without re-mocking the module (same pattern as productController.test.ts).
+const session = vi.hoisted(() => ({
+  user: { id: 'user-1', email: 'test@test.com', isAnonymous: false },
+}));
+
 vi.mock('../middlewares/authMiddleware.js', () => ({
   requireAuth: (req: any, _res: any, next: any) => {
-    req.user = { id: 'user-1', email: 'test@test.com', isAnonymous: false };
+    req.user = session.user;
     next();
   },
   requireRegistered: (_req: any, _res: any, next: any) => next(),
@@ -42,6 +48,7 @@ describe('POST /api/ratings', () => {
     mockProductFindFirst.mockReset();
     mockRatingUpsert.mockReset();
     mockRatingFindUnique.mockReset();
+    session.user = { id: 'user-1', email: 'test@test.com', isAnonymous: false };
   });
 
   it('returns 400 when productId is missing', async () => {
@@ -114,6 +121,37 @@ describe('POST /api/ratings', () => {
     expect(mockProductFindFirst).toHaveBeenCalledWith({
       where: { id: PRODUCT_ID, status: { not: ProductStatus.REJECTED } },
     });
+  });
+
+  it('lets an anonymous caller rate a PENDING_REVIEW CUSTOM product (TICKET-P6-007)', async () => {
+    session.user = { id: 'anon-1', email: undefined as unknown as string, isAnonymous: true };
+    const customProduct = {
+      id: PRODUCT_ID,
+      kind: ProductKind.CUSTOM,
+      name: 'Negroni',
+      brand: null,
+      image: null,
+      status: ProductStatus.PENDING_REVIEW,
+    };
+    mockProductFindFirst.mockResolvedValue(customProduct);
+    mockRatingFindUnique.mockResolvedValue(null);
+    mockRatingUpsert.mockResolvedValue({
+      id: 1,
+      userId: 'anon-1',
+      productId: PRODUCT_ID,
+      taste: 8,
+      score: 8,
+      comment: null,
+      product: customProduct,
+    });
+
+    const res = await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer anon-token')
+      .send({ productId: PRODUCT_ID, taste: 8 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.productId).toBe(PRODUCT_ID);
   });
 
   it('creates a new rating and returns 201 when none existed yet', async () => {

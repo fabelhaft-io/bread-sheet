@@ -16,7 +16,12 @@ function getS3Client(): S3Client {
   return s3Client;
 }
 
-export type ImageKind = 'product' | 'label';
+// TICKET-P6-007: 'item' is a custom product's photo (a cocktail, a dish —
+// anything with no barcode). It shares the 'product' size/quality profile in
+// the resizer Lambda (see server/lambda/imageResizer/src/index.ts) — there
+// is no reason a custom item's listing photo should be capped differently
+// from a packaged product's.
+export type ImageKind = 'product' | 'label' | 'item';
 
 /**
  * Resolve a stored `Product.image` value to a client-usable URL.

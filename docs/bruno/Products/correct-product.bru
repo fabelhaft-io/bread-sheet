@@ -44,10 +44,21 @@ docs {
   Response: the updated product, serialized the same way as Get product by id (nutrition nested
   under `packaged`).
 
+  TICKET-P6-007 — for a CUSTOM product (no barcode, no PackagedProduct row), the server looks up
+  the product's `kind` first and expects a DIFFERENT, minimal body shape instead of the full
+  packaged payload above: { name?, productImageKey? } — only the name and/or photo, both
+  optional (send at least one). Any packaged-only field (brand, genericName, nutrition fields,
+  servingSize, ingredients, allergens) in the body for a CUSTOM product is a 400, not silently
+  dropped. A rename is checked for a name collision against every other non-REJECTED custom
+  product before it is written.
+
   Errors:
+  - 400 — a packaged-only field was sent for a CUSTOM product ({ message })
   - 401 — unauthenticated
   - 403 — anonymous user ({ error: 'Registration required' })
   - 404 — product not found, including REJECTED ({ error: 'product_not_found' })
-  - 409 — product is VERIFIED, use the edit-proposal flow ({ error: 'product_verified' })
+  - 409 — product is VERIFIED, use the edit-proposal flow ({ error: 'product_verified' }); or
+    (CUSTOM only) the new name collides with another custom product
+    ({ code: 'duplicate_name', productId, message })
   - 422 — validation failure ({ error, reason, field })
 }

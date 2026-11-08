@@ -5,9 +5,13 @@ import type { S3Event } from 'aws-lambda';
 const s3 = new S3Client({});
 
 // Must stay in sync with imageService.ts (API uploads these dimension caps).
-const SIZE_CONFIG: Record<'product' | 'label', { maxDim: number; quality: number }> = {
+// TICKET-P6-007: 'item' (a custom product's photo — a cocktail, a dish, no
+// barcode) resizes exactly like 'product' — there is no reason a custom
+// item's listing photo should be capped differently from a packaged one's.
+const SIZE_CONFIG: Record<'product' | 'label' | 'item', { maxDim: number; quality: number }> = {
   product: { maxDim: 1200, quality: 85 },
   label:   { maxDim: 1600, quality: 90 },
+  item:    { maxDim: 1200, quality: 85 },
 };
 
 export const handler = async (event: S3Event): Promise<void> => {
@@ -16,13 +20,13 @@ export const handler = async (event: S3Event): Promise<void> => {
     const rawKey = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
 
     // Key format: raw/{kind}/{uuid}.jpg
-    const match = rawKey.match(/^raw\/(product|label)\/([^/]+\.jpg)$/);
+    const match = rawKey.match(/^raw\/(product|label|item)\/([^/]+\.jpg)$/);
     if (!match) {
       console.error(`imageResizer: unexpected key format, skipping: ${rawKey}`);
       continue;
     }
 
-    const kind = match[1] as 'product' | 'label';
+    const kind = match[1] as 'product' | 'label' | 'item';
     const filename = match[2];
     const { maxDim, quality } = SIZE_CONFIG[kind];
 

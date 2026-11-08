@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockTxProductFindFirst = vi.hoisted(() => vi.fn());
+const mockTxProductFindUnique = vi.hoisted(() => vi.fn());
 const mockTxProductUpdate = vi.hoisted(() => vi.fn());
 const mockTxPackagedUpdate = vi.hoisted(() => vi.fn());
 const mockTxVerificationDeleteMany = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ const mockTransaction = vi.hoisted(() =>
       const tx = {
         product: {
           findFirst: mockTxProductFindFirst,
+          findUnique: mockTxProductFindUnique,
           update: mockTxProductUpdate,
         },
         packagedProduct: {
@@ -89,6 +91,7 @@ vi.mock('./imageService.js', () => ({
 }));
 
 import {
+  correctCustomProduct,
   correctPendingProduct,
   createEdit,
   getPendingEdit,
@@ -96,11 +99,13 @@ import {
   retractEditVote,
   dismissEdit,
   expireStaleEdits,
+  DuplicateCustomProductNameError,
   DuplicateEditVoteError,
   EditNotFoundError,
   EditNotPendingError,
   EditVoteNotFoundError,
   NoChangesError,
+  PackagedFieldNotAllowedError,
   PendingEditExistsError,
   ProductIsVerifiedError,
   ProductNotVerifiedError,
@@ -176,6 +181,11 @@ const CORRECTION_PAYLOAD = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // castEditVote's apply branch looks up the target product's kind only when
+  // the proposed change includes `name` (TICKET-P6-007's rename-collision
+  // check) — default to PACKAGED so the pre-existing tests below, none of
+  // which exercise a CUSTOM product, are unaffected.
+  mockTxProductFindUnique.mockResolvedValue({ kind: ProductKind.PACKAGED });
 });
 
 // ─── correctPendingProduct (PATCH path) ──────────────────────────────────────
@@ -233,6 +243,116 @@ describe('correctPendingProduct', () => {
     await correctPendingProduct({ ...CORRECTION_PAYLOAD, productImageKey: key }, REVIEWER);
 
     expect(mockTxProductUpdate.mock.calls[0][0].data.image).toBe(key);
+  });
+});
+
+// ─── correctCustomProduct (PATCH path, TICKET-P6-007) ────────────────────────
+
+describe('correctCustomProduct', () => {
+  const PENDING_CUSTOM = {
+    id: PRODUCT_ID,
+    kind: ProductKind.CUSTOM,
+    status: ProductStatus.PENDING_REVIEW,
+    name: 'Negroni',
+    brand: null,
+    image: 'processed/old.jpg',
+    nameKey: 'negroni',
+    submittedByUserId: 'original-submitter',
+    packaged: null,
+  };
+
+  it('throws ProductNotFoundError for an unknown productId', async () => {
+    mockTxProductFindFirst.mockResolvedValue(null);
+    await expect(
+      correctCustomProduct({ productId: PRODUCT_ID, name: 'X', imageKey: null }, REVIEWER),
+    ).rejects.toBeInstanceOf(ProductNotFoundError);
+  });
+
+  it('throws ProductIsVerifiedError when the product is already VERIFIED', async () => {
+    mockTxProductFindFirst.mockResolvedValue({
+      ...PENDING_CUSTOM,
+      status: ProductStatus.VERIFIED,
+    });
+    await expect(
+      correctCustomProduct({ productId: PRODUCT_ID, name: 'X', imageKey: null }, REVIEWER),
+    ).rejects.toBeInstanceOf(ProductIsVerifiedError);
+  });
+
+  it('renames in place, clears verifications, reassigns the submitter, returns packaged: null', async () => {
+    // First call: the product lookup. Second call: the rename-collision
+    // check, excluding this product's own id — no other product holds the
+    // new name.
+    let call = 0;
+    mockTxProductFindFirst.mockImplementation(async () => {
+      call += 1;
+      return call === 1 ? PENDING_CUSTOM : null;
+    });
+    mockTxProductUpdate.mockImplementation(async ({ data }) => ({ ...PENDING_CUSTOM, ...data }));
+
+    const result = await correctCustomProduct(
+      { productId: PRODUCT_ID, name: 'Negroni Sbagliato', imageKey: null },
+      REVIEWER,
+    );
+
+    expect(mockTxVerificationDeleteMany).toHaveBeenCalledWith({ where: { productId: PRODUCT_ID } });
+    const updateArgs = mockTxProductUpdate.mock.calls[0][0];
+    expect(updateArgs.data.name).toBe('Negroni Sbagliato');
+    expect(updateArgs.data.nameKey).toBe('negroni sbagliato');
+    expect(updateArgs.data.submittedByUserId).toBe(REVIEWER);
+    expect(updateArgs.data.status).toBe(ProductStatus.PENDING_REVIEW);
+    // No new image key -> image column untouched.
+    expect('image' in updateArgs.data).toBe(false);
+    expect(result.packaged).toBeNull();
+  });
+
+  it('replaces the photo without renaming', async () => {
+    mockTxProductFindFirst.mockImplementation(async () => PENDING_CUSTOM);
+    mockTxProductUpdate.mockImplementation(async ({ data }) => ({ ...PENDING_CUSTOM, ...data }));
+
+    await correctCustomProduct(
+      { productId: PRODUCT_ID, name: null, imageKey: 'processed/new.jpg' },
+      REVIEWER,
+    );
+
+    const updateArgs = mockTxProductUpdate.mock.calls[0][0];
+    expect(updateArgs.data.image).toBe('processed/new.jpg');
+    expect('name' in updateArgs.data).toBe(false);
+    expect('nameKey' in updateArgs.data).toBe(false);
+  });
+
+  it('does not re-check a collision when the name is resubmitted unchanged', async () => {
+    mockTxProductFindFirst.mockImplementation(async () => PENDING_CUSTOM);
+    mockTxProductUpdate.mockImplementation(async ({ data }) => ({ ...PENDING_CUSTOM, ...data }));
+
+    await correctCustomProduct(
+      { productId: PRODUCT_ID, name: 'Negroni', imageKey: null },
+      REVIEWER,
+    );
+
+    // Only one call: the initial product lookup. No second
+    // findCustomProductNameCollision call, since the name did not change.
+    expect(mockTxProductFindFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a rename that collides with another non-REJECTED custom product (409 duplicate_name)', async () => {
+    let call = 0;
+    mockTxProductFindFirst.mockImplementation(async () => {
+      call += 1;
+      return call === 1 ? PENDING_CUSTOM : { id: 'other-product' };
+    });
+
+    let caught: unknown;
+    try {
+      await correctCustomProduct(
+        { productId: PRODUCT_ID, name: 'Classic Negroni', imageKey: null },
+        REVIEWER,
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(DuplicateCustomProductNameError);
+    expect((caught as DuplicateCustomProductNameError).productId).toBe('other-product');
+    expect(mockTxProductUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -305,6 +425,80 @@ describe('createEdit', () => {
     await expect(createEdit(PRODUCT_ID, AUTHOR, { name: 'X' })).rejects.toBeInstanceOf(
       PendingEditExistsError,
     );
+  });
+
+  // ── TICKET-P6-007: CUSTOM products ─────────────────────────────────────────
+
+  describe('a CUSTOM product', () => {
+    const VERIFIED_CUSTOM = {
+      id: PRODUCT_ID,
+      kind: ProductKind.CUSTOM,
+      status: ProductStatus.VERIFIED,
+      name: 'Negroni',
+      brand: null,
+      image: null,
+      nameKey: 'negroni',
+      submittedByUserId: 'submitter-1',
+      packaged: null,
+    };
+
+    it('rejects a packaged-only field with PackagedFieldNotAllowedError, before touching the pending-edit check', async () => {
+      mockTxProductFindFirst.mockResolvedValue(VERIFIED_CUSTOM);
+      await expect(
+        createEdit(PRODUCT_ID, AUTHOR, { name: 'Negroni Sbagliato', energyKcal: 120 }),
+      ).rejects.toBeInstanceOf(PackagedFieldNotAllowedError);
+      expect(mockTxEditFindFirst).not.toHaveBeenCalled();
+    });
+
+    it('rejects brand', async () => {
+      mockTxProductFindFirst.mockResolvedValue(VERIFIED_CUSTOM);
+      await expect(
+        createEdit(PRODUCT_ID, AUTHOR, { brand: 'Some Bar' }),
+      ).rejects.toBeInstanceOf(PackagedFieldNotAllowedError);
+    });
+
+    it('allows name and image, checking the rename for a nameKey collision (none found)', async () => {
+      mockTxEditFindFirst.mockResolvedValue(null);
+      mockTxEditCreate.mockImplementation(async ({ data }) => ({ id: EDIT_ID, ...data }));
+
+      // The rename-collision lookup also goes through tx.product.findFirst,
+      // so the first call (the edit target lookup) resolves the product and
+      // every subsequent call (the collision check) resolves null.
+      let call = 0;
+      mockTxProductFindFirst.mockImplementation(async () => {
+        call += 1;
+        return call === 1 ? VERIFIED_CUSTOM : null;
+      });
+
+      await createEdit(PRODUCT_ID, AUTHOR, {
+        name: 'Negroni Sbagliato',
+        image: 'processed/new.jpg',
+      });
+
+      expect(mockTxEditCreate).toHaveBeenCalled();
+    });
+
+    it('checks a rename for a nameKey collision at submit time (409 duplicate_name)', async () => {
+      let call = 0;
+      mockTxProductFindFirst.mockImplementation(async () => {
+        call += 1;
+        // First call: the edit target itself. Second call: the
+        // rename-collision lookup — simulate another custom product already
+        // holding the proposed name.
+        return call === 1 ? VERIFIED_CUSTOM : { id: 'other-product' };
+      });
+      mockTxEditFindFirst.mockResolvedValue(null);
+
+      let caught: unknown;
+      try {
+        await createEdit(PRODUCT_ID, AUTHOR, { name: 'Classic Negroni' });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(DuplicateCustomProductNameError);
+      expect((caught as DuplicateCustomProductNameError).productId).toBe('other-product');
+      expect(mockTxEditCreate).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -522,6 +716,56 @@ describe('castEditVote', () => {
 
     const result = await castEditVote(EDIT_ID, REVIEWER, VerificationVote.APPROVE);
     expect(result.status).toBe(ProductEditStatus.APPLIED);
+  });
+
+  // ── TICKET-P6-007: apply-time rename collision on a CUSTOM product ────────
+
+  it('applies a CUSTOM rename and sets nameKey when there is no collision', async () => {
+    mockTxEditFindUnique.mockResolvedValue(PENDING_EDIT); // proposedChanges: { name: 'Sourdough Loaf' }
+    mockTxVoteCreate.mockResolvedValue({});
+    mockTxVoteFindMany.mockResolvedValue([
+      { vote: VerificationVote.APPROVE },
+      { vote: VerificationVote.APPROVE },
+    ]);
+    mockTxProductFindUnique.mockResolvedValue({ kind: ProductKind.CUSTOM });
+    mockTxProductFindFirst.mockResolvedValue(null); // no collision
+    mockTxProductUpdate.mockResolvedValue({});
+    mockTxEditUpdate.mockResolvedValue({});
+
+    const result = await castEditVote(EDIT_ID, REVIEWER, VerificationVote.APPROVE);
+
+    expect(result.status).toBe(ProductEditStatus.APPLIED);
+    expect(mockTxProductUpdate).toHaveBeenCalledWith({
+      where: { id: PRODUCT_ID },
+      data: {
+        name: 'Sourdough Loaf',
+        nameKey: 'sourdough loaf',
+        lastModifiedByUserId: AUTHOR,
+      },
+    });
+  });
+
+  it('auto-rejects a CUSTOM rename that collides with another product only discovered at apply time', async () => {
+    mockTxEditFindUnique.mockResolvedValue(PENDING_EDIT);
+    mockTxVoteCreate.mockResolvedValue({});
+    mockTxVoteFindMany.mockResolvedValue([
+      { vote: VerificationVote.APPROVE },
+      { vote: VerificationVote.APPROVE },
+    ]);
+    mockTxProductFindUnique.mockResolvedValue({ kind: ProductKind.CUSTOM });
+    mockTxProductFindFirst.mockResolvedValue({ id: 'collided-with' }); // collision found
+    mockTxEditUpdate.mockResolvedValue({});
+
+    const result = await castEditVote(EDIT_ID, REVIEWER, VerificationVote.APPROVE);
+
+    // The edit is REJECTED, not APPLIED — the vote itself still succeeds, but
+    // resolution silently (from the voter's point of view) discards the rename.
+    expect(result.status).toBe(ProductEditStatus.REJECTED);
+    expect(mockTxProductUpdate).not.toHaveBeenCalled();
+    expect(mockTxEditUpdate).toHaveBeenCalledWith({
+      where: { id: EDIT_ID },
+      data: { status: ProductEditStatus.REJECTED },
+    });
   });
 });
 

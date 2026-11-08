@@ -7,10 +7,19 @@ import {
   VerificationVote,
 } from '../generated/prisma_client/enums.js';
 import type { ProductCorrectionInput } from '../validators/productSubmissionValidator.js';
+import type { CustomProductCorrectionInput } from '../validators/customProductValidator.js';
 import { ProductNotFoundError, assertProductVisible, visibleProductWhere } from './productVisibility.js';
 import { resolveImageUrl } from './imageService.js';
+import { normalizeProductName } from './nameNormalization.js';
+import {
+  DuplicateCustomProductNameError,
+  PackagedFieldNotAllowedError,
+  findCustomProductNameCollision,
+} from './customProductService.js';
+import logger from '../logger.js';
 
 export { ProductNotFoundError };
+export { DuplicateCustomProductNameError, PackagedFieldNotAllowedError };
 
 /**
  * TICKET-P5-006 — Product Editing & Peer-Review of Changes.
@@ -50,6 +59,15 @@ export const EDITABLE_FIELDS = [
   ...PRODUCT_EDIT_FIELDS,
   ...PACKAGED_EDIT_FIELDS,
 ] as const;
+
+/**
+ * TICKET-P6-007: for a CUSTOM product (no `PackagedProduct` row, `brand`
+ * always null), only these two of `PRODUCT_EDIT_FIELDS` are editable. Any
+ * other field present in a correction (PATCH) or edit-proposal payload for a
+ * CUSTOM product is rejected with `PackagedFieldNotAllowedError` (400), not
+ * silently dropped.
+ */
+export const CUSTOM_EDITABLE_FIELDS = ['name', 'image'] as const;
 
 export type EditableField = (typeof EDITABLE_FIELDS)[number];
 export type EditChanges = Partial<Record<EditableField, string | number | null>>;
@@ -258,6 +276,60 @@ export async function correctPendingProduct(
   });
 }
 
+/**
+ * TICKET-P6-007 — the CUSTOM-product equivalent of `correctPendingProduct`.
+ * Same lifecycle (review cycle restarts, corrector becomes submitter), but
+ * only `name` and the photo can change — there is no `PackagedProduct` row
+ * to write. A rename is checked for a `nameKey` collision against every
+ * other non-REJECTED custom product before it is written; a hit throws
+ * `DuplicateCustomProductNameError` (409, controller-mapped) with the id of
+ * the product that already holds the name.
+ */
+export async function correctCustomProduct(
+  payload: CustomProductCorrectionInput,
+  userId: string,
+) {
+  return prisma.$transaction(async (tx) => {
+    const product = await tx.product.findFirst({
+      where: { id: payload.productId, ...visibleProductWhere() },
+    });
+
+    if (!product) throw new ProductNotFoundError(payload.productId);
+    if (product.status !== ProductStatus.PENDING_REVIEW) {
+      throw new ProductIsVerifiedError(payload.productId);
+    }
+
+    let nameKey = product.nameKey;
+    if (payload.name !== null && payload.name !== product.name) {
+      const candidateKey = normalizeProductName(payload.name);
+      const collision = await findCustomProductNameCollision(tx, candidateKey, product.id);
+      if (collision) {
+        throw new DuplicateCustomProductNameError(
+          `A custom product named "${payload.name}" already exists`,
+          collision.id,
+        );
+      }
+      nameKey = candidateKey;
+    }
+
+    // Review cycle restarts from zero.
+    await tx.productVerification.deleteMany({ where: { productId: product.id } });
+
+    const updatedProduct = await tx.product.update({
+      where: { id: product.id },
+      data: {
+        ...(payload.name !== null ? { name: payload.name, nameKey } : {}),
+        // No key sent = photo not replaced = keep the current image.
+        ...(payload.imageKey ? { image: payload.imageKey } : {}),
+        submittedByUserId: userId,
+        status: ProductStatus.PENDING_REVIEW,
+      },
+    });
+
+    return { ...updatedProduct, packaged: null };
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Edit proposals (VERIFIED products)
 // ---------------------------------------------------------------------------
@@ -279,6 +351,14 @@ export async function createEdit(
         throw new ProductNotVerifiedError(productId);
       }
 
+      if (product.kind === ProductKind.CUSTOM) {
+        for (const field of Object.keys(changes)) {
+          if (!(CUSTOM_EDITABLE_FIELDS as readonly string[]).includes(field)) {
+            throw new PackagedFieldNotAllowedError(field);
+          }
+        }
+      }
+
       const pending = await tx.productEdit.findFirst({
         where: { productId, status: ProductEditStatus.PENDING },
         select: { id: true },
@@ -288,6 +368,22 @@ export async function createEdit(
       const merged = mergeEditableFields(product);
       const diff = effectiveDiff(merged, changes);
       if (Object.keys(diff).length === 0) throw new NoChangesError();
+
+      // TICKET-P6-007 decision 3: a rename is checked for a nameKey collision
+      // at proposal (submit) time, same rule as the create path. A collision
+      // that only appears later, at vote-triggered apply time, is handled in
+      // `castEditVote` — rare, and the edit is REJECTED rather than blocking
+      // the voters with an error they can't act on.
+      if (product.kind === ProductKind.CUSTOM && typeof diff.name === 'string') {
+        const nameKey = normalizeProductName(diff.name);
+        const collision = await findCustomProductNameCollision(tx, nameKey, productId);
+        if (collision) {
+          throw new DuplicateCustomProductNameError(
+            `A custom product named "${diff.name}" already exists`,
+            collision.id,
+          );
+        }
+      }
 
       const expiresAt = new Date();
       expiresAt.setFullYear(expiresAt.getFullYear() + EDIT_EXPIRY_YEARS);
@@ -420,23 +516,57 @@ export async function castEditVote(
       let status: ProductEditStatus = edit.status;
 
       if (approvals >= 2 && approvals > rejections) {
-        status = ProductEditStatus.APPLIED;
-        const { productChanges, packagedChanges } = splitChanges(
-          edit.proposedChanges as EditChanges,
-        );
-        await tx.product.update({
-          where: { id: edit.productId },
-          data: { ...productChanges, lastModifiedByUserId: edit.authorUserId },
-        });
-        if (Object.keys(packagedChanges).length > 0) {
-          await tx.packagedProduct.update({
-            where: { productId: edit.productId },
-            data: packagedChanges,
+        const proposedChanges = edit.proposedChanges as EditChanges;
+        const { productChanges, packagedChanges } = splitChanges(proposedChanges);
+
+        // TICKET-P6-007: a rename was already checked for a nameKey collision
+        // at proposal time (createEdit), but another product could have
+        // taken that name in the meantime — rare, and explicitly accepted by
+        // the ticket ("mark the edit REJECTED and log a warning") rather than
+        // surfacing an error to whichever voter happened to cast the
+        // resolving vote.
+        let nameCollisionProductId: string | null = null;
+        if (typeof proposedChanges.name === 'string') {
+          const targetProduct = await tx.product.findUnique({
+            where: { id: edit.productId },
+            select: { kind: true },
           });
+          if (targetProduct?.kind === ProductKind.CUSTOM) {
+            const nameKey = normalizeProductName(proposedChanges.name);
+            const collision = await findCustomProductNameCollision(tx, nameKey, edit.productId);
+            if (collision) {
+              nameCollisionProductId = collision.id;
+            } else {
+              productChanges.nameKey = nameKey;
+            }
+          }
         }
-        await tx.productEdit.update({ where: { id: editId }, data: { status } });
-        // TODO(P6-005): enqueue OFF sync for the changed fields here.
-        // TODO(P5-006-followup): in-app notification to the edit author.
+
+        if (nameCollisionProductId) {
+          status = ProductEditStatus.REJECTED;
+          await tx.productEdit.update({ where: { id: editId }, data: { status } });
+          logger.warn(
+            'product edit auto-rejected at apply time: proposed name collides with another custom product',
+            { editId, productId: edit.productId, collidingProductId: nameCollisionProductId },
+          );
+        } else {
+          status = ProductEditStatus.APPLIED;
+          await tx.product.update({
+            where: { id: edit.productId },
+            data: { ...productChanges, lastModifiedByUserId: edit.authorUserId },
+          });
+          if (Object.keys(packagedChanges).length > 0) {
+            await tx.packagedProduct.update({
+              where: { productId: edit.productId },
+              data: packagedChanges,
+            });
+          }
+          await tx.productEdit.update({ where: { id: editId }, data: { status } });
+          // TODO(P6-005): enqueue OFF sync for the changed fields here. Only
+          // ever applies to kind === PACKAGED (TICKET-P6-007) — gate on it
+          // once implemented; a CUSTOM product has no PackagedProduct row.
+          // TODO(P5-006-followup): in-app notification to the edit author.
+        }
       } else if (rejections >= 2 && rejections > approvals) {
         status = ProductEditStatus.REJECTED;
         await tx.productEdit.update({ where: { id: editId }, data: { status } });

@@ -396,6 +396,53 @@ describe('POST /api/products/upload-image', () => {
     });
   });
 
+  // ── kind=item (TICKET-P6-007: custom product photos) ───────────────────────
+
+  it('returns 200 with the S3 object key and only a name suggestion for a valid item upload', async () => {
+    stubMulterFile(
+      { buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'cocktail.jpg' },
+      'item',
+    );
+    mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
+    mockUploadImageToS3.mockResolvedValue('processed/uuid.jpg');
+    mockCheckImage.mockResolvedValue(
+      okVerdict({ name: 'Negroni', brand: null, genericName: null }),
+    );
+
+    const res = await request(app)
+      .post('/api/products/upload-image')
+      .set('Authorization', 'Bearer token')
+      .field('kind', 'item');
+
+    expect(res.status).toBe(200);
+    expect(res.body.imageKey).toMatch(/^processed\//);
+    expect(res.body.name).toBe('Negroni');
+    // A custom item has no brand or packaging-derived category.
+    expect(res.body.brand).toBeUndefined();
+    expect(res.body.genericName).toBeUndefined();
+    expect(mockCheckImage).toHaveBeenCalledWith(FAKE_JPEG, 'image/jpeg', 'item');
+    expect(mockUploadImageToS3).toHaveBeenCalledWith(FAKE_JPEG, 'item');
+  });
+
+  it('rejects abusive content on the item slot too, without leaking the reason', async () => {
+    stubMulterFile(
+      { buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'cocktail.jpg' },
+      'item',
+    );
+    mockFileTypeFromBuffer.mockResolvedValue({ mime: 'image/jpeg', ext: 'jpg' });
+    mockCheckImage.mockResolvedValue(okVerdict({ verdict: 'abuse', reason: 'explicit content' }));
+    mockAbuseFlagCreate.mockResolvedValue({ id: 'flag-3' });
+
+    const res = await request(app)
+      .post('/api/products/upload-image')
+      .set('Authorization', 'Bearer token')
+      .field('kind', 'item');
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).not.toMatch(/explicit/i);
+    expect(mockUploadImageToS3).not.toHaveBeenCalled();
+  });
+
   it('does not return photo suggestions for a valid label upload', async () => {
     stubMulterFile(
       { buffer: FAKE_JPEG, mimetype: 'image/jpeg', size: 1024, originalname: 'label.jpg' },

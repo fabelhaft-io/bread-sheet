@@ -1,29 +1,34 @@
 import { Response, NextFunction } from 'express';
+import prisma from '../db.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
-import { VerificationVote } from '../generated/prisma_client/enums.js';
+import { ProductKind, VerificationVote } from '../generated/prisma_client/enums.js';
 import {
   SubmissionValidationError,
   validateProductCorrection,
 } from '../validators/productSubmissionValidator.js';
+import { validateCustomProductCorrection } from '../validators/customProductValidator.js';
 import { validateProductEditChanges } from '../validators/productEditValidator.js';
 import {
+  correctCustomProduct,
   correctPendingProduct,
   createEdit,
   getPendingEdit,
   castEditVote,
   retractEditVote,
   dismissEdit,
+  DuplicateCustomProductNameError,
   DuplicateEditVoteError,
   EditNotFoundError,
   EditNotPendingError,
   EditVoteNotFoundError,
   NoChangesError,
+  PackagedFieldNotAllowedError,
   PendingEditExistsError,
   ProductIsVerifiedError,
   ProductNotVerifiedError,
   SelfEditVoteError,
 } from '../services/productEditService.js';
-import { ProductNotFoundError } from '../services/productVisibility.js';
+import { ProductNotFoundError, visibleProductWhere } from '../services/productVisibility.js';
 import { serializeProduct } from '../services/productSerializer.js';
 
 // PATCH /api/products/:productId — in-place correction of a PENDING_REVIEW
@@ -35,9 +40,32 @@ export const correctProduct = async (
   next: NextFunction,
 ) => {
   try {
+    const productId = req.params.productId as string;
+
+    // TICKET-P6-007: the correction body shape (and which fields are
+    // editable) differs by kind — a CUSTOM product has no PackagedProduct
+    // row and only `name`/the photo can change. Look up the kind first so
+    // the right validator (and the right 400 vs the full packaged flow) runs.
+    const existing = await prisma.product.findFirst({
+      where: { id: productId, ...visibleProductWhere() },
+      select: { kind: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: 'product_not_found' });
+    }
+
+    if (existing.kind === ProductKind.CUSTOM) {
+      const payload = validateCustomProductCorrection({
+        ...(req.body as Record<string, unknown>),
+        productId,
+      });
+      const product = await correctCustomProduct(payload, req.user!.id);
+      return res.json(serializeProduct(product, req.user));
+    }
+
     const payload = validateProductCorrection({
       ...(req.body as Record<string, unknown>),
-      productId: req.params.productId,
+      productId,
     });
     const product = await correctPendingProduct(payload, req.user!.id);
     res.json(serializeProduct(product, req.user));
@@ -46,6 +74,14 @@ export const correctProduct = async (
       return res
         .status(422)
         .json({ error: err.message, reason: err.message, field: err.field });
+    }
+    if (err instanceof PackagedFieldNotAllowedError) {
+      return res.status(400).json({ message: err.message });
+    }
+    if (err instanceof DuplicateCustomProductNameError) {
+      return res
+        .status(409)
+        .json({ code: err.code, productId: err.productId, message: err.message });
     }
     if (err instanceof ProductNotFoundError) return res.status(404).json({ error: err.code });
     if (err instanceof ProductIsVerifiedError) return res.status(409).json({ error: err.code });
@@ -72,6 +108,14 @@ export const createProductEdit = async (
     if (err instanceof SubmissionValidationError || err instanceof NoChangesError) {
       const field = err instanceof SubmissionValidationError ? err.field : undefined;
       return res.status(422).json({ error: err.message, reason: err.message, field });
+    }
+    if (err instanceof PackagedFieldNotAllowedError) {
+      return res.status(400).json({ message: err.message });
+    }
+    if (err instanceof DuplicateCustomProductNameError) {
+      return res
+        .status(409)
+        .json({ code: err.code, productId: err.productId, message: err.message });
     }
     if (err instanceof ProductNotFoundError) return res.status(404).json({ error: err.code });
     if (err instanceof ProductNotVerifiedError || err instanceof PendingEditExistsError) {
