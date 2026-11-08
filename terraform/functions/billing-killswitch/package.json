@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@google-cloud/functions-framework": "^5.0.5",
-    "googleapis": "^188.0.0"
+    "googleapis": "^189.0.0"
   }
 }
