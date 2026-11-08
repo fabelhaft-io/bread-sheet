@@ -105,4 +105,36 @@ describe('api', () => {
     const headers = (global.fetch as jest.Mock).mock.calls[0][1].headers;
     expect(headers['X-Edge-Bypass']).toBe('ci-secret');
   });
+
+  // TICKET-P6-008: `api.get` passes a caller's `AbortSignal` straight to
+  // `fetch`, so a debounced search can cancel a superseded request.
+  it('passes a `signal` option through to `fetch`', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ results: [] }),
+    });
+    const controller = new AbortController();
+
+    await api.get('/api/products/search?q=cola', { signal: controller.signal });
+
+    const fetchOptions = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(fetchOptions.signal).toBe(controller.signal);
+  });
+
+  // An aborted request is deliberate cancellation, not a connectivity
+  // failure — wrapping it as NetworkError would make `formatApiError` render
+  // "you're offline" for a request nobody wanted answered anymore.
+  it('rethrows an AbortError as-is, not as NetworkError', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    (global.fetch as jest.Mock).mockRejectedValue(abortError);
+
+    expect.assertions(3);
+    try {
+      await api.get('/api/products/search?q=cola');
+    } catch (err) {
+      expect(err).toBe(abortError);
+      expect(err).not.toBeInstanceOf(NetworkError);
+      expect((err as Error).name).toBe('AbortError');
+    }
+  });
 });

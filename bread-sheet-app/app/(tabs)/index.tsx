@@ -1,30 +1,40 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import {
   ActivityIndicator,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
+  TextInputInstance,
   TouchableOpacity,
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
 import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import type { RatingEntry } from '@/features/ratings/types';
+import { isSearchableQuery, type ProductSearchResult } from '@/features/search/api';
+import { filterRatingsByQuery } from '@/features/search/match';
 import { useCachedResource } from '@/hooks/use-cached-resource';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useFitToScreen } from '@/hooks/use-fit-to-screen';
 import { useOutbox } from '@/hooks/use-outbox';
+import { useProductSearch } from '@/hooks/use-product-search';
 import { useSession } from '@/hooks/use-session';
 import { useRecentProducts, RecentProduct } from '@/hooks/use-recent-products';
 import { api } from '@/lib/api';
 import { ratingsCache } from '@/lib/offline/caches';
-import { formatApiError } from '@/lib/format-error';
+import { formatApiError, OFFLINE_MESSAGE } from '@/lib/format-error';
+
+/** TICKET-P6-008 — the search bar's scope toggle. Defaults to "Mine". */
+type SearchScope = 'mine' | 'all';
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
@@ -222,13 +232,32 @@ const cardStyles = StyleSheet.create({
   time: { fontSize: 12 },
   pendingSync: { fontSize: 12, color: '#c98a1a', fontWeight: '600' },
   comment: { fontSize: 13, fontStyle: 'italic', marginTop: 2 },
+  unverifiedBadge: { fontSize: 12, fontWeight: '600', marginTop: 2 },
 });
 
-function EmptyState({ icon, message, color }: { icon: string; message: string; color: string }) {
+function EmptyState({
+  icon,
+  message,
+  color,
+  testID,
+  action,
+}: {
+  icon: string;
+  message: string;
+  color: string;
+  testID?: string;
+  /** Optional next-step CTA, e.g. "Search all products →" (TICKET-P6-008). */
+  action?: { testID: string; label: string; onPress: () => void; color: string };
+}) {
   return (
-    <View style={emptyStyles.container}>
+    <View style={emptyStyles.container} testID={testID}>
       <Text style={emptyStyles.icon}>{icon}</Text>
       <Text style={[emptyStyles.text, { color }]}>{message}</Text>
+      {action ? (
+        <TouchableOpacity testID={action.testID} onPress={action.onPress}>
+          <Text style={[emptyStyles.actionText, { color: action.color }]}>{action.label}</Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -242,7 +271,160 @@ const emptyStyles = StyleSheet.create({
   },
   icon: { fontSize: 36 },
   text: { fontSize: 14, textAlign: 'center', lineHeight: 20, opacity: 0.7 },
+  actionText: { fontSize: 14, fontWeight: '600', marginTop: 4 },
 });
+
+// ─── Search (TICKET-P6-008) ────────────────────────────────────────────────────
+
+/**
+ * One search bar, two scopes. "Mine" (default) filters the already-loaded
+ * ratings list in memory; "All products" calls the backend. The same `query`
+ * state drives both — switching scope re-interprets what's typed rather than
+ * clearing it.
+ */
+function SearchBar({
+  query,
+  onChangeQuery,
+  scope,
+  onChangeScope,
+  colors,
+  compact,
+  inputRef,
+}: {
+  query: string;
+  onChangeQuery: (value: string) => void;
+  scope: SearchScope;
+  onChangeScope: (scope: SearchScope) => void;
+  colors: typeof Colors.light;
+  compact: boolean;
+  inputRef: RefObject<TextInputInstance | null>;
+}) {
+  return (
+    <View style={[searchStyles.container, compact && compactStyles.searchContainer]}>
+      <TextInput
+        testID="home-search-input"
+        ref={inputRef}
+        value={query}
+        onChangeText={onChangeQuery}
+        placeholder={scope === 'mine' ? 'Search your ratings' : 'Search all products'}
+        placeholderTextColor={colors.icon + '88'}
+        style={[searchStyles.input, { color: colors.text, borderColor: colors.icon + '33' }]}
+        maxLength={100}
+        autoCorrect={false}
+        autoCapitalize="none"
+        accessibilityLabel="Search products"
+        returnKeyType="search"
+      />
+      <View style={searchStyles.scopeRow}>
+        <TouchableOpacity
+          testID="home-search-scope-mine"
+          accessibilityRole="button"
+          accessibilityState={{ selected: scope === 'mine' }}
+          style={[
+            searchStyles.scopePill,
+            scope === 'mine' && { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+          ]}
+          onPress={() => onChangeScope('mine')}
+        >
+          <Text
+            style={[searchStyles.scopeText, { color: scope === 'mine' ? colors.tint : colors.icon }]}
+          >
+            Mine
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          testID="home-search-scope-all"
+          accessibilityRole="button"
+          accessibilityState={{ selected: scope === 'all' }}
+          style={[
+            searchStyles.scopePill,
+            scope === 'all' && { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+          ]}
+          onPress={() => onChangeScope('all')}
+        >
+          <Text style={[searchStyles.scopeText, { color: scope === 'all' ? colors.tint : colors.icon }]}>
+            All products
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const searchStyles = StyleSheet.create({
+  container: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    gap: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 15,
+  },
+  scopeRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  scopePill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  scopeText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+});
+
+function SearchResultCard({
+  result,
+  bg,
+  textColor,
+  iconColor,
+  tint,
+  onPress,
+}: {
+  result: ProductSearchResult;
+  bg: string;
+  textColor: string;
+  iconColor: string;
+  tint: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      testID={`search-result-${result.id}`}
+      style={[cardStyles.card, { backgroundColor: bg }]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <ProductThumb image={result.image} />
+      <View style={cardStyles.info}>
+        <Text style={[cardStyles.name, { color: textColor }]} numberOfLines={1}>
+          {result.name}
+        </Text>
+        {result.brand ? (
+          <Text style={[cardStyles.brand, { color: iconColor }]} numberOfLines={1}>
+            {result.brand}
+          </Text>
+        ) : null}
+        {result.unverified ? (
+          <Text
+            testID={`search-result-unverified-${result.id}`}
+            style={[cardStyles.unverifiedBadge, { color: tint }]}
+          >
+            🔎 Needs review
+          </Text>
+        ) : null}
+      </View>
+    </TouchableOpacity>
+  );
+}
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
@@ -278,6 +460,58 @@ export default function HomeScreen() {
   // Manual barcode entry (P6-006) — an add path that never touches the camera.
   const [manualVisible, setManualVisible] = useState(false);
 
+  // ─── Search (TICKET-P6-008) ─────────────────────────────────────────────
+  const [searchScope, setSearchScope] = useState<SearchScope>('mine');
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<TextInputInstance>(null);
+
+  // The scan tab's "Search by name" affordance lands here with
+  // `?focusSearch=all` (there is no route for a focused search mode, so a
+  // param is the clean mechanism). Consumed once per arrival, mirroring the
+  // P9-003 scan-injection seam's pattern, so re-focusing the tab later
+  // doesn't re-trigger it.
+  const { focusSearch } = useLocalSearchParams<{ focusSearch?: string }>();
+  const consumedFocusSearch = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof focusSearch !== 'string' || focusSearch.length === 0) {
+      consumedFocusSearch.current = null;
+      return;
+    }
+    if (consumedFocusSearch.current === focusSearch) return;
+    consumedFocusSearch.current = focusSearch;
+    setSearchScope('all');
+    router.setParams({ focusSearch: undefined });
+    searchInputRef.current?.focus();
+  }, [focusSearch, router]);
+
+  // Slice A: filters the already-cached ratings list in memory — no network
+  // request, works offline, instant. `null` ratings (nothing loaded yet /
+  // errored) stays `null` so the existing loading/error/offline branches
+  // below are unaffected by the query.
+  const mineResults = ratings ? filterRatingsByQuery(ratings, searchQuery) : ratings;
+  const trimmedQuery = searchQuery.trim();
+
+  // Slice B: global search, active only in the "All products" scope. Makes
+  // zero requests while scoped to "Mine".
+  const {
+    results: searchResults,
+    isLoading: searchLoading,
+    isLoadingMore: searchLoadingMore,
+    isOffline: searchOffline,
+    error: searchError,
+    loadMore: searchLoadMore,
+  } = useProductSearch(searchQuery, searchScope === 'all');
+
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (searchScope !== 'all') return;
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+      if (distanceFromBottom < 120) searchLoadMore();
+    },
+    [searchScope, searchLoadMore],
+  );
+
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     // A pull-to-refresh is also the clearest "I expect to be online now"
@@ -299,6 +533,8 @@ export default function HomeScreen() {
       testID="home-screen"
       style={[styles.container, { backgroundColor: containerBg }]}
       {...scrollProps}
+      onScroll={handleScroll}
+      scrollEventThrottle={200}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -349,8 +585,19 @@ export default function HomeScreen() {
         )}
       </View>
 
+      {/* Search (TICKET-P6-008) — one bar, two scopes, defaulting to Mine. */}
+      <SearchBar
+        query={searchQuery}
+        onChangeQuery={setSearchQuery}
+        scope={searchScope}
+        onChangeScope={setSearchScope}
+        colors={colors}
+        compact={compact}
+        inputRef={searchInputRef}
+      />
+
       {/* Offline / sync-failure notices */}
-      {isOffline ? (
+      {isOffline && searchScope === 'mine' ? (
         <View testID="offline-indicator" style={styles.notice}>
           <Text style={styles.noticeText}>
             📴 You&apos;re offline — showing your last saved data.
@@ -369,65 +616,152 @@ export default function HomeScreen() {
         </TouchableOpacity>
       ) : null}
 
-      {/* My Ratings */}
-      <SectionHeader title="My Ratings" compact={compact} />
+      {searchScope === 'mine' ? (
+        <>
+          {/* My Ratings */}
+          <SectionHeader title="My Ratings" compact={compact} />
 
-      {loadingRatings ? (
-        <View style={[styles.loadingRow, compact && compactStyles.loadingRow]}>
-          <ActivityIndicator size="small" color={colors.tint} />
-        </View>
-      ) : ratingsError && !ratings ? (
-        <EmptyState
-          icon="⚠️"
-          message={formatApiError(ratingsError, 'Could not load your ratings.')}
-          color={colors.icon}
-        />
-      ) : isOffline && !ratings ? (
-        <EmptyState
-          icon="📴"
-          message={"You're offline and haven't opened this list on this device yet."}
-          color={colors.icon}
-        />
-      ) : !ratings || ratings.length === 0 ? (
-        <EmptyState
-          icon="⭐"
-          message={"You haven't rated anything yet.\nScan a barcode to get started!"}
-          color={colors.icon}
-        />
+          {loadingRatings ? (
+            <View style={[styles.loadingRow, compact && compactStyles.loadingRow]}>
+              <ActivityIndicator size="small" color={colors.tint} />
+            </View>
+          ) : ratingsError && !ratings ? (
+            <EmptyState
+              icon="⚠️"
+              message={formatApiError(ratingsError, 'Could not load your ratings.')}
+              color={colors.icon}
+            />
+          ) : isOffline && !ratings ? (
+            <EmptyState
+              icon="📴"
+              message={"You're offline and haven't opened this list on this device yet."}
+              color={colors.icon}
+            />
+          ) : !ratings || ratings.length === 0 ? (
+            // "Nothing rated yet" — true regardless of what's typed in the
+            // search box, which is what distinguishes this from "no match"
+            // below (TICKET-P6-008).
+            <EmptyState
+              testID="home-search-nothing-rated"
+              icon="⭐"
+              message={"You haven't rated anything yet.\nScan a barcode to get started!"}
+              color={colors.icon}
+            />
+          ) : trimmedQuery && mineResults && mineResults.length === 0 ? (
+            // Ratings exist, but none match the query — a different empty
+            // state from "nothing rated yet", with a next step into Slice B.
+            <EmptyState
+              testID="home-search-no-match"
+              icon="🔍"
+              message={`No matches in your ratings for “${trimmedQuery}”.`}
+              color={colors.icon}
+              action={{
+                testID: 'home-search-switch-to-all',
+                label: 'Search all products →',
+                color: colors.tint,
+                onPress: () => setSearchScope('all'),
+              }}
+            />
+          ) : (
+            (mineResults ?? ratings ?? []).map((entry) => (
+              <RatingCard
+                key={entry.id}
+                entry={entry}
+                bg={colors.background}
+                textColor={colors.text}
+                iconColor={colors.icon}
+                pendingSync={isQueued(entry.product.id)}
+                onPress={() => router.push(`/(app)/product/${entry.product.id}`)}
+              />
+            ))
+          )}
+
+          {/* Recently Opened */}
+          <SectionHeader title="Recently Opened" compact={compact} />
+
+          {recentProducts.length === 0 ? (
+            <EmptyState
+              icon="🔍"
+              message={"Products you open will appear here.\nTry scanning a barcode!"}
+              color={colors.icon}
+            />
+          ) : (
+            recentProducts.map((item) => (
+              <RecentCard
+                key={item.id}
+                item={item}
+                bg={colors.background}
+                textColor={colors.text}
+                iconColor={colors.icon}
+                onPress={() => router.push(`/(app)/product/${item.id}`)}
+              />
+            ))
+          )}
+        </>
       ) : (
-        ratings.map((entry) => (
-          <RatingCard
-            key={entry.id}
-            entry={entry}
-            bg={colors.background}
-            textColor={colors.text}
-            iconColor={colors.icon}
-            pendingSync={isQueued(entry.product.id)}
-            onPress={() => router.push(`/(app)/product/${entry.product.id}`)}
-          />
-        ))
-      )}
+        <>
+          {/* All products (TICKET-P6-008 Slice B) */}
+          <SectionHeader title="All products" compact={compact} />
 
-      {/* Recently Opened */}
-      <SectionHeader title="Recently Opened" compact={compact} />
-
-      {recentProducts.length === 0 ? (
-        <EmptyState
-          icon="🔍"
-          message={"Products you open will appear here.\nTry scanning a barcode!"}
-          color={colors.icon}
-        />
-      ) : (
-        recentProducts.map((item) => (
-          <RecentCard
-            key={item.id}
-            item={item}
-            bg={colors.background}
-            textColor={colors.text}
-            iconColor={colors.icon}
-            onPress={() => router.push(`/(app)/product/${item.id}`)}
-          />
-        ))
+          {!isSearchableQuery(searchQuery) ? (
+            <EmptyState
+              testID="home-search-hint"
+              icon="🔎"
+              message="Type at least 2 characters to search all products."
+              color={colors.icon}
+            />
+          ) : searchLoading ? (
+            <View style={[styles.loadingRow, compact && compactStyles.loadingRow]}>
+              <ActivityIndicator size="small" color={colors.tint} />
+            </View>
+          ) : searchOffline ? (
+            <EmptyState
+              testID="home-search-offline"
+              icon="📴"
+              message={OFFLINE_MESSAGE}
+              color={colors.icon}
+              action={{
+                testID: 'home-search-switch-to-mine',
+                label: 'Switch to Mine →',
+                color: colors.tint,
+                onPress: () => setSearchScope('mine'),
+              }}
+            />
+          ) : searchError ? (
+            <EmptyState
+              testID="home-search-error"
+              icon="⚠️"
+              message={formatApiError(searchError, 'Could not search products.')}
+              color={colors.icon}
+            />
+          ) : searchResults.length === 0 ? (
+            <EmptyState
+              testID="home-search-empty"
+              icon="🤷"
+              message={`No products found for “${trimmedQuery}”.`}
+              color={colors.icon}
+            />
+          ) : (
+            <>
+              {searchResults.map((result) => (
+                <SearchResultCard
+                  key={result.id}
+                  result={result}
+                  bg={colors.background}
+                  textColor={colors.text}
+                  iconColor={colors.icon}
+                  tint={colors.tint}
+                  onPress={() => router.push(`/(app)/product/${result.id}`)}
+                />
+              ))}
+              {searchLoadingMore ? (
+                <View style={[styles.loadingRow, compact && compactStyles.loadingRow]}>
+                  <ActivityIndicator size="small" color={colors.tint} />
+                </View>
+              ) : null}
+            </>
+          )}
+        </>
       )}
 
       <View style={[styles.bottomPad, compact && compactStyles.bottomPad]} />
@@ -538,5 +872,8 @@ const compactStyles = StyleSheet.create({
   },
   bottomPad: {
     height: SPACING_COMPACT.screenBottom,
+  },
+  searchContainer: {
+    marginTop: SPACING_COMPACT.tightGap,
   },
 });

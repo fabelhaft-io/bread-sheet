@@ -65,6 +65,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       },
     });
   } catch (err) {
+    // A caller-initiated `AbortController.abort()` (TICKET-P6-008's debounced
+    // search cancels a superseded request on the next keystroke) is not a
+    // connectivity failure — it's deliberate, and the caller already knows it
+    // asked for it. Wrapping it as NetworkError would make `formatApiError`
+    // render "you're offline" for a request nobody wanted answered anymore.
+    if (err instanceof Error && err.name === 'AbortError') throw err;
     throw new NetworkError(undefined, err);
   }
 
@@ -90,8 +96,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Options a caller may pass through to `fetch` on a `GET`. Currently just `signal`
+ * (TICKET-P6-008 — cancelling a superseded debounced search request). */
+export interface GetOptions {
+  signal?: AbortSignal;
+}
+
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, options?: GetOptions) => request<T>(path, options),
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
   put: <T>(path: string, body: unknown) =>

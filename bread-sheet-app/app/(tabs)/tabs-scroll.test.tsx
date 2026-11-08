@@ -19,6 +19,7 @@ const mockUseSession = jest.fn();
 
 jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
+  useLocalSearchParams: () => ({}),
 }));
 
 jest.mock('@/hooks/use-session', () => ({
