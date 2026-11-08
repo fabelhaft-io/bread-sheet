@@ -23,19 +23,27 @@ let mockParams: Record<string, string | undefined> = {};
 // back out — a mock that just recorded the call (and left `mockParams` frozen
 // at `{ focusSearch: 'all' }`) would pass the hand-off test below even if the
 // screen called `setParams` on every render instead of once.
+const defaultSetParams = (updates: Record<string, string | undefined>) => {
+  mockParams = { ...mockParams, ...updates };
+};
 const mockRouter = {
   push: jest.fn(),
   replace: jest.fn(),
   back: jest.fn(),
-  setParams: jest.fn((updates: Record<string, string | undefined>) => {
-    mockParams = { ...mockParams, ...updates };
-  }),
+  setParams: jest.fn(defaultSetParams),
 };
 const mockUseSession = jest.fn();
 const mockUseOutbox = jest.fn();
 
+// Normally `useRouter()` returns a stable reference, so the hand-off effect's
+// `[focusSearch, router]` deps only change when `focusSearch` itself changes.
+// Flip this to model a router whose identity isn't stable across renders —
+// the one case where the effect genuinely re-runs with `focusSearch` still
+// `'all'`, which is what the `consumedFocusSearch` guard exists to survive.
+let mockRouterIdentityUnstable = false;
+
 jest.mock('expo-router', () => ({
-  useRouter: () => mockRouter,
+  useRouter: () => (mockRouterIdentityUnstable ? { ...mockRouter } : mockRouter),
   useLocalSearchParams: () => mockParams,
 }));
 
@@ -122,6 +130,8 @@ describe('HomeScreen — All products scope search (TICKET-P6-008 Slice B)', () 
     jest.useFakeTimers();
     files.clear();
     mockParams = {};
+    mockRouterIdentityUnstable = false;
+    mockRouter.setParams.mockImplementation(defaultSetParams);
     __resetOfflineStoreForTests();
     setActiveCacheUser('u1');
     mockUseOutbox.mockReturnValue(outbox());
@@ -266,6 +276,31 @@ describe('HomeScreen — All products scope search (TICKET-P6-008 Slice B)', () 
       // the hand-off must not fire again, or `setParams` would be called a
       // second time.
       await rerender(<HomeScreen />);
+      expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-apply the hand-off when the effect re-runs with the param still "all" (consumedFocusSearch guard)', async () => {
+      // Model a router that (a) hasn't cleared `focusSearch` yet when the next
+      // render happens, and (b) hands back a new object identity each render —
+      // both real possibilities with expo-router, and together they make the
+      // hand-off effect's `[focusSearch, router]` deps change on every render
+      // while `focusSearch` itself is still `'all'`. Without the
+      // `consumedFocusSearch` guard this would silently flip the scope back to
+      // "All" even after the user deliberately switched back to "Mine".
+      mockParams = { focusSearch: 'all' };
+      mockRouterIdentityUnstable = true;
+      mockRouter.setParams.mockImplementation(() => {}); // no-op: the param never clears
+
+      const { getByTestId, rerender } = await render(<HomeScreen />);
+      await waitFor(() =>
+        expect(getByTestId('home-search-scope-all').props.accessibilityState?.selected).toBe(true),
+      );
+      expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
+
+      await fireEvent.press(getByTestId('home-search-scope-mine'));
+      await rerender(<HomeScreen />);
+
+      expect(getByTestId('home-search-scope-mine').props.accessibilityState?.selected).toBe(true);
       expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
     });
   });

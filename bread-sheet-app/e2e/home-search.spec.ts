@@ -42,17 +42,20 @@ async function signInAsGuest(page: import('@playwright/test').Page) {
 test('Mine scope filters ratings by name as you type, with no match left over', async ({ page }) => {
   await signInAsGuest(page);
 
-  await expect(page.getByText('Coca-Cola')).toBeVisible();
+  // The fixture's brand is "Coca-Cola Company", which also contains the
+  // substring "Coca-Cola" — match the product name exactly so this doesn't
+  // become a strict-mode violation against the brand text rendered alongside it.
+  await expect(page.getByText('Coca-Cola', { exact: true })).toBeVisible();
   await expect(page.getByText('Sourdough Loaf')).toBeVisible();
 
   await page.getByTestId('home-search-input').fill('cola');
 
-  await expect(page.getByText('Coca-Cola')).toBeVisible();
+  await expect(page.getByText('Coca-Cola', { exact: true })).toBeVisible();
   await expect(page.getByText('Sourdough Loaf')).not.toBeVisible();
 
   // Case/diacritic-insensitive, substring, not prefix-only.
   await page.getByTestId('home-search-input').fill('COLA');
-  await expect(page.getByText('Coca-Cola')).toBeVisible();
+  await expect(page.getByText('Coca-Cola', { exact: true })).toBeVisible();
 });
 
 test('a query with no match in Mine offers a way into All products', async ({ page }) => {
@@ -102,7 +105,9 @@ test('the scope toggle switches to All products and renders a global result', as
   await page.getByTestId('home-search-input').fill('pepsi');
   await expect(page.getByText('Pepsi')).toBeVisible({ timeout: 10_000 });
 
-  // Mine still works underneath — switching back shows the (unfiltered) ratings again.
+  // One bar, two scopes: the query ("pepsi") survives the switch back to Mine,
+  // and neither of Mine's ratings matches it — so Mine's own no-match empty
+  // state shows, not the unfiltered list.
   await page.getByTestId('home-search-scope-mine').click();
-  await expect(page.getByText('Coca-Cola')).toBeVisible();
+  await expect(page.getByTestId('home-search-no-match')).toBeVisible();
 });
