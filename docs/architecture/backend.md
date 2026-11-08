@@ -133,7 +133,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Model | Key fields | Notes |
 |-------|-----------|-------|
 | `User` | `id`, `email?`, `username`, `avatarUrl` | `id` mirrors the Supabase user UUID |
-| `Product` | `id` (PK, UUID), `kind`, `name`, `brand`, `image`, `description`, `status`, `submittedByUserId?`, `lastModifiedByUserId?` | **TICKET-P6-009 / ADR 0006:** the slim, rateable thing. `kind`: `PACKAGED \| CUSTOM` (only `PACKAGED` rows exist until P6-007). `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED. No GTIN, nutrition, or ingredient columns — those moved to `PackagedProduct` |
+| `Product` | `id` (PK, UUID), `kind`, `name`, `brand`, `image`, `description`, `status`, `submittedByUserId?`, `lastModifiedByUserId?` | **TICKET-P6-009 / ADR 0006:** the slim, rateable thing. `kind`: `PACKAGED \| CUSTOM` (only `PACKAGED` rows exist until P6-007). `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED. No GTIN, nutrition, or ingredient columns — those moved to `PackagedProduct`. GIN trigram indexes (`gin_trgm_ops`) on `name` and `brand` back `GET /api/products/search` (TICKET-P6-008 Slice B); the `pg_trgm` extension itself is created by the `product_search_trgm` migration, since Prisma's schema DSL has no concept of extensions |
 | `PackagedProduct` | `productId` (PK, FK → `Product.id`, `onDelete: Cascade`), `gtin` (unique), `genericName`, nutrition fields, `servingSize`, `ingredients` | 1:1 with a `PACKAGED` `Product`; a `CUSTOM` product has no row here, so it structurally cannot hold nutrition or ingredient data. The invariant "`kind = PACKAGED` ⇔ exactly one `PackagedProduct` row" is enforced by writing both rows in one transaction (`productService.ts`), not a DB constraint |
 | `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?`, `createdAt`, `updatedAt` | `@@unique([userId, productId])` — one rating per user per product; resubmission upserts the existing row (`createdAt` preserved, `updatedAt` advances) |
 | `Group` | `id`, `name`, `inviteCode` | Invite code is unique |
@@ -145,7 +145,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 **Prisma import:** Always import the client from `src/generated/prisma_client`, never from `@prisma/client` directly.
 
-**Product visibility helper (`services/productVisibility.ts`, TICKET-P6-009).** `visibleProductWhere(user)` returns the P5-007 rule — `{ status: { not: REJECTED } }` — for both `PACKAGED` and `CUSTOM` kinds, and `assertProductVisible(user, id)` throws `ProductNotFoundError` (→ `404`) unless it resolves. Every product-reading path (`productController`, `productEditController`, `productVerificationService`, `productEditService`, `ratingController`) goes through one of these instead of re-typing the `where` clause. Catalogue-only queries (OFF sync, OFF backfill, not yet built) filter on `kind: PACKAGED` explicitly — that is a different axis (manufactured-article-ness) from visibility.
+**Product visibility helper (`services/productVisibility.ts`, TICKET-P6-009).** `visibleProductWhere(user)` returns the P5-007 rule — `{ status: { not: REJECTED } }` — for both `PACKAGED` and `CUSTOM` kinds, and `assertProductVisible(user, id)` throws `ProductNotFoundError` (→ `404`) unless it resolves. Every product-reading path (`productController`, `productEditController`, `productVerificationService`, `productEditService`, `ratingController`) goes through one of these instead of re-typing the `where` clause. Catalogue-only queries (OFF sync, OFF backfill, not yet built) filter on `kind: PACKAGED` explicitly — that is a different axis (manufactured-article-ness) from visibility. The module also exports `INVISIBLE_PRODUCT_STATUS` (today: `REJECTED`) so a caller that can't use a Prisma `where` object — `productSearchService`'s raw `$queryRaw` query, which ranks by `pg_trgm` `similarity()` and a `Rating` count — stays pinned to the same rule instead of re-typing the predicate (TICKET-P6-008).
 
 **Product serializer (`services/productSerializer.ts`, TICKET-P6-009).** `serializeProduct(product, user)` is an explicit allowlist, not a field spread — the pre-split `getProductByBarcode` spread the whole Prisma row, so a future internal column would have reached clients by accident. Emits `{ id, kind, name, brand, image (resolved), description, status, unverified, submittedByUserId? (registered callers only), packaged: {...} | null, submission? (unverified only, flat) }`. Rating responses embed a smaller `{ id, kind, name, brand, image }` via an explicit Prisma `select`, not this serializer — the GTIN isn't needed there.
 
@@ -159,6 +159,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
+| `GET` | `/products/search?q=&cursor=` | Any | Name/brand search over the whole catalogue (TICKET-P6-008 Slice B). See the dedicated section below. Registered before both `/gtin/:gtin` and `/:productId` in the router — otherwise `/:productId`'s `router.param` would 400 "search" as a non-UUID id |
 | `GET` | `/products/gtin/:gtin` | Any | The only way to resolve a GTIN to a product (TICKET-P6-009, replaces `GET /products/:barcode`). Validates `^\d{8,13}$` (`400`), looks up `PackagedProduct.gtin`, falls back to Open Food Facts on a miss and creates `Product` + `PackagedProduct` in one transaction. A concurrent first scan of the same new GTIN hits `P2002` on `gtin`; the controller catches it and re-reads instead of 409ing — two people scanning the same new product at once is normal. Registered before `/:productId` in the router |
 | `GET` | `/products/:productId` | Any | Fetch product by id. Adds `unverified`, `submittedByUserId`, and `submission` block for user-submitted products. `PENDING_REVIEW` products are visible to every caller (P5-007), but the anonymous copy omits `submittedByUserId`. `REJECTED` products return `404` for every caller (via `productVisibility`) |
 | `POST` | `/products/upload-image` | Registered | Multipart image → plausibility/abuse gate → S3 upload. `422 { error: 'image_rejected', reason }` if rejected (nothing stored). For `kind=product` returns `{ imageKey, name, brand, genericName }`; for `kind=label` returns `{ imageKey }`. `imageKey` is the `processed/{uuid}.jpg` S3 object key — echoed back as `productImageKey` in the submission. `requireRegistered` since ADR 0005 L-1 — the plausibility gate runs a paid Gemini call before anything is persisted, so anonymous sessions are turned away before they can spend it |
@@ -258,6 +259,54 @@ Both endpoints call `castVote(productId, userId, vote)` in `services/productVeri
 6. Return `{ verifications: <approval count> }`.
 
 `DELETE /products/:productId/verify` casts a `REJECT` vote (it does **not** retract a prior approval — it is an overloaded REJECT channel).
+
+---
+
+## Product Search (`GET /api/products/search`, TICKET-P6-008 Slice B)
+
+`GET /api/products/search?q=<query>&cursor=<cursor>` is the global, server-backed name/brand search the P6-007 "create a custom product" screen's search-before-create flow is built on (that ticket is not yet built; this endpoint ships ahead of it so nothing else duplicates the predicate it needs). `requireAuth` only — no `requireRegistered` — so an anonymous session can search too, and `userLimiter` rate-limits it per authenticated id (falls back to per-IP via `apiLimiter`'s outer gate for the handful of unauthenticated-but-past-`requireAuth` cases, which don't apply here since `requireAuth` always populates `req.user` or 401s first).
+
+**Route ordering is load-bearing.** `/search` and `/gtin/:gtin` are both registered in `productRoutes.ts` ahead of `/:productId`, whose `router.param('productId', ...)` 400s any non-UUID segment — without the ordering, a request for `/products/search` would never reach its own handler.
+
+**Matching and ranking (`services/productSearchService.ts`).** The query is built once as a parameterised `$queryRaw` template (no string concatenation of user input into SQL text, ever — `q` and the visibility status are always bound parameters):
+
+```sql
+WITH matches AS (
+  SELECT p.id, p.kind, p.name, p.brand, p.image, p.status,
+    similarity(p.name, $query) AS similarity,
+    (SELECT COUNT(*)::int FROM "Rating" r WHERE r."productId" = p.id) AS "ratingCount"
+  FROM "Product" p
+  WHERE p.status <> $invisibleStatus              -- INVISIBLE_PRODUCT_STATUS, from productVisibility.ts
+    AND (p.name % $query OR (p.brand IS NOT NULL AND p.brand % $query))
+)
+SELECT * FROM matches m
+WHERE /* keyset cursor predicate, see below */
+ORDER BY m.similarity DESC, m."ratingCount" DESC, m.id ASC
+LIMIT 21   -- SEARCH_PAGE_SIZE (20) + 1, to detect a next page without a COUNT
+```
+
+- **Matching** uses `pg_trgm`'s `%` operator (not `ILIKE`) against `name` and `brand`, backed by a GIN trigram index on each (see the migration below). `%` is governed by the session's `pg_trgm.similarity_threshold` GUC — default `0.3` — which is deliberately typo-tolerant: `similarity('nutela', 'nutella') ≈ 0.667`, comfortably above the floor, so "nutela" finds "Nutella" with no app-level fuzzy-matching code. Measured in this ticket's manual verification (no Postgres service exists in CI — see Testing below): `similarity('negroni', 'negroni sbagliato') ≈ 0.444`, also above the floor.
+- **Ranking** is by the row's own `name`-vs-`query` similarity, descending, tie-broken by its `Rating` count (well-known products surface first on a tie), tie-broken by `id` for a total order. The `similarity` field in the response is always this same name-vs-query score — even for a row that only matched via `brand` — because P6-007's "Did you mean …?" gate compares it against the *name* a user is about to create.
+- **Visibility**: `p.status <> $invisibleStatus` is the one line enforcing it, bound to `productVisibility.ts`'s `INVISIBLE_PRODUCT_STATUS` constant (today `REJECTED`) rather than a second hardcoded `'REJECTED'` — the same rule `GET /api/products/:productId` uses, just expressed as a raw-SQL-safe scalar instead of a Prisma `where` object (which can't express a `pg_trgm`-ranked, `Rating`-joined query). `PENDING_REVIEW` rows are not excluded, so they appear in results flagged `unverified: true`, for anonymous callers too — matching every other product read.
+- Both `ProductKind`s are searched; a `CUSTOM` row (no `PackagedProduct`) matches and serializes identically to a `PACKAGED` one.
+
+**Cursor pagination, not `OFFSET`.** The ordering (`similarity DESC, ratingCount DESC, id ASC`) is unstable under concurrent writes, so paging re-sorts and re-filters every time rather than skipping a row count. The opaque cursor is `base64url(JSON{ q, s, r, id })` — the exact `(similarity, ratingCount, id)` of the last row on the page, plus the query string it was issued for. The next page's `WHERE` clause is the standard keyset predicate for that mixed sort direction:
+
+```
+m.similarity < cursor.s
+  OR (m.similarity = cursor.s AND m."ratingCount" < cursor.r)
+  OR (m.similarity = cursor.s AND m."ratingCount" = cursor.r AND m.id > cursor.id)
+```
+
+A cursor is rejected with `400 { code: 'invalid_cursor' }` if it fails to base64url/JSON-decode, is missing a field, has a field of the wrong type, carries a non-UUID `id`, or was issued for a *different* `q` than the current request — reusing a cursor across queries would silently produce a nonsensical page, since the ranking values it encodes only mean anything for the query they came from.
+
+**Input hygiene** (`parseSearchQuery`, same file): `q` is capped at 100 raw characters, measured **before** trimming (a request that is almost entirely whitespace must still `400`, not slip through because `.trim().length` is small), and must be at least 2 characters after trimming. Violations are `400 { code: 'query_required' | 'query_too_long' | 'query_too_short', message }`.
+
+**Response**: `{ results: [{ id, kind, name, brand, image, unverified, similarity }], nextCursor: string | null }`. `image` is resolved through `resolveImageUrl` like every other product serialisation; `nextCursor: null` means this is the last page.
+
+**Migration (`product_search_trgm`)**: `CREATE EXTENSION IF NOT EXISTS pg_trgm` (hand-written — Prisma's schema DSL has no concept of extensions), plus two `CREATE INDEX ... USING GIN (… gin_trgm_ops)` statements on `Product.name` and `Product.brand`. Unlike the `one_pending_edit_per_product` partial index, the `gin_trgm_ops` operator class *is* representable in the schema DSL (`@@index([name(ops: raw("gin_trgm_ops"))], type: Gin)` on the `Product` model), so `prisma migrate dev` generated those two statements unassisted — only the `CREATE EXTENSION` line was hand-added. Declaring the indexes in `schema.prisma` (rather than migration-only) means a later `prisma migrate dev` won't try to drop them as drift.
+
+**Testing.** No suite in this repo runs against a real Postgres today — every test (including this ticket's) mocks at the `../db.js` boundary, consistent with the rest of `server/src`. `productSearchService.test.ts` covers `parseSearchQuery` and the cursor codec as pure functions, and asserts against the mocked `$queryRaw` call's *flattened* template arguments (reconstructed via `Prisma.sql(strings, ...values)`, which performs the same fragment-flattening whether called as a tag or a plain function) that: the visibility exclusion is always a bound parameter equal to `INVISIBLE_PRODUCT_STATUS`, never literal text in the query; a hostile `q` (e.g. containing `DROP TABLE`) never appears in the SQL text, only in `values`; row-to-response mapping and pagination/cursor math are correct. `productController.test.ts` covers the HTTP layer (401/400/200 shapes, the anonymous-allowed path, and the route-ordering regression test for `/search` vs `/:productId`). The `pg_trgm`-specific claims that a mock can't prove — the typo-tolerance threshold, `REJECTED` actually being filtered by Postgres, `PENDING_REVIEW` actually being included, cursor continuation covering every row with no gaps/dupes across a real multi-page result set — were verified manually against a throwaway local Postgres container during implementation (exact commands/output recorded in the implementing agent's handback report for this ticket). Follow-up: give the `server` CI job a Postgres service so this class of claim is continuously verified rather than only at implementation time (not done here — out of scope: this role may not edit `.github/workflows/*`).
 
 ---
 

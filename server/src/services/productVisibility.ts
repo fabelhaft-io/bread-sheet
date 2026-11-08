@@ -24,11 +24,22 @@ export interface VisibilityUser {
   isAnonymous?: boolean;
 }
 
+/**
+ * The single status excluded from every product read (today: `REJECTED`).
+ * Exported so a caller that cannot use a Prisma `where` object — e.g.
+ * TICKET-P6-008's `productSearchService`, which ranks by `pg_trgm`
+ * `similarity()` via `$queryRaw` — stays pinned to the same rule as
+ * `visibleProductWhere` instead of re-typing the predicate. Still
+ * interpolated as a bound parameter wherever it is used in raw SQL, never
+ * spliced into the query text.
+ */
+export const INVISIBLE_PRODUCT_STATUS = ProductStatus.REJECTED;
+
 /** The P5-007 rule, unchanged by the split: `REJECTED` is invisible. */
 export function visibleProductWhere(
   _user?: VisibilityUser,
 ): Prisma.ProductWhereInput {
-  return { status: { not: ProductStatus.REJECTED } };
+  return { status: { not: INVISIBLE_PRODUCT_STATUS } };
 }
 
 /**
@@ -44,7 +55,7 @@ export function isProductVisible(
   product: { status: ProductStatus },
   _user?: VisibilityUser,
 ): boolean {
-  return product.status !== ProductStatus.REJECTED;
+  return product.status !== INVISIBLE_PRODUCT_STATUS;
 }
 
 /**

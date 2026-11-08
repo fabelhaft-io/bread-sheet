@@ -7,6 +7,7 @@ const mockTransaction = vi.hoisted(() => vi.fn());
 const mockFetchFromOFF = vi.hoisted(() => vi.fn());
 const mockCreateSubmittedProduct = vi.hoisted(() => vi.fn());
 const mockValidateProductSubmission = vi.hoisted(() => vi.fn());
+const mockSearchProducts = vi.hoisted(() => vi.fn());
 
 // Mutable per-test "session". The mocked requireAuth/requireRegistered both
 // read from this so individual tests can simulate registered vs anonymous
@@ -66,6 +67,18 @@ vi.mock('../validators/productSubmissionValidator.js', async () => {
   return {
     ...actual,
     validateProductSubmission: mockValidateProductSubmission,
+  };
+});
+
+vi.mock('../services/productSearchService.js', async () => {
+  // Pull the real SearchValidationError class so the controller's
+  // `instanceof` check matches.
+  const actual = await vi.importActual<
+    typeof import('./../services/productSearchService.js')
+  >('../services/productSearchService.js');
+  return {
+    ...actual,
+    searchProducts: mockSearchProducts,
   };
 });
 
@@ -665,5 +678,125 @@ describe('POST /api/products', () => {
 
     expect(res.status).toBe(401);
     expect(mockCreateSubmittedProduct).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/products/search (TICKET-P6-008 Slice B)', () => {
+  beforeEach(() => {
+    mockSearchProducts.mockReset();
+    resetSession();
+  });
+
+  it('is not swallowed by the /:productId UUID router.param (route-ordering regression)', async () => {
+    // Before the ordering fix, "search" would hit `/:productId` first and
+    // 400 with `invalid_product_id` instead of ever reaching the handler.
+    mockSearchProducts.mockResolvedValue({ results: [], nextCursor: null });
+
+    const res = await request(app)
+      .get('/api/products/search')
+      .query({ q: 'cola' })
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ results: [], nextCursor: null });
+    expect(mockSearchProducts).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'cola',
+      undefined,
+    );
+  });
+
+  it('allows an anonymous caller through (requireAuth only, not requireRegistered)', async () => {
+    session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
+    mockSearchProducts.mockResolvedValue({ results: [], nextCursor: null });
+
+    const res = await request(app)
+      .get('/api/products/search')
+      .query({ q: 'cola' })
+      .set('Authorization', 'Bearer anon-token');
+
+    expect(res.status).toBe(200);
+    expect(mockSearchProducts).toHaveBeenCalled();
+  });
+
+  it('returns 401 when no session is present', async () => {
+    session.user = null;
+
+    const res = await request(app).get('/api/products/search').query({ q: 'cola' });
+
+    expect(res.status).toBe(401);
+    expect(mockSearchProducts).not.toHaveBeenCalled();
+  });
+
+  it('passes q and cursor through to the service untouched', async () => {
+    mockSearchProducts.mockResolvedValue({ results: [], nextCursor: null });
+
+    await request(app)
+      .get('/api/products/search')
+      .query({ q: 'nutela', cursor: 'opaque-cursor-value' })
+      .set('Authorization', 'Bearer token');
+
+    expect(mockSearchProducts).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      'nutela',
+      'opaque-cursor-value',
+    );
+  });
+
+  it('returns the service result shape verbatim on success', async () => {
+    const serviceResult = {
+      results: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          kind: ProductKind.PACKAGED,
+          name: 'Nutella',
+          brand: 'Ferrero',
+          image: null,
+          unverified: false,
+          similarity: 0.667,
+        },
+      ],
+      nextCursor: null,
+    };
+    mockSearchProducts.mockResolvedValue(serviceResult);
+
+    const res = await request(app)
+      .get('/api/products/search')
+      .query({ q: 'nutela' })
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(serviceResult);
+  });
+
+  it('maps a SearchValidationError to 400 with its code', async () => {
+    const { SearchValidationError } = await vi.importActual<
+      typeof import('../services/productSearchService.js')
+    >('../services/productSearchService.js');
+    mockSearchProducts.mockRejectedValue(
+      new SearchValidationError('query_too_short', 'q must be at least 2 characters after trimming'),
+    );
+
+    const res = await request(app)
+      .get('/api/products/search')
+      .query({ q: 'a' })
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      code: 'query_too_short',
+      message: 'q must be at least 2 characters after trimming',
+    });
+  });
+
+  it('forwards an unexpected error to the central error handler', async () => {
+    mockSearchProducts.mockRejectedValue(new Error('boom'));
+
+    const res = await request(app)
+      .get('/api/products/search')
+      .query({ q: 'cola' })
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(500);
   });
 });

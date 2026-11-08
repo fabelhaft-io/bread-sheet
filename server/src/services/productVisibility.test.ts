@@ -6,12 +6,24 @@ vi.mock('../db.js', () => ({
   default: { product: { findFirst: mockProductFindFirst } },
 }));
 
-import { assertProductVisible, visibleProductWhere, ProductNotFoundError } from './productVisibility.js';
+import {
+  assertProductVisible,
+  visibleProductWhere,
+  ProductNotFoundError,
+  INVISIBLE_PRODUCT_STATUS,
+} from './productVisibility.js';
 import { ProductStatus } from '../generated/prisma_client/enums.js';
 
 describe('visibleProductWhere', () => {
   it('excludes REJECTED products, and only REJECTED products', () => {
     expect(visibleProductWhere()).toEqual({ status: { not: ProductStatus.REJECTED } });
+  });
+
+  it('is built from the single shared INVISIBLE_PRODUCT_STATUS constant (TICKET-P6-008)', () => {
+    // productSearchService's raw-SQL query excludes the same constant instead
+    // of re-typing `REJECTED` — pin the value so the two callers can't drift.
+    expect(INVISIBLE_PRODUCT_STATUS).toBe(ProductStatus.REJECTED);
+    expect(visibleProductWhere()).toEqual({ status: { not: INVISIBLE_PRODUCT_STATUS } });
   });
 
   it('is the same for an anonymous caller — the rule does not vary by caller', () => {

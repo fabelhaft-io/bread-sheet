@@ -10,6 +10,7 @@ import { isValidUuid } from '../validators/idValidator.js';
 import {
   getProductByGtin,
   getProductById,
+  searchProductsHandler,
   submitProduct,
   uploadImage,
   approveProduct,
@@ -54,9 +55,11 @@ router.param('productId', (req: Request, res: Response, next: NextFunction, valu
   next();
 });
 
-// GET /gtin/:gtin is registered before /:productId — they're different
-// segment counts so Express wouldn't actually collide, but the ordering
-// keeps the two lookups visually (and historically) distinct.
+// /search and /gtin/:gtin are both registered ahead of /:productId
+// (TICKET-P6-008 / P6-009). This one is load-bearing, not just cosmetic:
+// `/:productId`'s `router.param` 400s any non-UUID value, so "search" would
+// never reach its own handler if it were registered after.
+router.get('/search', requireAuth, userLimiter, searchProductsHandler);
 router.get('/gtin/:gtin', requireAuth, userLimiter, getProductByGtin);
 router.get('/:productId', requireAuth, userLimiter, getProductById);
 
