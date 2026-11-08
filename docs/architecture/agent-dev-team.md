@@ -258,11 +258,12 @@ new file for every small addition):
   available, instead of crashing — the same camera-free principle `CLAUDE.md` calls out
   elsewhere in the frontend.
 
-Both specs need a working `bread-sheet-app/.env` (a reachable Supabase project) — they exercise
-real auth, same prerequisite as manual testing. CI's `e2e` job in `.github/workflows/test.yml`
-needs `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` added as
-repository **variables** (not Secrets — both are `EXPO_PUBLIC_*` values Expo bakes into the
-client bundle, so they're already public) before it will pass.
+Both specs exercise real Supabase auth (guest sign-in), against a **local** stack started with
+`supabase start` from `supabase/config.toml`, with its URL and publishable key exported as
+`EXPO_PUBLIC_*` for that run. No hosted project and no `.env` is needed. CI's `e2e` job in
+`.github/workflows/test.yml` starts the same stack inside the job and needs no repo variables.
+See README.md § Web E2E for the commands and `docs/architecture/frontend.md` § Web E2E for
+how the job is wired.
 
 `app.json`'s `web.output` is `"single"`, not Expo's default `"static"` — static mode
 server-renders each route in Node before serving it, and the Supabase client's

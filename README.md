@@ -52,6 +52,9 @@
     ```
 * A free [Supabase](https://supabase.com) project (for auth)
 * For the mobile app: the **Expo Go** app on a physical device, or an emulator
+* *Only for the web E2E suite (`npm run test:e2e`):* **`jq`**, plus the Podman (or Docker) daemon
+  above, which runs a local Supabase stack. The specs don't use the hosted project; the Supabase
+  CLI comes via `npx`. See [Web E2E](#web-e2e-playwright)
 * *Only for the native E2E suite (`npm run test:maestro`):* a **JDK 17–21**, an **Android SDK**,
   and the [Maestro](https://maestro.mobile.dev) CLI — see [Native E2E](#native-e2e-camera--barcode-scan)
 
@@ -142,12 +145,39 @@ cd bread-sheet-app && npx expo start
 
 Scan the QR code with Expo Go (or press `a`/`i` for an emulator).
 
-Run the app's E2E tests (Playwright, against Expo web — see [Agentic Dev Team](#agentic-dev-team)):
+#### Web E2E (Playwright)
+
+The Playwright specs drive Expo web and sign in as a guest, so they need a Supabase auth server
+with anonymous sign-ins on. They run against a **local** Supabase stack started from
+`supabase/config.toml`, not the hosted project. CI's `e2e` job (`.github/workflows/test.yml`)
+does the same, so a local run reproduces CI. Only Postgres, GoTrue (auth) and the Kong gateway
+are needed; the `--exclude` list below turns off everything else.
 
 ```sh
-cd bread-sheet-app && npx playwright install chromium   # one-time
-npm run test:e2e
+# From the repo root. Podman: point the CLI at the user socket first (bash/zsh shown; fish: set -gx).
+export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
+
+npx supabase@2.122.0 start --exclude realtime,storage-api,imgproxy,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+
+cd bread-sheet-app
+npx playwright install chromium   # one-time
+EXPO_PUBLIC_SUPABASE_URL=$(npx supabase@2.122.0 status -o json | jq -r .API_URL) \
+EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=$(npx supabase@2.122.0 status -o json | jq -r .PUBLISHABLE_KEY) \
+  npm run test:e2e
+
+npx supabase@2.122.0 stop --no-backup   # when done; drops the throwaway auth users
 ```
+
+* The CLI version matches CI's pin. The `--exclude` names belong to that version (check
+  `supabase start --help`), so update both if you bump it.
+* Exported `EXPO_PUBLIC_*` values take precedence over `bread-sheet-app/.env`, so there is no
+  need to edit that file. Expo inlines them when the web server starts, so they have to be set
+  on the command that launches Playwright, as above.
+* **Stop any running `npx expo start` first.** Outside CI, Playwright reuses whatever is already
+  listening on `:8081`. A dev server started against the hosted project would run the specs
+  against that project.
+
+See [Agentic Dev Team](#agentic-dev-team) for how the reviewer role uses this suite.
 
 #### Native E2E (camera & barcode scan)
 
@@ -180,10 +210,12 @@ export EXPO_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
 export EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=<publishable-key>
 ```
 
-The runner also accepts `bread-sheet-app/.env` (what the Playwright specs use) if you'd rather
+The runner also accepts `bread-sheet-app/.env` (what `npx expo start` reads) if you'd rather
 keep a file. Export both variables or neither — half-set is rejected outright, because it would
-otherwise mix with the file and fail much later inside a flow. A dedicated throwaway Supabase
-project is the sensible choice here, as it is for CI. **Budget 10–40 minutes for the first run:** the initial `expo prebuild` +
+otherwise mix with the file and fail much later inside a flow. Unlike the Playwright suite, these
+flows run against a hosted Supabase project and the deployed dev API (CI's Maestro job uses the
+`EXPO_PUBLIC_*` repo variables), because the product lookup needs a reachable backend. A
+dedicated throwaway project is the sensible choice. **Budget 10–40 minutes for the first run:** the initial `expo prebuild` +
 Gradle build downloads the Android toolchain. Later runs are far quicker.
 
 See [`docs/architecture/frontend.md`](docs/architecture/frontend.md) for how the suite is built

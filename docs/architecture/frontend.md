@@ -473,6 +473,39 @@ Upgrading to an email that already has an account fails at `updateUser` and leav
 
 > Testing note: `lib/__mocks__/api.ts` is the manual mock behind a bare `jest.mock('@/lib/api')`. It keeps `ApiError` and `NetworkError` as real classes, because screens and `formatApiError` branch on `instanceof`. Tests that exercise the caches mock `expo-file-system/legacy` with an in-memory `Map` and call `setActiveCacheUser` / `__resetOfflineStoreForTests` in `beforeEach`.
 
+## Web E2E: Playwright against a local Supabase
+
+`npm run test:e2e` drives Expo web (`npm run web`, started by Playwright's `webServer`)
+in headless Chromium. Both specs (`e2e/auth.spec.ts`, `e2e/scan-tab.spec.ts`) click
+"Continue as Guest", so they need a real GoTrue that allows `signInAnonymously()`. They do
+**not** need the hosted project, the API server, PostgREST or Storage: the app talks to
+Supabase only through `supabase.auth`, and the Home tab renders without the API.
+
+So the suite runs against a **local Supabase stack** defined by `supabase/config.toml`.
+That file is the stock `supabase init` template (CLI 2.122.0) with one change,
+`enable_anonymous_sign_ins = true`, and holds no secrets. CI's `e2e` job
+(`.github/workflows/test.yml`):
+
+1. installs the CLI with `supabase/setup-cli` (action pinned by commit, CLI pinned to
+   `2.122.0`);
+2. runs `supabase start --exclude …`, excluding every service except Postgres (not
+   excludable), `gotrue` and `kong`. The names come from that version's
+   `supabase start --help`;
+3. reads `API_URL` and `PUBLISHABLE_KEY` from `supabase status -o json`, checks both are
+   non-empty and that GoTrue's `/auth/v1/settings` reports `external.anonymous_users: true`,
+   and writes them to `$GITHUB_ENV` as `EXPO_PUBLIC_SUPABASE_URL` /
+   `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`. They must land before the test step,
+   because Expo inlines `EXPO_PUBLIC_*` when the web server starts. The `sb_publishable_…`
+   key is used rather than the legacy `ANON_KEY` JWT because it is the key type the app's
+   variable names, and supabase-js accepts it;
+4. runs the specs, uploads the Playwright report, and `supabase stop --no-backup` in an
+   `if: always()` step.
+
+Each step fails the job with a named error rather than falling back to anything. The job
+used to read a hosted project's URL and key from repo variables. When that free-tier
+project became unreachable (from 2026-11-06), every branch failed at `home-screen`. Local
+reproduction is in README.md § Web E2E.
+
 ## Native E2E: Android emulator + Maestro (TICKET-P9-003)
 
 Playwright covers everything reachable through Expo web; the flows it structurally
@@ -547,8 +580,9 @@ structural guards for the defects that stopped it completing a run (the Gradle s
 is awaited, adb state calls follow the install, children are spawned onto a real
 file descriptor rather than a not-yet-open `WriteStream`).
 
-**Prerequisites** are the same as `npm run test:e2e`: a reachable Supabase project
-for guest sign-in + product lookup, supplied **either** by exporting
+**Prerequisites** differ from `npm run test:e2e`, which runs against a local stack (see
+above). These flows look up a product, so they need the deployed dev API plus the hosted
+Supabase project it trusts, for guest sign-in + product lookup, supplied **either** by exporting
 `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` in the
 environment **or** via `bread-sheet-app/.env`, checked in that order. The
 environment route is there so a machine running the agentic dev team never has to

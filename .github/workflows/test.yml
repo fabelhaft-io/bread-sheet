@@ -86,14 +86,21 @@ jobs:
     defaults:
       run:
         working-directory: bread-sheet-app
-    # Requires EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY repo
-    # *variables* (Settings > Secrets and variables > Actions > Variables — not Secrets:
-    # both are EXPO_PUBLIC_* values Expo bakes into the client bundle, so they're already
-    # public, same as they are in bread-sheet-app/.env) pointing at a reachable (ideally
-    # dedicated test) Supabase project — the specs under e2e/ hit real Supabase auth, same
-    # as manual testing. Until those variables are added this job fails loudly rather than
-    # silently skipping, per this repo's "fail fast, no inline env defaults" convention
-    # (see CLAUDE.md).
+    # The specs under e2e/ sign in as a guest (supabase.auth.signInAnonymously()), so they
+    # need a real GoTrue — but not a hosted one. The job starts a throwaway local Supabase
+    # stack from supabase/config.toml (which enables anonymous sign-ins) with only Postgres,
+    # GoTrue and the Kong gateway running, then hands its API URL and publishable key to
+    # Expo. No repo variables or secrets are involved: a hosted free-tier project can be
+    # paused or deleted underneath CI, which is exactly how this job broke in Nov 2026.
+    #
+    # Expo bakes EXPO_PUBLIC_* into the bundle when Playwright's webServer starts
+    # `npm run web`, so both values go into $GITHUB_ENV before the test step. Every stage
+    # fails the job with a named error — no stack, an empty value, or anonymous sign-ins
+    # switched off — rather than falling back to anything (CLAUDE.md: fail fast).
+    # Bump the CLI with care: SUPABASE_EXCLUDE has to match that version's
+    # `supabase start --help` service names.
+    env:
+      SUPABASE_EXCLUDE: realtime,storage-api,imgproxy,mailpit,postgrest,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
 
     steps:
       - uses: actions/checkout@v7
@@ -110,11 +117,50 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      # Installed from npm by the action. 2.122.0 is the CLI supabase/config.toml was
+      # generated with; the action is pinned by commit (v3.0.1).
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3.0.1
+        with:
+          version: 2.122.0
+
+      # Postgres can't be excluded; gotrue and kong are the only other services kept.
+      # Without --ignore-health-check, an unhealthy container exits non-zero here.
+      - name: Start local Supabase (db, auth, gateway)
+        working-directory: ${{ github.workspace }}
+        run: supabase start --exclude "$SUPABASE_EXCLUDE"
+
+      # PUBLISHABLE_KEY (sb_publishable_…) rather than the legacy ANON_KEY JWT: it is the
+      # key type the app's variable is named for and what the hosted project handed it.
+      - name: Export local Supabase config for Expo
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          status="$(supabase status -o json)" || {
+            echo "::error::supabase status failed — the local stack is not running"
+            exit 1
+          }
+          url="$(jq -r '.API_URL // empty' <<<"$status")"
+          key="$(jq -r '.PUBLISHABLE_KEY // empty' <<<"$status")"
+          if [ -z "$url" ] || [ -z "$key" ]; then
+            echo "::error::supabase status reported no API_URL and/or PUBLISHABLE_KEY — is the local stack up? Keys present: $(jq -c 'keys' <<<"$status")"
+            exit 1
+          fi
+          # Fail here, not 15 s into a spec, if GoTrue is unreachable through Kong or
+          # config.toml's enable_anonymous_sign_ins didn't take.
+          settings="$(curl -fsS -H "apikey: $key" "$url/auth/v1/settings")" || {
+            echo "::error::GoTrue is not reachable at $url/auth/v1/settings"
+            exit 1
+          }
+          if ! jq -e '.external.anonymous_users == true' <<<"$settings" >/dev/null; then
+            echo "::error::Anonymous sign-ins are disabled on the local stack (supabase/config.toml [auth] enable_anonymous_sign_ins). GoTrue settings: $settings"
+            exit 1
+          fi
+          echo "EXPO_PUBLIC_SUPABASE_URL=$url" >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=$key" >> "$GITHUB_ENV"
+
       - name: Run E2E tests
         run: npm run test:e2e
-        env:
-          EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
-          EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
@@ -123,3 +169,8 @@ jobs:
           name: playwright-report
           path: bread-sheet-app/playwright-report/
           retention-days: 14
+
+      - name: Stop local Supabase
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: supabase stop --no-backup
