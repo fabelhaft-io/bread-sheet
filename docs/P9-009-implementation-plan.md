@@ -280,22 +280,21 @@ The rest of the design is unchanged. Where the decision above and the acceptance
 
 ## Implementation status (2026-11-08)
 
-The code is done on this branch: steps 2 (HCL only), 3, 4, 5 (workflow file), 6 and 8. The steps
-that need AWS haven't run yet. The local AWS session had expired, and they are live changes.
+The code merged in #196. Later the same day, dev was resumed and the first dry run went green.
 
 | Step | State |
 |---|---|
-| 1. Spike | **Open.** The read set in `aws_iam_role_policy.teardown` is a first estimate. It assumes the pre-destroy refresh covers only `aws_db_instance.main` and its dependencies. The Google provider pruning and `secretsmanager:DeleteSecret` are still unverified |
-| 2. Terraform | HCL written and `validate`d. **Not applied.** While paused, apply only through `scripts/dev-stack.sh resume` (it creates the role along with the rest). A plain apply would create an empty DB |
-| 3. Decision module | Done, 34 `node --test` cases, in CI as the `ops` job. Fixtures are hand-built in the `terraform show -json` shape. Replace `tier3-plan.ok.json` with a real capture from the first dry run (`scripts/ops/fixtures/README.md`) |
-| 4. `scripts/dev-stack.sh` | Done (`status`, `resume`, `plan`, `apply`). The GHCR manifest check was verified live (200 for `aaf9297…`, 404 for a bogus tag). The AWS paths haven't run yet |
-| 5. Workflow | File done. `gh variable set DEV_AUTO_TEARDOWN --body dry-run` not yet set (until it is, the scheduled run fails by design) |
+| 1. Spike | **Partly confirmed.** Dry run [42473827452](https://github.com/fabelhaft-io/bread-sheet/actions/runs/42473827452) assumed the role, locked state, refreshed and planned with no `AccessDenied`, so the read set is sufficient. The write actions (snapshot, destroy, prune) and `secretsmanager:DeleteSecret` are unverified until the first `on` run |
+| 2. Terraform | Applied 2026-11-08 by the resume. That resume was interrupted after the restore and finished by importing `aws_db_instance.main` and running a targeted apply |
+| 3. Decision module | Done, in CI as the `ops` job. `tier3-plan.ok.json` is a real, redacted capture (`scripts/ops/fixtures/README.md`), and the three mutations are rebuilt from it |
+| 4. `scripts/dev-stack.sh` | Done (`status`, `resume`, `plan`, `apply`). `resume` and `plan` have run live against AWS |
+| 5. Workflow | Done. `DEV_AUTO_TEARDOWN=dry-run` is set. The first dry run failed on a half-up stack (RDS restored, no service), which added the "dev is half up" error. The second, on the full stack, passed the plan assertion |
 | 6. CD / Maestro preflights | Done |
-| 7. Rollout | Open: about a week on `dry-run`, then one `force` + `on` run while watching |
+| 7. Rollout | Open: nightly `dry-run` runs, then `DEV_AUTO_TEARDOWN=on` with the first real run watched |
 | 8. Docs | Done (`infrastructure.md`, `CLAUDE.md`) |
 
-The 2026-11-07 manual snapshot has no `image` tag, so the first resume needs
-`scripts/dev-stack.sh resume --image ghcr.io/fabelhaft-io/bread-sheet-server:aaf9297fc0e94eb49aefcb7e15d83f04c5a80959`.
+The 2026-11-07 manual snapshot `breadsheet-dev-pause-2026-11-07` has no `image` tag and is not
+pruned (only `breadsheet-dev-auto-*` is). It bills until it is deleted by hand.
 
 ## Acceptance criteria
 

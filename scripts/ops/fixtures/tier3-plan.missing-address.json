@@ -6,9 +6,6 @@
       "value": "ghcr.io/fabelhaft-io/bread-sheet-server:aaf9297fc0e94eb49aefcb7e15d83f04c5a80959"
     }
   },
-  "planned_values": {
-    "root_module": {}
-  },
   "resource_changes": [
     {
       "address": "aws_db_instance.main",
@@ -21,16 +18,21 @@
           "delete"
         ],
         "before": {
-          "identifier": "breadsheet-dev-database-1",
           "engine": "postgres",
           "engine_version": "18.3",
+          "identifier": "breadsheet-dev-database-1",
           "instance_class": "db.t4g.micro",
           "skip_final_snapshot": true
         },
         "after": null,
         "after_unknown": {},
         "before_sensitive": {},
-        "after_sensitive": false
+        "after_sensitive": false,
+        "before_identity": {
+          "account_id": "493942067033",
+          "identifier": "breadsheet-dev-database-1",
+          "region": "eu-west-1"
+        }
       }
     },
     {
@@ -44,14 +46,20 @@
           "delete"
         ],
         "before": {
-          "name": "breadsheet-dev-server-service",
           "desired_count": 1,
-          "launch_type": "FARGATE"
+          "launch_type": "FARGATE",
+          "name": "breadsheet-dev-server-service"
         },
         "after": null,
         "after_unknown": {},
         "before_sensitive": {},
-        "after_sensitive": false
+        "after_sensitive": false,
+        "before_identity": {
+          "account_id": "493942067033",
+          "cluster": "arn:aws:ecs:eu-west-1:493942067033:cluster/breadsheet-server-dev",
+          "name": "breadsheet-dev-server-service",
+          "region": "eu-west-1"
+        }
       }
     },
     {
@@ -71,7 +79,13 @@
         "after": null,
         "after_unknown": {},
         "before_sensitive": {},
-        "after_sensitive": false
+        "after_sensitive": false,
+        "before_identity": {
+          "account_id": "493942067033",
+          "family": "breadsheet-dev-server",
+          "region": "eu-west-1",
+          "revision": 48
+        }
       }
     },
     {
@@ -91,29 +105,17 @@
         "after": null,
         "after_unknown": {},
         "before_sensitive": {},
-        "after_sensitive": false
+        "after_sensitive": false,
+        "before_identity": {
+          "account_id": "493942067033",
+          "name": "RdsIamConnect",
+          "role": "breadsheet-dev-ecs-task"
+        }
       }
     }
   ],
-  "prior_state": {
-    "format_version": "1.0",
-    "terraform_version": "1.15.9",
-    "values": {
-      "root_module": {}
-    }
-  },
-  "configuration": {
-    "provider_config": {
-      "aws": {
-        "name": "aws",
-        "full_name": "registry.terraform.io/hashicorp/aws"
-      }
-    },
-    "root_module": {}
-  },
-  "relevant_attributes": [],
-  "timestamp": "2026-11-08T02:19:04Z",
+  "timestamp": "2026-11-08T11:04:00Z",
   "applyable": true,
-  "complete": true,
+  "complete": false,
   "errored": false
 }

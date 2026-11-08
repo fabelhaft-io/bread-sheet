@@ -1077,6 +1077,41 @@ Two more notes on the restore:
   `ignore_changes = [container_definitions]`, which is irrelevant here: the task definition is
   destroyed and recreated, and ignore_changes does not apply to creation.
 
+#### An interrupted resume (dev is half up)
+
+When `resume` is killed while the restore is in flight, RDS ends up restored but the rest of the
+cascade is never created. The restore takes about 10 minutes, so this is easy to hit. Terraform
+may not even have recorded the instance in state. Every way in now refuses:
+
+- `resume` sees the instance and says the stack is not paused.
+- `plan`/`apply` see the inactive service and ask for `--image`.
+- The nightly teardown fails with **"dev is half up"** before it touches anything.
+
+That is deliberate: a half-up stack needs a human. To finish the resume, run this with the
+snapshot's `image` tag (see `scripts/dev-stack.sh status`):
+
+```sh
+IMAGE=ghcr.io/fabelhaft-io/bread-sheet-server:<sha>
+
+# 1. Wait until the restore is done. Tasks started against a DB that is still being modified
+#    exit with P1001 (can't reach database server).
+aws rds wait db-instance-available --region eu-west-1 --db-instance-identifier breadsheet-dev-database-1
+
+# 2. Only if the instance is missing from state:
+terraform -chdir=terraform state list | grep -qx aws_db_instance.main ||
+  terraform -chdir=terraform import -var-file=environments/dev.tfvars -var server_image="$IMAGE" \
+    aws_db_instance.main breadsheet-dev-database-1
+
+# 3. Create the rest of the cascade. The plan must only create the four missing resources and
+#    modify the DB in place. If it shows aws_db_instance.main being replaced, stop. Unrelated
+#    drift can be left out with -target.
+scripts/dev-stack.sh plan  --image "$IMAGE"
+scripts/dev-stack.sh apply --image "$IMAGE"
+```
+
+`db_snapshot_identifier` is not needed here: it only matters when the instance is created, and
+the instance already exists.
+
 ---
 
 ## Deployment Pipeline (push-based CD to ECS)

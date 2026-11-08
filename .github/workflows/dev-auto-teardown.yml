@@ -110,9 +110,17 @@ jobs:
         if: steps.gate.outputs.action == 'teardown'
         run: |
           set -euo pipefail
+          # RDS exists but the service doesn't: a resume is still running, or one failed halfway.
+          # Fail loudly without touching anything. The plan assertion would refuse the partial
+          # cascade anyway, and a half-up stack needs a human, not a guess.
+          svc=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].status' --output text)
+          if [ "$svc" != ACTIVE ]; then
+            echo "::error title=dev is half up::RDS exists but service $SERVICE is '$svc'. A resume is in progress or failed halfway. Nothing was touched. Finish it as in infrastructure.md § An interrupted resume, then re-run."
+            exit 1
+          fi
           td=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
             --query 'services[0].taskDefinition' --output text)
-          test -n "$td" && test "$td" != None || { echo "service $SERVICE has no task definition" >&2; exit 1; }
           aws ecs describe-task-definition --task-definition "$td" --query taskDefinition --output json > taskdef.json
           image=$(jq -r '.containerDefinitions[0].image' taskdef.json)
           revision=$(jq -r '.revision' taskdef.json)
