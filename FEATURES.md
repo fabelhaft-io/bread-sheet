@@ -1593,11 +1593,17 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - Fix the Maestro job's comment, which still cites "the same reasoning as the Playwright job in test.yml"; that job no longer uses repo variables.
 - Optionally, report Supabase reachability from the dev server's own health check, so a paused project shows up in dev's monitoring and not just at sign-in.
 - `server/src/middlewares/authMiddleware.ts` reads `process.env.SUPABASE_URL || ''` (and the key the same way). That breaks the fail-fast convention: move both into `configs/config.ts` and throw at startup when they are missing.
+**Done (2026-11-08):**
+- **Decision:** keep the free project and restore it by hand; revisit if it pauses again. Recorded in `infrastructure.md` § Hosted Supabase project, with a check command, the restore runbook and the rotation runbook.
+- **Maestro preflight:** a new first step (`GET /auth/v1/health`, `Supabase project unreachable`).
+- **Comment:** fixed.
+- **Server config:** `SUPABASE_URL` and the key are validated in `config.ts` (`config.test.ts`).
+- **Health check not changed:** the optional Supabase-reachability idea was rejected. The ECS container health check hits `GET /`, so tying that route to Supabase would let ECS restart a healthy task during a Supabase outage.
 **Acceptance Criteria:**
-- [ ] The decision and the reason for it are written down, and `infrastructure.md` names the project the dev stage uses and how to restore or rotate it.
-- [ ] With the project unreachable, the Maestro job fails in preflight with an error naming Supabase.
-- [ ] The Maestro workflow's comments describe its own Supabase dependency accurately.
-- [ ] The server refuses to start without `SUPABASE_URL` and its key.
+- [x] The decision and the reason for it are written down, and `infrastructure.md` names the project the dev stage uses and how to restore or rotate it.
+- [x] With the project unreachable, the Maestro job fails in preflight with an error naming Supabase. The `curl` / `case` logic was exercised against an unresolvable host (`000`, the error branch) and against the live project (`200`).
+- [x] The Maestro workflow's comments describe its own Supabase dependency accurately.
+- [x] The server refuses to start without `SUPABASE_URL` and its key.
 
 # Future Plans and Ideas
 

@@ -1,12 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { createClient } from '@supabase/supabase-js';
+import config from '../configs/config.js';
 import logger from '../logger.js';
 
-// Initialize Supabase client
-// Ensure these are in your server/.env file
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_PUBLISHABLE_DEFAULT_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Validated at startup by configs/config.ts — a missing value stops the server there.
+const supabase = createClient(config.supabaseUrl, config.supabasePublishableKey);
 
 // Extend Express Request type to include user
 export interface AuthRequest extends Request {

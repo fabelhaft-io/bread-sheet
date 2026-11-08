@@ -317,6 +317,69 @@ returned `404 Publisher model ... not found` for `gemini-3.5-flash` in that regi
 only appears in the **ECS** logs, since it is the app's upstream call failing rather than anything
 in the ingress.
 
+### Hosted Supabase project (dev)
+
+The dev stage authenticates against **one hosted, free-tier Supabase project**, ref
+`kxtkhyzrqkqeueovbwqi` (`https://kxtkhyzrqkqeueovbwqi.supabase.co`). These places all have to
+name that same project:
+
+| Where | What | Read by |
+|---|---|---|
+| SSM `/breadsheet/dev/SUPABASE_URL`, `/breadsheet/dev/SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Set by hand. `ssm.tf` creates them with a placeholder and ignores value changes | The server (`configs/config.ts`, which refuses to start without them). `authMiddleware` verifies every Bearer token against this project |
+| Repo variables `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` | Public client config, not secrets | The Maestro job (`test-native-e2e.yml`), baked into the debug build |
+| `bread-sheet-app/.env` on a developer machine | Same two values | `npx expo start` when testing against dev |
+
+The Playwright job is **not** on this list: it runs on a local `supabase start` stack (see
+`frontend.md` § Web E2E), because it needs only auth. The Maestro flows can't do the same,
+since the dev API only accepts tokens issued by its own project.
+
+**Free-tier projects get paused when they see no traffic.** From 2026-11-06 the project stopped
+answering and every guest sign-in timed out. By 2026-11-08 it was answering again. Pausing the
+dev stack by default (§ Pausing / Resuming) leaves the project even less traffic.
+
+**Decision (TICKET-P9-010, 2026-11-08): keep the free project and restore it by hand when it
+pauses.** It costs \$0, and a pause is now caught, not silent:
+
+- **Maestro** fails in its first preflight step (`Preflight — is the hosted Supabase project
+  up?`, `GET /auth/v1/health`), with `Supabase project unreachable` naming the URL.
+- **The app** fails at sign-in (`signInAnonymously()` / `signInWithPassword()`). The server keeps
+  answering `GET /`. The ECS container health check hits that route, so it must not depend on
+  Supabase: tying it to Supabase would let ECS restart a healthy task during a Supabase outage.
+
+If it pauses again, consider a paid plan (check current pricing against `budget_limit_usd = 45`,
+ADR 0005) or replacing the project.
+
+**Check:**
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "apikey: $(aws ssm get-parameter --name /breadsheet/dev/SUPABASE_PUBLISHABLE_DEFAULT_KEY --query Parameter.Value --output text)" \
+  "$(aws ssm get-parameter --name /breadsheet/dev/SUPABASE_URL --query Parameter.Value --output text)/auth/v1/health"
+# 200 = up. 000 = no answer (DNS / paused). 5xx = paused or restoring.
+```
+
+**Restore a paused project:** open it in the Supabase dashboard and choose **Restore project**.
+It takes a few minutes, and the URL and keys stay the same, so nothing else changes. Supabase
+only keeps the restore option for a limited time after pausing (check the dashboard for the
+current window). After that the data can only be downloaded, and the project has to be replaced.
+
+**Replace (rotate) the project.** The URL and key change in every row of the table above, in the
+same sitting:
+
+1. Create the project. Under Authentication, enable **anonymous sign-ins** (the guest flow) and
+   set the redirect URL to the server's `/auth/callback` (the email-verification bounce,
+   `APP_DEEP_LINK_SCHEME`).
+2. Write both SSM parameters (`aws ssm put-parameter --name … --value … --overwrite`). Then roll
+   the service with `aws ecs update-service --cluster breadsheet-server-dev
+   --service breadsheet-dev-server-service --force-new-deployment`. The task definition
+   references the parameters by ARN and resolves them at task start, so no new revision is
+   needed. That differs from § Changing a task environment variable, which covers the
+   `environment` array.
+3. `gh variable set EXPO_PUBLIC_SUPABASE_URL` and `gh variable set EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`
+   for Maestro, and update local `.env` files.
+4. Existing dev users and their ratings are tied to the old project's user ids, so they won't
+   carry over. Fine while there are no users.
+
 ### Billing guardrail
 
 `budget.tf` creates a monthly `COST` budget (`var.budget_limit_usd`, default `45`) that publishes to

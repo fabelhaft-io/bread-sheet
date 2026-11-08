@@ -39,6 +39,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The flows sign in as a guest against the hosted Supabase project the dev API trusts
+      # (SSM /breadsheet/dev/SUPABASE_URL; the repo variables below must name the same
+      # project). It is a free-tier project, which Supabase pauses when it sees no traffic.
+      # In Nov 2026 that showed up as every guest sign-in timing out. Check it up front, for
+      # the same reason as the dev API check below: fail, don't skip, and say why.
+      # Restore / rotate runbook: docs/architecture/infrastructure.md § Hosted Supabase project.
+      - name: Preflight — is the hosted Supabase project up?
+        env:
+          SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY }}
+        run: |
+          test -n "$SUPABASE_URL" || { echo "::error::EXPO_PUBLIC_SUPABASE_URL repo variable is not set"; exit 1; }
+          test -n "$SUPABASE_KEY" || { echo "::error::EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY repo variable is not set"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 3 --retry-all-errors \
+            -H "apikey: $SUPABASE_KEY" "$SUPABASE_URL/auth/v1/health" || true)
+          case "$code" in
+            2??) echo "Supabase auth is up (HTTP $code)" ;;
+            *)
+              echo "::error title=Supabase project unreachable::$SUPABASE_URL/auth/v1/health answered HTTP ${code:-000} (000 = no answer, e.g. DNS). The hosted project is most likely paused — restore it in the Supabase dashboard (docs/architecture/infrastructure.md § Hosted Supabase project) or every guest sign-in will time out."
+              exit 1
+              ;;
+          esac
+
       # The flows run against the real dev API, which is paused most of the time (Tier 3,
       # dev-auto-teardown.yml). While it is paused, the scan flows fail in ways that look like
       # regressions. Check up front, before ~10 minutes of emulator boot and Gradle build. This
@@ -162,8 +185,10 @@ jobs:
 
       # The runner provisions its own AVD when cmdline-tools are present, which they are on
       # this image. Supabase config comes from repo *variables*, not secrets: both are
-      # EXPO_PUBLIC_* values Expo bakes into the client bundle, so they are already public —
-      # the same reasoning as the Playwright job in test.yml.
+      # EXPO_PUBLIC_* values Expo bakes into the client bundle, so they are already public.
+      # Unlike the Playwright job in test.yml, which runs on a local `supabase start` stack,
+      # these flows can't use a throwaway Supabase: the dev API verifies every token
+      # against its own hosted project, so the app has to sign in to that one.
       - name: Run Maestro flows
         run: npm run test:maestro
         env:
