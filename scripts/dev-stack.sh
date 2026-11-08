@@ -162,8 +162,13 @@ cmd_resume() {
     esac
   done
 
-  [ "$(db_instance_json)" = none ] ||
-    die "RDS instance $DB_INSTANCE exists — the stack is not paused. Nothing to resume."
+  if [ "$(db_instance_json)" != none ]; then
+    [ "$(service_status)" = ACTIVE ] &&
+      die "RDS instance $DB_INSTANCE exists — the stack is not paused. Nothing to resume."
+    die "RDS instance $DB_INSTANCE exists but service $SERVICE is not ACTIVE: dev is half up
+(an earlier resume was interrupted or is still running). resume can't finish it. See
+docs/architecture/infrastructure.md § An interrupted resume."
+  fi
 
   local snaps chosen tagged_image
   snaps=$(manual_snapshots_json)
