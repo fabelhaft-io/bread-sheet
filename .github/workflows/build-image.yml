@@ -66,10 +66,37 @@ jobs:
           role-to-assume: arn:aws:iam::493942067033:role/breadsheet-dev-deployer
           aws-region: ${{ env.AWS_REGION }}
 
+      # Dev spends most of its time paused (Tier 3, dev-auto-teardown.yml). The service is then
+      # INACTIVE and UpdateService would fail with ServiceNotActiveException: a red ✗ that
+      # means nothing, because the image above is already pushed. Skip the rollout instead of
+      # failing it, and say how to come back on this image.
+      - name: Check the dev stack is up
+        id: up
+        run: |
+          set -euo pipefail
+          status=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].status' --output text)
+          if [ "$status" = ACTIVE ]; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=dev paused::service is $status — image pushed, not rolled out"
+            {
+              echo "### Dev is paused: image pushed, not rolled out"
+              echo
+              echo "The dev service is \`$status\`. Resume on this image with:"
+              echo
+              echo '```sh'
+              echo "scripts/dev-stack.sh resume --image $IMAGE:$GITHUB_SHA"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       # AWS is the source of truth for the task def (hand-built now, Terraform-owned
       # later), so fetch the active revision and strip the read-only fields that
       # register-task-definition rejects — we only swap the image below.
       - name: Fetch current task definition
+        if: steps.up.outputs.up == 'true'
         run: |
           aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
             --query 'taskDefinition' --output json \
@@ -78,6 +105,7 @@ jobs:
             > task-def.json
 
       - name: Render new image into the task definition
+        if: steps.up.outputs.up == 'true'
         id: render
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
@@ -88,6 +116,7 @@ jobs:
       # Registers the rendered revision, calls update-service, and blocks until
       # the rolling deployment reaches steady state — so a bad rollout fails CI.
       - name: Deploy to ECS service
+        if: steps.up.outputs.up == 'true'
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render.outputs.task-definition }}

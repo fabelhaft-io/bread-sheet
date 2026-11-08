@@ -39,6 +39,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The flows run against the real dev API, which is paused most of the time (Tier 3,
+      # dev-auto-teardown.yml). While it is paused, the scan flows fail in ways that look like
+      # regressions. Check up front, before ~10 minutes of emulator boot and Gradle build. This
+      # FAILS rather than skips on purpose: a skipped E2E suite on a PR reads as a pass.
+      - name: Preflight — is the dev API up?
+        env:
+          API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+          EDGE_BYPASS: ${{ secrets.EDGE_BYPASS_SECRET }}
+        run: |
+          test -n "$API_URL" || { echo "::error::EXPO_PUBLIC_API_URL repo variable is not set"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 --retry 3 --retry-all-errors \
+            -H "X-Edge-Bypass: $EDGE_BYPASS" "$API_URL/" || true)
+          case "$code" in
+            2??) echo "dev API is up (HTTP $code)" ;;
+            *)
+              echo "::error title=dev stack is paused?::$API_URL/ answered HTTP ${code:-000}. The dev stack is most likely paused — resume it (scripts/dev-stack.sh resume) or this run proves nothing."
+              exit 1
+              ;;
+          esac
+
       # $ANDROID_HOME exists in the runner's shell but NOT in the `env` expression context,
       # where ${{ env.ANDROID_HOME }} silently evaluates to an empty string — which cached
       # "/emulator" and "/system-images/..." at the filesystem root and quietly cached nothing.

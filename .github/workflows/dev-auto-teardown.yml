@@ -1,0 +1,272 @@
+name: Dev auto-teardown (Tier 3)
+
+# Runs infrastructure.md § Pausing / Resuming → Tier 3 unattended: every night, if the dev stack
+# is running, it is snapshotted and torn down (TICKET-P9-009, docs/P9-009-implementation-plan.md).
+# A forgotten stack therefore never bills RDS + Fargate for more than about a day. To keep it up
+# overnight, set DEV_KEEP_ALIVE_UNTIL. A missed or delayed scheduled run means the next night's
+# run catches up.
+#
+# Switches (repo variables, no AWS or Terraform needed to flip them):
+#   DEV_AUTO_TEARDOWN     off | dry-run | on — required; unset or unknown fails the run
+#   DEV_KEEP_ALIVE_UNTIL  YYYY-MM-DD — no teardown on or before that day (UTC); optional
+#
+# The decisions are in scripts/ops/dev-teardown.mjs (unit-tested); this file is plumbing.
+# Resume is a human, local action: scripts/dev-stack.sh resume.
+on:
+  schedule:
+    # 02:17 UTC (03:17 CET / 04:17 CEST): late enough that no evening session gets cut short,
+    # and off the top of the hour, when GitHub's scheduler is busiest.
+    - cron: '17 2 * * *'
+  # A dispatch tears down now if the stack is running (off and keep-alive still apply).
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Stop after the plan assertion, whatever DEV_AUTO_TEARDOWN says
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  teardown:
+    name: Tier 3 teardown of dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write # OIDC → breadsheet-dev-teardown
+    # Same group as build-image.yml's deploy-dev job: a teardown never overlaps a rollout. If a
+    # deploy arrives while a teardown is pending, GitHub cancels the pending teardown, which is
+    # fine because tomorrow's run catches up. A human apply running at the same time is covered by
+    # the state lock (-lock-timeout=5m, then fail).
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    env:
+      AWS_REGION: eu-west-1
+      DB_INSTANCE: breadsheet-dev-database-1
+      CLUSTER: breadsheet-server-dev
+      SERVICE: breadsheet-dev-server-service
+      TEARDOWN_JS: scripts/ops/dev-teardown.mjs
+      TF_IN_AUTOMATION: '1'
+      TF_INPUT: '0'
+      DEV_AUTO_TEARDOWN: ${{ vars.DEV_AUTO_TEARDOWN }}
+      DEV_KEEP_ALIVE_UNTIL: ${{ vars.DEV_KEEP_ALIVE_UNTIL }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # ── 1–2. Mode + keep-alive — before any credentials exist ──────────────────
+      - name: Mode and keep-alive gate
+        id: switches
+        run: |
+          set +e
+          reason=$(node "$TEARDOWN_JS" switches)
+          code=$?
+          echo "$reason"
+          echo "**Switches:** $reason" >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+      # ── 3. OIDC ────────────────────────────────────────────────────────────────
+      - name: Configure AWS credentials (OIDC → breadsheet-dev-teardown)
+        if: steps.switches.outputs.action == 'continue'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::493942067033:role/breadsheet-dev-teardown
+          aws-region: ${{ env.AWS_REGION }}
+          role-duration-seconds: 7200
+
+      # ── 4. Is the stack running? ───────────────────────────────────────────────
+      - name: Running gate
+        id: gate
+        if: steps.switches.outputs.action == 'continue'
+        run: |
+          set -euo pipefail
+          # NotFound means paused. Any other failure must fail the run, never read as "paused".
+          if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE" \
+              --output json > instance.json 2> describe.err; then
+            instance=instance.json
+          elif grep -q DBInstanceNotFound describe.err; then
+            instance=none
+          else
+            cat describe.err >&2; exit 1
+          fi
+          set +e
+          reason=$(node "$TEARDOWN_JS" gate --instance-json "$instance" \
+            --dry-run '${{ inputs.dry_run || false }}')
+          code=$?
+          set -e
+          echo "$reason"
+          echo "**Running gate:** $reason" >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+      # ── Everything below runs only when a teardown (or its dry run) is due ────
+      - name: Read the live image and revision
+        id: live
+        if: steps.gate.outputs.action == 'teardown'
+        run: |
+          set -euo pipefail
+          td=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          test -n "$td" && test "$td" != None || { echo "service $SERVICE has no task definition" >&2; exit 1; }
+          aws ecs describe-task-definition --task-definition "$td" --query taskDefinition --output json > taskdef.json
+          image=$(jq -r '.containerDefinitions[0].image' taskdef.json)
+          revision=$(jq -r '.revision' taskdef.json)
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "live: $image (task-def revision $revision)"
+
+      # ── 5. Terraform init ──────────────────────────────────────────────────────
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.gate.outputs.action == 'teardown'
+        with:
+          terraform_version: 1.15.9
+          # The wrapper rewrites stdout, which breaks `terraform show -json > file`.
+          terraform_wrapper: false
+
+      - name: Terraform init
+        if: steps.gate.outputs.action == 'teardown'
+        working-directory: terraform
+        run: terraform init -lockfile=readonly -backend-config=environments/dev.s3.tfbackend
+
+      # ── 6–7. Plan, then assert it is exactly the five-resource cascade ─────────
+      # The pre-destroy refresh covers only aws_db_instance.main and its dependencies, so the
+      # teardown role needs no access to the rest of the stack. server_image is required by the
+      # config but a destroy never reads it.
+      - name: Plan the Tier 3 destroy
+        if: steps.gate.outputs.action == 'teardown'
+        working-directory: terraform
+        env:
+          SERVER_IMAGE: ${{ steps.live.outputs.image }}
+        run: |
+          set -euo pipefail
+          terraform plan -destroy -target=aws_db_instance.main \
+            -var-file=environments/dev.tfvars -var "server_image=$SERVER_IMAGE" \
+            -lock-timeout=5m -no-color -out=tier3.tfplan
+          terraform show -json tier3.tfplan > tier3.plan.json
+
+      - name: Assert the plan
+        if: steps.gate.outputs.action == 'teardown'
+        run: |
+          set +e # write the summary before failing
+          node "$TEARDOWN_JS" assert-plan --plan-json terraform/tier3.plan.json 2>&1 | tee assert.txt
+          code=${PIPESTATUS[0]}
+          { echo '### Plan assertion'; echo '```'; cat assert.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+
+      - name: Dry run — stop here
+        if: steps.gate.outputs.action == 'teardown' && steps.gate.outputs.dry_run == 'true'
+        working-directory: terraform
+        run: |
+          {
+            echo '### Dry run — nothing was snapshotted or destroyed'
+            echo '<details><summary>terraform show tier3.tfplan</summary>'
+            echo
+            echo '```'
+            terraform show -no-color tier3.tfplan
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 8. Snapshot, tagged with the image it was taken under ─────────────────
+      - name: Snapshot RDS
+        id: snapshot
+        if: steps.gate.outputs.action == 'teardown' && steps.gate.outputs.dry_run != 'true'
+        env:
+          IMAGE: ${{ steps.live.outputs.image }}
+          REVISION: ${{ steps.live.outputs.revision }}
+        run: |
+          set -euo pipefail
+          # CreateDBSnapshot needs `available` or `stopped`. The daily backup window can overlap
+          # this run (`backing-up`), so wait it out instead of failing.
+          for i in $(seq 1 60); do
+            status=$(aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE" \
+              --query 'DBInstances[0].DBInstanceStatus' --output text)
+            case "$status" in available|stopped) break ;; esac
+            echo "instance is '$status' — waiting ($i/60)"; sleep 30
+          done
+          case "$status" in available|stopped) ;; *) echo "instance still '$status' after 30 min" >&2; exit 1 ;; esac
+
+          id=$(node "$TEARDOWN_JS" snapshot-id)
+          tags=$(jq -nc --arg image "$IMAGE" --arg rev "$REVISION" --arg sha "$GITHUB_SHA" '[
+            {Key:"created-by", Value:"dev-auto-teardown"},
+            {Key:"image", Value:$image},
+            {Key:"task-def-revision", Value:$rev},
+            {Key:"git-sha", Value:$sha}]')
+          aws rds create-db-snapshot --db-instance-identifier "$DB_INSTANCE" \
+            --db-snapshot-identifier "$id" --tags "$tags" --output text --query 'DBSnapshot.DBSnapshotIdentifier'
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          aws rds wait db-snapshot-completed --db-snapshot-identifier "$id"
+          final=$(aws rds describe-db-snapshots --db-snapshot-identifier "$id" \
+            --query 'DBSnapshots[0].Status' --output text)
+          test "$final" = available || { echo "snapshot $id is '$final', not available — not destroying" >&2; exit 1; }
+          echo "snapshot $id is available"
+
+      # ── 9. Destroy: the asserted saved plan, never a fresh destroy ────────────
+      - name: Apply the saved destroy plan
+        if: steps.snapshot.outcome == 'success'
+        working-directory: terraform
+        run: terraform apply -lock-timeout=5m -no-color tier3.tfplan
+
+      # ── 10. Verify ─────────────────────────────────────────────────────────────
+      - name: Verify the stack is paused
+        if: steps.snapshot.outcome == 'success'
+        run: |
+          set -euo pipefail
+          if aws rds describe-db-instances --db-instance-identifier "$DB_INSTANCE" > /dev/null 2> describe.err; then
+            echo "RDS instance $DB_INSTANCE still exists" >&2; exit 1
+          fi
+          grep -q DBInstanceNotFound describe.err || { cat describe.err >&2; exit 1; }
+          svc=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].status' --output text)
+          test "$svc" = INACTIVE || { echo "service is '$svc', expected INACTIVE" >&2; exit 1; }
+          echo "RDS NotFound, service INACTIVE"
+
+      # ── 11. Prune: only after the snapshot is available AND the destroy succeeded ─
+      - name: Prune old automatic snapshots
+        id: prune
+        if: steps.snapshot.outcome == 'success'
+        env:
+          NEW_SNAPSHOT: ${{ steps.snapshot.outputs.id }}
+        run: |
+          set -euo pipefail
+          aws rds describe-db-snapshots --snapshot-type manual --output json > snapshots.json
+          node "$TEARDOWN_JS" prune --snapshots-json snapshots.json --must-keep "$NEW_SNAPSHOT" > prune.txt
+          while read -r old; do
+            [ -n "$old" ] || continue
+            echo "deleting $old"
+            aws rds delete-db-snapshot --db-snapshot-identifier "$old" --output text --query 'DBSnapshot.DBSnapshotIdentifier'
+          done < prune.txt
+          node "$TEARDOWN_JS" manual-snapshots --snapshots-json snapshots.json > manual.json
+
+      # ── 12. Summary ────────────────────────────────────────────────────────────
+      - name: Summary
+        if: steps.snapshot.outcome == 'success' && !cancelled()
+        env:
+          NEW_SNAPSHOT: ${{ steps.snapshot.outputs.id }}
+          IMAGE: ${{ steps.live.outputs.image }}
+        run: |
+          {
+            echo '### Dev stack paused (Tier 3)'
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Snapshot | \`$NEW_SNAPSHOT\` |"
+            echo "| Image | \`$IMAGE\` |"
+            if [ -s prune.txt ]; then
+              echo "| Pruned | $(sed 's/.*/`&`/' prune.txt | paste -sd ' ' -) |"
+            else
+              echo "| Pruned | — |"
+            fi
+            if [ -s manual.json ] && [ "$(jq length manual.json)" -gt 0 ]; then
+              echo
+              echo "**Manual snapshots still billing** (never pruned automatically; delete when no longer needed):"
+              jq -r '.[] | "- `\(.id)` (\(.status), \(.createdAt))"' manual.json
+            fi
+            echo
+            echo 'Resume locally with `scripts/dev-stack.sh resume`.'
+          } >> "$GITHUB_STEP_SUMMARY"
