@@ -92,6 +92,15 @@ model Product {
   packaged             PackagedProduct?
   verifications       ProductVerification[]
   edits               ProductEdit[]
+
+  // TICKET-P6-008 Slice B: pg_trgm GIN indexes backing `GET /api/products/search`'s
+  // typo-tolerant `%` matching on name and brand. `gin_trgm_ops` is representable
+  // in the schema DSL (unlike the `one_pending_edit_per_product` partial index),
+  // so it is declared here instead of being migration-only — a later
+  // `prisma migrate dev` will not try to drop it. The `pg_trgm` extension itself
+  // has no DSL equivalent and is created by the migration's hand-written line.
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([brand(ops: raw("gin_trgm_ops"))], type: Gin)
 }
 
 // The manufactured article behind a PACKAGED product: what the label and the

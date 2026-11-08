@@ -19,6 +19,10 @@ import { isProductVisible, visibleProductWhere } from '../services/productVisibi
 import { serializeProduct } from '../services/productSerializer.js';
 import { uploadImageToS3, type ImageKind } from '../services/imageService.js';
 import { checkImage, type Verdict } from '../services/imagePlausibilityService.js';
+import {
+  searchProducts,
+  SearchValidationError,
+} from '../services/productSearchService.js';
 import logger from '../logger.js';
 import { AuthRequest } from '../middlewares/authMiddleware.js';
 import {
@@ -136,6 +140,23 @@ export const getProductByGtin = async (req: AuthRequest, res: Response, next: Ne
   } catch (error) {
     logger.error(error);
     next(error);
+  }
+};
+
+// GET /api/products/search?q=<query>&cursor=<cursor>  (TICKET-P6-008 Slice B)
+export const searchProductsHandler = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    const result = await searchProducts(req.user, req.query.q, req.query.cursor);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof SearchValidationError) {
+      return res.status(400).json({ code: err.code, message: err.message });
+    }
+    next(err);
   }
 };
 

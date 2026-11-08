@@ -369,6 +369,83 @@ For registered users on `VERIFIED` products the screen additionally calls `GET /
 
 ---
 
+## Search — Personal Scope, then Global (TICKET-P6-008)
+
+One search bar in the Home tab header (`app/(tabs)/index.tsx`), with a scope toggle
+(`home-search-scope-mine` / `home-search-scope-all`) that defaults to **Mine**. The same `query`
+state drives both scopes — switching scope re-interprets what's already typed rather than
+clearing it, and the query itself is plain component state, so it does **not** survive a cold
+start (unlike the P6-003 category-chip selection, which will be persisted).
+
+**Slice A — Mine (ships with P6-007).** Filters the ratings list already loaded by
+`useCachedResource` in memory: no endpoint, no request, works offline for free because it
+operates on whatever `useCachedResource` already painted (cache or network). The matcher lives
+in `features/search/match.ts`:
+
+- `normalizeSearchText` — `NFKD` normalize, strip combining marks, lowercase. `matchesNameOrBrand`
+  is plain `String.includes` over two normalized strings — never a regex built from user input
+  (CLAUDE.md's regex convention), and it has no backtracking failure mode to guard against in the
+  first place.
+- `filterRatingsByQuery(entries, query, categoryPredicate?)` is the AND-composition point the
+  (not yet built) P6-003 category chips are meant to plug into — `categoryPredicate` is accepted
+  and applied today, but no caller passes one yet. **Deferred, not built**, recorded here rather
+  than silently dropped.
+- Matching never depends on `brand` being present (it's nullable on `RatedProduct`), which is
+  what makes a P6-007 barcode-less custom product findable by name alone once that ticket lands.
+
+**Two distinct empty states**, keyed off whether `ratings` itself is empty vs. filtered empty:
+"nothing rated yet" (`home-search-nothing-rated`, same copy/testID as before this ticket, shown
+regardless of the query) vs. "no match in your ratings for *…*" (`home-search-no-match`), which
+carries a "Search all products →" (`home-search-switch-to-all`) action that flips the scope.
+
+**Slice B — All products.** `features/search/api.ts#searchProducts(query, cursor, signal)` calls
+`GET /api/products/search?q=<query>&cursor=<cursor>` (backend contract: `{ results: [{ id, kind,
+name, brand, image, unverified, similarity }], nextCursor }`). `isSearchableQuery` mirrors the
+server's own validation client-side — caps the **raw** query at 100 characters (measured before
+trimming) and requires ≥ 2 trimmed characters — so an unsearchable query never reaches the
+network at all.
+
+`hooks/use-product-search.ts` owns debounce + cancellation + pagination, active only while the
+scope is "All" (zero requests while scoped to "Mine" — the hook is gated by an `active` flag, not
+by the caller remembering not to call it):
+
+```
+keystroke → query changes
+  ├─ previous debounce effect's cleanup runs FIRST:
+  │     clearTimeout(pending timer)
+  │     controllerRef.current?.abort()   — cancels whatever the previous keystroke sent
+  └─ new effect schedules a fresh 300ms timer
+        → fires → AbortController created, tracked in controllerRef, request sent
+```
+
+The cleanup-on-every-keystroke shape is deliberate: it is what makes cancellation "on the next
+keystroke" rather than "once a newer request happens to resolve first". A controller's `.abort()`
+only *requests* cancellation — the promise `searchProducts` returned may still settle — so every
+`.then`/`.catch` re-checks `controller.signal.aborted` before touching state, which is what keeps
+a stale, late-arriving response from ever being rendered. `lib/api.ts`'s `get()` grew an optional
+`{ signal }` passthrough for this (TICKET-P6-008); the `request()` wrapper also now rethrows a
+caught `AbortError` as-is instead of wrapping it in `NetworkError` — an aborted request is
+deliberate cancellation, not "you're offline", and `formatApiError` must not conflate the two.
+
+Pagination is cursor-based (`nextCursor`, page size 20 — set server-side, the client just forwards
+whatever cursor it's given); `loadMore()` is wired to the Home `ScrollView`'s `onScroll`, firing
+once the content is within 120px of the bottom. Offline (`NetworkError`) renders `OFFLINE_MESSAGE`
+(`home-search-offline`) with a "Switch to Mine →" (`home-search-switch-to-mine`) action — the one
+scope that still works without a network. Any other failure goes through `formatApiError`
+(`home-search-error`), never the raw server message. An `unverified` result carries the same
+"Needs review" badge treatment as the product detail screen's banner (P5-007), just compact —
+`search-result-unverified-<id>`.
+
+**"Can't scan this?" → search by name.** The scan tab's manual-entry dock (P6-006) gained a
+second button, `scan-search-by-name`, alongside `scan-manual-entry`. There is no route for
+"Home, All-products scope, focused", so it navigates to `/(tabs)` with a `focusSearch: 'all'`
+param — the Home screen consumes it once (mirrors the P9-003 scan-injection seam's
+consumed-once-per-arrival pattern: a ref tracks the last-seen value so re-focusing the tab later
+doesn't re-trigger it), flips the scope, and clears the param via `router.setParams`. Every
+existing scan-tab `testID` is unchanged.
+
+---
+
 ## Marginal Scroll Compaction (TICKET-P5-006 FE Fixes)
 
 A screen that overflows the viewport by only a handful of pixels reads as broken: the scroll indicator flashes, the content rubber-bands, and there is nothing meaningful below the fold. Every screen-level `ScrollView` host therefore measures itself and tightens its vertical spacing when — and only when — that closes the gap.

@@ -1,0 +1,57 @@
+meta {
+  name: Search products by name
+  type: http
+  seq: 13
+}
+
+get {
+  url: {{baseUrl}}/api/products/search?q={{searchQuery}}&cursor={{searchCursor}}
+  body: none
+  auth: bearer
+}
+
+params:query {
+  q: {{searchQuery}}
+  cursor: {{searchCursor}}
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  TICKET-P6-008 Slice B — global name search over the whole catalogue (both PACKAGED and
+  CUSTOM products). `requireAuth` only (anonymous callers are allowed), sits behind `userLimiter`.
+
+  Response shape: { results: [{ id, kind, name, brand, image, unverified, similarity }], nextCursor }.
+  - `similarity` is the pg_trgm score (0–1) of the product's `name` against `q`. P6-007's
+    "Did you mean …?" gate reads this field — it is part of the contract, not debug output.
+  - `image` is already resolved to a usable URL (resolveImageUrl), like every other product read.
+  - Results are ranked by similarity desc, tie-broken by rating count desc, then id — cursor
+    pagination (opaque, 20 per page), never OFFSET. `nextCursor: null` means this is the last page.
+
+  Matching: Postgres `pg_trgm`'s `%` operator against `name` and `brand` (GIN trigram indexes on
+  both — see the `product_search_trgm` migration), which respects the session's
+  `pg_trgm.similarity_threshold` GUC (default 0.3). That default is intentionally typo-tolerant:
+  similarity('nutela', 'nutella') ≈ 0.667, well above the 0.3 floor, so `searchQuery: nutela`
+  above finds "Nutella". The returned `similarity` value is always the name-vs-query score, even
+  when a row only matched via its `brand`.
+
+  Visibility (same rule as every other product read, via services/productVisibility.ts):
+  - REJECTED products are excluded entirely — never returned, at any page.
+  - PENDING_REVIEW products ARE returned, flagged unverified: true, for every caller including
+    anonymous ones (matches GET /api/products/:productId).
+
+  Input hygiene: `q` is capped at 100 raw characters (measured BEFORE trimming) and must be at
+  least 2 characters after trimming; `cursor`, if present, must decode to this exact `q` or it's
+  rejected. Both violations answer 400 { code, message } — try `searchQuery: a` or an empty
+  `searchCursor` value copied from a different query to see the 400s.
+
+  To page: copy the response's `nextCursor` string into the `searchCursor` environment variable
+  and re-send.
+
+  Out of scope here: Open Food Facts name search (local catalogue only — see FEATURES.md
+  TICKET-P6-008).
+
+  Errors: 400 (q too short/long, malformed or mismatched cursor), 401 (no/invalid session).
+}

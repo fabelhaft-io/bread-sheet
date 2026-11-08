@@ -168,6 +168,15 @@ export default function ScanScreen() {
     }, 0);
   }, [inject, processScan, router]);
 
+  // "Can't scan this?" (TICKET-P6-008) — search by name is the other way out
+  // of an unreadable label, alongside manual code entry. There is no route
+  // for "Home, All-products scope, focused" so a param is the clean
+  // mechanism: the Home tab reads `focusSearch` once, switches scope, and
+  // clears it (see app/(tabs)/index.tsx).
+  const openSearchByName = useCallback(() => {
+    router.push({ pathname: '/(tabs)', params: { focusSearch: 'all' } });
+  }, [router]);
+
   // Rendered in every permission state — manual entry must not require the
   // camera, which is the point of the ticket (web, denied permission, no
   // hardware at all).
@@ -179,6 +188,13 @@ export default function ScanScreen() {
         onPress={openManualEntry}
       >
         <Text style={styles.manualButtonText}>⌨️  Enter code manually</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        testID="scan-search-by-name"
+        style={styles.manualButton}
+        onPress={openSearchByName}
+      >
+        <Text style={styles.manualButtonText}>🔎  Search by name</Text>
       </TouchableOpacity>
       <ManualBarcodeSheet
         visible={manualVisible}
@@ -374,6 +390,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 14,
     alignSelf: 'center',
+    gap: 8,
   },
   manualButton: {
     paddingHorizontal: 20,

@@ -109,6 +109,27 @@ describe('ScanScreen', () => {
     expect(screen.getByTestId('scan-manual-entry')).toBeTruthy();
   });
 
+  // TICKET-P6-008: "can't scan this?" offers search by name alongside manual
+  // entry, in every permission state — same reasoning as manual entry itself.
+  it('offers a "search by name" affordance in every permission state', async () => {
+    mockPermission.mockReturnValue([{ granted: false }, requestPermission]);
+    await render(<ScanScreen />);
+    expect(screen.getByTestId('scan-search-by-name')).toBeTruthy();
+  });
+
+  it('routes to the Home tab with the All-products scope focused', async () => {
+    await render(<ScanScreen />);
+
+    await fireEvent.press(screen.getByTestId('scan-search-by-name'));
+
+    expect(mockRouter.push).toHaveBeenCalledWith({
+      pathname: '/(tabs)',
+      params: { focusSearch: 'all' },
+    });
+    // Every existing testID stays reachable — the affordance is additive.
+    expect(screen.getByTestId('scan-manual-entry')).toBeTruthy();
+  });
+
   it('opens the manual sheet and routes to the entered code', async () => {
     await render(<ScanScreen />);
 

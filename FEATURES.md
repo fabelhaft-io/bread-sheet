@@ -863,6 +863,12 @@ filter, not cocktail tracking. This ticket only guarantees the category model do
 way: the label hangs off the `Rating`, so it works identically for an item with no barcode. Do not add a
 "category-only item" path here.
 
+**Closes a P6-008 box.** P6-008 shipped Home-tab search before the chips existed, so its Slice A box "It
+composes with the category chips" is still open. `filterRatingsByQuery(entries, query, categoryPredicate?)`
+in `bread-sheet-app/features/search/match.ts` is the composition point. Pass the selected chip as
+`categoryPredicate`, and replace the deferred-AC comment in `app/(tabs)/home-search-mine.test.tsx` with a
+real chip ∧ query test, then tick the P6-008 box.
+
 **Acceptance Criteria:**
 - [ ] A user can assign a category to a rating, and change or remove it later.
 - [ ] A rating with no category is a supported state, filterable as "Uncategorised".
@@ -1138,6 +1144,9 @@ review plus edits.
       product offline still queues in the outbox.
 - [ ] Anonymous users get `403` from `POST /api/custom-products` and see the sign-up gate on the create
       action; searching and rating work for them as for packaged products.
+- [ ] A custom product created here, then rated, is findable by name in the Home tab's **Mine** search.
+      This closes P6-008's open Slice A box, so tick that one too. Today it's covered only by a
+      `kind: 'CUSTOM'`, `brand: null` fixture in `features/search/match.test.ts`.
 
 ### [TICKET-P6-008] Search by Name — Personal Scope, then Global
 **Goal:** Find a product or item by typing its name. **There is no search bar today** — nothing in
@@ -1147,10 +1156,14 @@ symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket bui
 **Why it is coupled to P6-007, in both directions** (revised 2026-10-25):
 - **Slice B is a prerequisite of P6-007.** Custom products are public and identified by name, so P6-007's
   add screen is a search box first. Without global search, every user would create their own "Negroni".
-- **Slice A ships with P6-007.** A barcoded product has a physical handle: you can re-find it by scanning
-  the thing in your hand. A custom product has none. Once it falls off "Recently Opened", the only route
-  back is scrolling "My Ratings" or filtering by category (P6-003), which works for the first weeks and
+- **Slice A was meant to ship with P6-007.** A barcoded product has a physical handle: you can re-find it by
+  scanning the thing in your hand. A custom product has none. Once it falls off "Recently Opened", the only
+  route back is scrolling "My Ratings" or filtering by category (P6-003), which works for the first weeks and
   stops working as history grows.
+
+**Status (2026-11-08, PR #201):** both slices are built, ahead of P6-007 and P6-003. Two Slice A boxes stay
+open until those tickets land: chip composition (P6-003) and finding a P6-007 item (P6-007). Each of those
+tickets carries the note for closing its box. Run record and follow-ups: `docs/P6-008-findings.md`.
 
 **One bar, two scopes.** The same input serves both, with a scope toggle that defaults to **Mine**:
 - **Mine** — my ratings. Instant, client-side, works offline.
@@ -1158,7 +1171,7 @@ symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket bui
 
 ---
 
-#### Slice A — Personal search (ships with P6-007)
+#### Slice A — Personal search (shipped in P6-008, PR #201)
 - A search input in the Home tab header, above the P6-003 category chips. Typing filters the already-
   cached `/api/users/me/ratings` list in memory — **no endpoint, no request, works offline**, which is
   also what makes it feel instant.
@@ -1172,14 +1185,14 @@ symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket bui
   on cold start is confusing in a way a stale filter chip is not.
 
 **Slice A acceptance criteria:**
-- [ ] A search input on the Home tab filters my ratings as I type, with no network request.
-- [ ] Matching covers name and brand, case- and diacritic-insensitively, on substrings.
-- [ ] It works offline against cached ratings.
-- [ ] It composes with the category chips.
-- [ ] A barcode-less item created in P6-007 is findable by name.
-- [ ] Matching uses plain string containment, not a regex built from user input.
-- [ ] The empty state distinguishes "no match" from "nothing rated yet".
-- [ ] The query does not survive an app restart.
+- [x] A search input on the Home tab filters my ratings as I type, with no network request.
+- [x] Matching covers name and brand, case- and diacritic-insensitively, on substrings.
+- [x] It works offline against cached ratings.
+- [ ] It composes with the category chips. *(Deferred to P6-003; see the note there.)*
+- [ ] A barcode-less item created in P6-007 is findable by name. *(Deferred to P6-007; see the note there.)*
+- [x] Matching uses plain string containment, not a regex built from user input.
+- [x] The empty state distinguishes "no match" from "nothing rated yet".
+- [x] The query does not survive an app restart.
 
 ---
 
@@ -1223,18 +1236,18 @@ symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket bui
   code entry, so an unreadable label has two ways out.
 
 **Slice B acceptance criteria:**
-- [ ] `GET /api/products/search` returns name/brand matches ranked by similarity, cursor-paginated at 20.
-- [ ] `REJECTED` products never appear.
-- [ ] `PENDING_REVIEW` products appear flagged `unverified`, for anonymous callers too.
-- [ ] Results include both `PACKAGED` and `CUSTOM` products, each carrying `kind` and `similarity`, filtered
+- [x] `GET /api/products/search` returns name/brand matches ranked by similarity, cursor-paginated at 20.
+- [x] `REJECTED` products never appear.
+- [x] `PENDING_REVIEW` products appear flagged `unverified`, for anonymous callers too.
+- [x] Results include both `PACKAGED` and `CUSTOM` products, each carrying `kind` and `similarity`, filtered
       by the same visibility helper as `GET /api/products/:productId`.
-- [ ] Queries are capped at 100 raw characters (measured before trimming) and rejected below 2 trimmed
+- [x] Queries are capped at 100 raw characters (measured before trimming) and rejected below 2 trimmed
       characters; no user input reaches a regex or a raw SQL fragment.
-- [ ] A `pg_trgm` GIN index backs the query; the migration creates the extension and the index.
-- [ ] Typo tolerance works: "nutela" returns "Nutella".
-- [ ] The endpoint is rate-limited and covered by integration tests including the visibility matrix.
-- [ ] Input is debounced and superseded requests are cancelled.
-- [ ] The global scope reports being offline and points the user back to the working personal scope.
+- [x] A `pg_trgm` GIN index backs the query; the migration creates the extension and the index.
+- [x] Typo tolerance works: "nutela" returns "Nutella".
+- [x] The endpoint is rate-limited and covered by integration tests including the visibility matrix.
+- [x] Input is debounced and superseded requests are cancelled.
+- [x] The global scope reports being offline and points the user back to the working personal scope.
 
 ### [TICKET-P6-009] Product Model Split — Slim `Product` + `PackagedProduct`
 **Goal:** Implement ADR 0006. `Product` becomes the slim, server-identified thing that gets rated.
@@ -1344,6 +1357,24 @@ to implemented.
 **Acceptance Criteria:**
 - [ ] The behaviour for a rated-then-`REJECTED` product is documented and covered by a server test.
 - [ ] The Home tab never navigates into a product screen that `404`s for a listed rating.
+
+### [TICKET-P6-012] Rank Brand Matches Fairly in Global Search
+**Goal:** Searching for a brand ("Ferrero") surfaces that brand's products near the top of **All products**,
+not below every weak name match.
+**Context:** `GET /api/products/search` (P6-008) matches on name *or* brand, but ranks only by
+`similarity(name, q)`. A row that matched purely on its brand scores near 0 (observed `0.038`) and sorts
+last. That's deliberate for the *returned* `similarity` field, because P6-007's "Did you mean …?" gate
+needs the name score. It's an accident for the *ordering*. Follow-up 6 in `docs/P6-008-findings.md`.
+**Implementation:**
+- Order by `GREATEST(similarity(name, q), similarity(brand, q))` in
+  `server/src/services/productSearchService.ts`, and keep returning the name score as `similarity`.
+- The keyset cursor encodes the ranking value, so it must encode the new key. A cursor issued before the
+  change is rejected with `400 invalid_cursor`, which is fine (no users yet).
+**Acceptance Criteria:**
+- [ ] A brand-only match ranks by its brand similarity, not last.
+- [ ] `similarity` in the response is still the name-vs-query score.
+- [ ] Cursor pagination stays gap- and duplicate-free under the new ordering, verified against a real
+      Postgres (see P9-011).
 
 ## Phase 7: Auth Enhancements
 
@@ -1544,6 +1575,7 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 **Goal:** `npm run test:e2e` and `npm run test:maestro` run in a fresh `/dev-team` worktree with no human step and no real credentials.
 **Context:** Every P6-009 agent hit "No Supabase config": a worktree has no gitignored env files, agents are forbidden to read, copy or symlink them, and the runs were only unblocked by the user handing the values over to be passed inline. A local Supabase stack, whose demo keys aren't secrets, removes the secret entirely and stops test runs creating anonymous users in the real project. A first attempt (`npx supabase start` on rootless podman) failed with "can't fork" in `supabase_db`; the cause is unconfirmed (`pids.max` was 2048), so capture `podman logs supabase_db_<project_id>` before the CLI removes the container. Overlaps P9-002 (CI) and P9-005 (QA sessions), which both want a throwaway Supabase.
 **Progress (PR #199):** `supabase/config.toml` is committed (CLI 2.122.0 template plus `enable_anonymous_sign_ins = true`). Unused services are excluded with `supabase start --exclude …`, not in the config. CI's Playwright job runs on that stack, and README.md § Web E2E documents the local commands, including `DOCKER_HOST` for podman. That workflow has not yet been run on rootless podman, so the "can't fork" failure above is still open. The first bullet below is done except for that check; the rest is untouched.
+**"can't fork" root cause found (P6-008, 2026-11-08):** the Supabase CLI's Docker SDK sends `PidsLimit: 0` (Docker: unlimited) and podman 6.1.4's compat API applies it literally as `pids.max = 0`, so every `fork` in the container gets `EAGAIN`. The P6-008 reviewers got `supabase start` working with a throwaway shim on the `DOCKER_HOST` socket that rewrites it to `-1`. Requirements learned the hard way: it must be a **raw byte relay** (`net.createServer`) patching only the `POST …/containers/create` body and its `Content-Length`. An HTTP re-serialising proxy breaks the SDK's attach/`Upgrade` hijack and hangs `gotrue migrate`. Keep-alive must be preserved (`Connection: close` → `unexpected EOF`), and the socket path must be short (unix sockets cap at ~108 bytes, and an agent's scratch dir is longer). Durable options, in order: report it upstream and pin the fix; run the stack under real Docker; or commit a dev-only shim under `scripts/`, documented in README § Web E2E. Details: `docs/P6-008-findings.md` § Resolution of all prior blockers and follow-up 2. Separately, `failed to open /dev/net/tun` or `overlay is not supported` from podman means the host is running a kernel whose modules were removed by an upgrade; reboot.
 **Implementation:**
 - Commit `supabase/config.toml` (`enable_anonymous_sign_ins = true`, unused services excluded) and document the podman socket (`DOCKER_HOST`) in README.md.
 - Have `scripts/test-maestro.js` and the Playwright `webServer` default to the local stack's URL and demo key when nothing is exported (the emulator uses `10.0.2.2`).
@@ -1552,6 +1584,7 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - [ ] In a fresh worktree, `test:e2e` and the full `test:maestro` pass with no env file present and no value supplied by the user.
 - [ ] No real Supabase key appears in any committed file, findings doc or agent transcript.
 - [ ] `docs/architecture/agent-dev-team.md` describes the worktree preparation.
+- [ ] Rootless podman runs `supabase start` without a hand-built shim (upstream fix, real Docker, or a committed `scripts/` shim).
 
 ### [TICKET-P9-007] Playwright Spec for the GTIN Resolver
 **Goal:** Make the web e2e suite cover the product flow, not just auth and the camera prompt.
@@ -1560,6 +1593,7 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - A spec that signs in as guest, opens `/product/gtin/<seeded gtin>`, and asserts it lands on `product-screen` with an id URL.
 - Cases for invalid code (`400` → manual sheet pre-filled) and unknown GTIN (`404` → add-product / guest gate), asserting the same `testID`s the Maestro flows use.
 - Needs a deterministic backend (seeded product, mocked OFF — see P9-005's `OFF_MODE`); depends on P9-006 for config.
+- Once that backend exists, also un-mock one assertion in `e2e/home-search.spec.ts` (P6-008). Today it mocks `/api/products/search` with `page.route()`, so no committed test hits the live endpoint (follow-up 7 in `docs/P6-008-findings.md`).
 **Acceptance Criteria:**
 - [ ] `npm run test:e2e` covers the resolver's found, `400` and `404` states.
 - [ ] The spec fails if the resolver stops redirecting to `product/<id>`.
@@ -1570,9 +1604,15 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 **Implementation:**
 - Add a flat-config block with `globals.node` for `scripts/**/*.{js,mjs}` and `lambda/**/*.js`, or ignore build output explicitly.
 - Optionally widen the `lint` script to the same scope so `npm run lint` and `eslint .` agree.
+- **Also the app (P6-008 follow-up 8):** `npm run lint` in `bread-sheet-app/` is red on `main`, with
+  `scripts/test-maestro.js:1009` `'Buffer' is not defined`. Give `scripts/` Node globals there too.
+- **No workflow runs lint at all** (`grep -rn "run lint\|eslint" .github/workflows/` is empty), which is
+  how both packages went red unnoticed. Add a lint step to the `server` and `app` jobs in `test.yml`.
 **Acceptance Criteria:**
 - [ ] `npx eslint .` in `server/` exits 0.
 - [ ] `npm run lint` and `npx eslint .` report the same result.
+- [ ] `npm run lint` in `bread-sheet-app/` exits 0.
+- [ ] CI runs lint for both packages and fails the PR on an error.
 
 ### [TICKET-P9-009] Scheduled Tier 3 Teardown of the Dev Stack
 **Goal:** A dev stack left running is torn down automatically after 3 days of uptime, so it can never quietly bill RDS + Fargate for weeks.
@@ -1604,6 +1644,43 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - [x] With the project unreachable, the Maestro job fails in preflight with an error naming Supabase. The `curl` / `case` logic was exercised against an unresolvable host (`000`, the error branch) and against the live project (`200`).
 - [x] The Maestro workflow's comments describe its own Supabase dependency accurately.
 - [x] The server refuses to start without `SUPABASE_URL` and its key.
+
+### [TICKET-P9-011] Run Server Integration Tests Against a Real Postgres in CI
+**Goal:** Behaviour that only exists in the database (trigram matching, partial unique indexes, raw-SQL
+visibility filters) is checked on every PR, not once by hand during a review.
+**Context:** Every server test mocks `../db.js`, and the CI `server` job has no Postgres. P6-008's
+`pg_trgm` search was proved correct only by a reviewer's uncommitted 22-check harness against a throwaway
+container: typo tolerance, `REJECTED` excluded in raw SQL, the GIN index actually used, cursor paging. A
+refactor could silently regress all of it. P5-006's `one_pending_edit_per_product` partial index has the
+same gap, and P6-007's `custom_product_name_unique` index will too. Follow-up 1 in
+`docs/P6-008-findings.md`, which also describes the harness.
+**Implementation:**
+- A `services: postgres:18-alpine` block on the `server` job in `.github/workflows/test.yml`, with
+  `npx prisma migrate deploy` against it.
+- Integration tests under `server/src/__tests__/` that hit the real database, guarded on a dedicated env
+  var so the default `npm test` stays DB-free locally. Start by promoting the P6-008 harness, then add the
+  partial-index invariants.
+- `prisma migrate diff` against the migrated database reports no drift.
+**Acceptance Criteria:**
+- [ ] CI runs the real-DB suite on every PR touching `server/`, and it fails if `searchProducts` stops
+      excluding `REJECTED` or stops matching "nutela" → "Nutella".
+- [ ] A second `PENDING` edit for one product is refused by the database in that suite.
+- [ ] Locally, `npm test` without the guard var still needs no database.
+
+### [TICKET-P9-012] Prove the Rate Limiters Actually Throttle
+**Goal:** "Rate-limited" in an acceptance criterion means a test saw a `429`, not that a middleware is
+mounted.
+**Context:** `userLimiter`, `apiLimiter` and `authLimiter` are stubbed in all seven controller suites, so
+no test in the repo has ever driven one to `429`. P6-008 could only prove that `/api/products/search` mounts
+`userLimiter`. Follow-up 5 in `docs/P6-008-findings.md`.
+**Implementation:**
+- One shared test that boots the real `app` with low limits (via config, not a code fork), drives each
+  limiter past its window, and asserts `429` plus the rate-limit copy `formatApiError` expects.
+- A table of `(method, path, limiter)` for every limited route, so a newly added route without its limiter
+  fails the test.
+**Acceptance Criteria:**
+- [ ] Each limiter is driven to `429` in a test.
+- [ ] Every route that should be rate-limited is listed, and removing a limiter from one fails the suite.
 
 # Future Plans and Ideas
 
