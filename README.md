@@ -151,7 +151,8 @@ The Playwright specs drive Expo web and sign in as a guest, so they need a Supab
 with anonymous sign-ins on. They run against a **local** Supabase stack started from
 `supabase/config.toml`, not the hosted project. CI's `e2e` job (`.github/workflows/test.yml`)
 does the same, so a local run reproduces CI. Only Postgres, GoTrue (auth) and the Kong gateway
-are needed; the `--exclude` list below turns off everything else.
+are needed; the `--exclude` list below turns off everything else, and `config.toml` disables
+realtime and storage outright (excluding them alone still runs their schema migrations).
 
 ```sh
 # From the repo root. Podman: point the CLI at the user socket first (bash/zsh shown; fish: set -gx).

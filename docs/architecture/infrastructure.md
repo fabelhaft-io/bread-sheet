@@ -1184,7 +1184,9 @@ Keyless throughout: GitHub Actions assumes an AWS IAM **deployer role** via OIDC
 
 ### CI/CD (GitHub Actions)
 
-1. **Test** — `npm test` in `server/` and `bread-sheet-app/` (`.github/workflows/test.yml`).
+1. **Test** — `npm test` in `server/` and `bread-sheet-app/` (`.github/workflows/test.yml`). On a
+   PR each job runs only when its area changed (a `changes` job using `dorny/paths-filter`; a
+   skipped job counts as passing); a push to `main` runs every job.
 2. **Build & push** — the `build` job in `build-image.yml` builds `server/Dockerfile` and pushes
    `ghcr.io/<owner>/bread-sheet-server` at `:<git-sha>` (immutable) + `:latest`, using the built-in
    `GITHUB_TOKEN`.
