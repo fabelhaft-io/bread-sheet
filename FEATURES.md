@@ -1172,14 +1172,14 @@ symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket bui
   on cold start is confusing in a way a stale filter chip is not.
 
 **Slice A acceptance criteria:**
-- [ ] A search input on the Home tab filters my ratings as I type, with no network request.
-- [ ] Matching covers name and brand, case- and diacritic-insensitively, on substrings.
-- [ ] It works offline against cached ratings.
+- [x] A search input on the Home tab filters my ratings as I type, with no network request.
+- [x] Matching covers name and brand, case- and diacritic-insensitively, on substrings.
+- [x] It works offline against cached ratings.
 - [ ] It composes with the category chips.
 - [ ] A barcode-less item created in P6-007 is findable by name.
-- [ ] Matching uses plain string containment, not a regex built from user input.
-- [ ] The empty state distinguishes "no match" from "nothing rated yet".
-- [ ] The query does not survive an app restart.
+- [x] Matching uses plain string containment, not a regex built from user input.
+- [x] The empty state distinguishes "no match" from "nothing rated yet".
+- [x] The query does not survive an app restart.
 
 ---
 
@@ -1223,18 +1223,18 @@ symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket bui
   code entry, so an unreadable label has two ways out.
 
 **Slice B acceptance criteria:**
-- [ ] `GET /api/products/search` returns name/brand matches ranked by similarity, cursor-paginated at 20.
-- [ ] `REJECTED` products never appear.
-- [ ] `PENDING_REVIEW` products appear flagged `unverified`, for anonymous callers too.
-- [ ] Results include both `PACKAGED` and `CUSTOM` products, each carrying `kind` and `similarity`, filtered
+- [x] `GET /api/products/search` returns name/brand matches ranked by similarity, cursor-paginated at 20.
+- [x] `REJECTED` products never appear.
+- [x] `PENDING_REVIEW` products appear flagged `unverified`, for anonymous callers too.
+- [x] Results include both `PACKAGED` and `CUSTOM` products, each carrying `kind` and `similarity`, filtered
       by the same visibility helper as `GET /api/products/:productId`.
-- [ ] Queries are capped at 100 raw characters (measured before trimming) and rejected below 2 trimmed
+- [x] Queries are capped at 100 raw characters (measured before trimming) and rejected below 2 trimmed
       characters; no user input reaches a regex or a raw SQL fragment.
-- [ ] A `pg_trgm` GIN index backs the query; the migration creates the extension and the index.
-- [ ] Typo tolerance works: "nutela" returns "Nutella".
-- [ ] The endpoint is rate-limited and covered by integration tests including the visibility matrix.
-- [ ] Input is debounced and superseded requests are cancelled.
-- [ ] The global scope reports being offline and points the user back to the working personal scope.
+- [x] A `pg_trgm` GIN index backs the query; the migration creates the extension and the index.
+- [x] Typo tolerance works: "nutela" returns "Nutella".
+- [x] The endpoint is rate-limited and covered by integration tests including the visibility matrix.
+- [x] Input is debounced and superseded requests are cancelled.
+- [x] The global scope reports being offline and points the user back to the working personal scope.
 
 ### [TICKET-P6-009] Product Model Split — Slim `Product` + `PackagedProduct`
 **Goal:** Implement ADR 0006. `Product` becomes the slim, server-identified thing that gets rated.
