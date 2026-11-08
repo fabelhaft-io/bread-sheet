@@ -1497,9 +1497,10 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 **Implementation:**
 - Decide whether CI points at a dedicated test Supabase project or the existing dev one; a dedicated project avoids E2E runs polluting real dev data (guest users, ratings).
 - Add the two values in GitHub repo settings under Settings → Secrets and variables → Actions → **Variables** — a deliberate, human action, not something a dev-team run should do itself per its guardrails.
+**Resolved differently (PR #199, 2026-11-08):** the hosted project became unreachable from 2026-11-06 and took the job down with it. So the job now starts a local Supabase stack inside CI from `supabase/config.toml`, and uses no project and no repo variables. See `docs/architecture/frontend.md` § Web E2E. The hosted project the Maestro job and the dev server still depend on is tracked in P9-010.
 **Acceptance Criteria:**
-- [ ] `e2e` job in `.github/workflows/test.yml` passes on a PR.
-- [ ] The Supabase project used for CI is documented (which one, and why) in `docs/architecture/agent-dev-team.md`.
+- [x] `e2e` job in `.github/workflows/test.yml` passes on a PR.
+- [x] The Supabase project used for CI is documented (which one, and why) in `docs/architecture/agent-dev-team.md`. None is used; the local stack and why it replaced the hosted one are documented there and in `frontend.md`.
 
 ### [TICKET-P9-003] Android Emulator + Maestro E2E Coverage
 **Goal:** Cover the native-only flows (camera, barcode scan, on-device OCR) that Playwright/Expo-web structurally can't reach, per the "Follow-up: Android emulator + Maestro (not built)" section of `docs/architecture/agent-dev-team.md`.
@@ -1522,7 +1523,7 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 
 ### [TICKET-P9-005] Agentic Exploratory QA Environment
 **Goal:** An environment where an LLM agent drives the real app on an emulator, explores it against a charter rather than a script, and produces bug reports as GitHub issues — the surface neither Playwright (no camera, no backend behind it) nor the Maestro flows (pre-written assertions) can reach.
-**Context:** Replaces the "E2E Testing Flow - Agents can run and control emulators" note that previously sat in Future Plans. Full design in `docs/P9-005-implementation-plan.md`. Two constraints drive it: the agent needs a perception/action loop (`maestro hierarchy` for structure, `adb exec-out screencap` for pixels, `adb shell input` + `breadsheet://` deep links to act), and per ADR 0004 the setup must not be Claude-specific. That rules out driving it through one harness's shell and image tools, so the driver is a library behind an **MCP stdio server** the coordinator spawns outside the agent's sandbox — the exposed tool list becomes the agent's whole capability list, with no generic shell tool. Reuses `bread-sheet-app/scripts/test-maestro.js` (P9-003) via a new `--session` mode rather than rewriting it. Blocked-ish on P9-002: both want a dedicated throwaway Supabase project, since `signInAnonymously()` is the only auth path and has no mock.
+**Context:** Replaces the "E2E Testing Flow - Agents can run and control emulators" note that previously sat in Future Plans. Full design in `docs/P9-005-implementation-plan.md`. Two constraints drive it: the agent needs a perception/action loop (`maestro hierarchy` for structure, `adb exec-out screencap` for pixels, `adb shell input` + `breadsheet://` deep links to act), and per ADR 0004 the setup must not be Claude-specific. That rules out driving it through one harness's shell and image tools, so the driver is a library behind an **MCP stdio server** the coordinator spawns outside the agent's sandbox — the exposed tool list becomes the agent's whole capability list, with no generic shell tool. Reuses `bread-sheet-app/scripts/test-maestro.js` (P9-003) via a new `--session` mode rather than rewriting it. Blocked-ish on P9-006: it needs a throwaway Supabase, since `signInAnonymously()` is the only auth path and has no mock. P9-002 settled CI on a local stack (`supabase/config.toml`), which is the likely answer here too.
 **Implementation:**
 - Determinism first (`server/`): `OFF_MODE=live|mock` (the Open Food Facts call has no mode flag today), a `prisma/seed.ts` fixture set, `LOG_FORMAT=pretty|json` split from `NODE_ENV`, config-driven rate limits.
 - `--session` / `--session-down` in `test-maestro.js`; extract its SDK/Java/adb resolution into `scripts/lib/android.js`.
@@ -1542,6 +1543,7 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 ### [TICKET-P9-006] Self-Contained E2E: Local Supabase + Runnable Worktrees
 **Goal:** `npm run test:e2e` and `npm run test:maestro` run in a fresh `/dev-team` worktree with no human step and no real credentials.
 **Context:** Every P6-009 agent hit "No Supabase config": a worktree has no gitignored env files, agents are forbidden to read, copy or symlink them, and the runs were only unblocked by the user handing the values over to be passed inline. A local Supabase stack, whose demo keys aren't secrets, removes the secret entirely and stops test runs creating anonymous users in the real project. A first attempt (`npx supabase start` on rootless podman) failed with "can't fork" in `supabase_db`; the cause is unconfirmed (`pids.max` was 2048), so capture `podman logs supabase_db_<project_id>` before the CLI removes the container. Overlaps P9-002 (CI) and P9-005 (QA sessions), which both want a throwaway Supabase.
+**Progress (PR #199):** `supabase/config.toml` is committed (CLI 2.122.0 template plus `enable_anonymous_sign_ins = true`). Unused services are excluded with `supabase start --exclude …`, not in the config. CI's Playwright job runs on that stack, and README.md § Web E2E documents the local commands, including `DOCKER_HOST` for podman. That workflow has not yet been run on rootless podman, so the "can't fork" failure above is still open. The first bullet below is done except for that check; the rest is untouched.
 **Implementation:**
 - Commit `supabase/config.toml` (`enable_anonymous_sign_ins = true`, unused services excluded) and document the podman socket (`DOCKER_HOST`) in README.md.
 - Have `scripts/test-maestro.js` and the Playwright `webServer` default to the local stack's URL and demo key when nothing is exported (the emulator uses `10.0.2.2`).
@@ -1581,6 +1583,21 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - `var.server_image` replaces the hardcoded pin; `scripts/dev-stack.sh resume` restores from the newest snapshot on its tagged image.
 - `deploy-dev` skips while paused; Maestro fails fast with a "dev is paused" message.
 **Acceptance Criteria:** see `docs/P9-009-implementation-plan.md` § Acceptance criteria.
+
+### [TICKET-P9-010] Decide the Hosted Supabase Project's Future: Restore or Replace
+**Goal:** A paused or deleted hosted Supabase project can no longer silently break dev sign-in and the Maestro job. That means a recorded decision on what the dev stage authenticates against, plus checks that name the failure when it happens.
+**Context:** The dev server's `SUPABASE_URL` (SSM `/breadsheet/dev/SUPABASE_URL`, hand-set; `ssm.tf` ignores value changes) and the Maestro job's `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` repo variables all point at the same free-tier project, `kxtkhyzrqkqeueovbwqi`. It was unreachable from 2026-11-06 and failed the Playwright job on every branch. By 2026-11-08 it was answering again (GoTrue `v2.197.0`, `/auth/v1/health` 200), but the cause was never confirmed, most likely an inactivity pause. PR #199 moved the Playwright job onto a local stack (P9-002), but Maestro can't follow it: its flows hit the deployed dev API, and that API validates tokens against `SUPABASE_URL`. So the dependency remains for dev sign-in, Maestro, and every manual test against dev. Dev is also paused by default (P9-009), so the project sees little traffic.
+**Implementation:**
+- Decide and record (an ADR, or `infrastructure.md` if it stays small). Options: keep the free project and document a restore runbook; move to a paid plan (weigh current pricing against ADR 0005's `budget_limit_usd = 45`); or replace it with a new project or self-hosted GoTrue on the dev stack. Replacing it means rotating the SSM parameters and repo variables together.
+- Add a Supabase reachability check to the Maestro job's existing preflight (`test-native-e2e.yml`, "Preflight — is the dev API up?"). It should check `$EXPO_PUBLIC_SUPABASE_URL/auth/v1/health`, so an unreachable project fails with a named error instead of a timeout inside a flow.
+- Fix the Maestro job's comment, which still cites "the same reasoning as the Playwright job in test.yml"; that job no longer uses repo variables.
+- Optionally, report Supabase reachability from the dev server's own health check, so a paused project shows up in dev's monitoring and not just at sign-in.
+- `server/src/middlewares/authMiddleware.ts` reads `process.env.SUPABASE_URL || ''` (and the key the same way). That breaks the fail-fast convention: move both into `configs/config.ts` and throw at startup when they are missing.
+**Acceptance Criteria:**
+- [ ] The decision and the reason for it are written down, and `infrastructure.md` names the project the dev stage uses and how to restore or rotate it.
+- [ ] With the project unreachable, the Maestro job fails in preflight with an error naming Supabase.
+- [ ] The Maestro workflow's comments describe its own Supabase dependency accurately.
+- [ ] The server refuses to start without `SUPABASE_URL` and its key.
 
 # Future Plans and Ideas
 
