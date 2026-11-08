@@ -16,6 +16,7 @@ import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
+import { AddChoiceSheet } from '@/components/add-choice-sheet';
 import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
 import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
@@ -459,6 +460,8 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   // Manual barcode entry (P6-006) — an add path that never touches the camera.
   const [manualVisible, setManualVisible] = useState(false);
+  // TICKET-P6-007 — the "＋" now asks barcode-vs-custom before anything else.
+  const [addChoiceVisible, setAddChoiceVisible] = useState(false);
 
   // ─── Search (TICKET-P6-008) ─────────────────────────────────────────────
   const [searchScope, setSearchScope] = useState<SearchScope>('mine');
@@ -557,13 +560,13 @@ export default function HomeScreen() {
             {isAnonymous ? 'Welcome, Guest 👋' : `Welcome back 👋`}
           </Text>
           {/* Adding a product without going through the camera tab (P6-006).
-              P6-007 turns this into a two-choice sheet; this is the
-              single-purpose version. */}
+              TICKET-P6-007: opens a choice between a barcode (the P6-006
+              path) and "something with no barcode" (a custom product). */}
           <TouchableOpacity
             testID="home-add-product"
-            accessibilityLabel="Add a product by barcode"
+            accessibilityLabel="Add a product"
             style={[styles.addButton, { backgroundColor: colors.tint + '18' }]}
-            onPress={() => setManualVisible(true)}
+            onPress={() => setAddChoiceVisible(true)}
           >
             <Text style={[styles.addButtonText, { color: colors.tint }]}>＋</Text>
           </TouchableOpacity>
@@ -766,6 +769,18 @@ export default function HomeScreen() {
 
       <View style={[styles.bottomPad, compact && compactStyles.bottomPad]} />
 
+      <AddChoiceSheet
+        visible={addChoiceVisible}
+        onClose={() => setAddChoiceVisible(false)}
+        onPickBarcode={() => {
+          setAddChoiceVisible(false);
+          setManualVisible(true);
+        }}
+        onPickCustom={() => {
+          setAddChoiceVisible(false);
+          router.push('/(app)/add-custom-product');
+        }}
+      />
       <ManualBarcodeSheet visible={manualVisible} onClose={() => setManualVisible(false)} />
     </ScrollView>
   );

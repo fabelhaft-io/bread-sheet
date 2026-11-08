@@ -18,6 +18,7 @@ const mockRouter = {
   replace: jest.fn(),
   back: jest.fn(),
   navigate: jest.fn(),
+  setParams: jest.fn(),
 };
 const mockUseLocalSearchParams = jest.fn(() => ({ id: 'p1' }));
 const mockUseSession = jest.fn();
@@ -160,8 +161,7 @@ describe('ProductScreen — id-based 404', () => {
     expect(queryByText('0000000000001')).toBeTruthy();
   });
 
-  // P6-007 (not built yet) is what will produce a CUSTOM product; the branch
-  // and its test land now per the ticket's scope guard.
+  // TICKET-P6-007 produces CUSTOM products (no PackagedProduct row).
   it('renders no barcode chip for a CUSTOM product (no packaged row)', async () => {
     mockUseLocalSearchParams.mockReturnValue({ id: 'p2' });
     mockProductAndNoExistingRating({
@@ -562,5 +562,76 @@ describe('ProductScreen — leaving the success card', () => {
     const { findByText, queryByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
     await findByText('Sourdough Loaf');
     expect(queryByTestId('rating-submitted')).toBeNull();
+  });
+});
+
+// TICKET-P6-007: creating a custom product navigates here with `?focusRating=1`
+// so the rating control is ready to use immediately.
+describe('ProductScreen — focusRating hand-off (TICKET-P6-007)', () => {
+  beforeEach(() => {
+    mockRouter.push.mockClear();
+    mockRouter.replace.mockClear();
+    mockRouter.back.mockClear();
+    mockRouter.navigate.mockClear();
+    mockRouter.setParams.mockReset();
+    mockApiGet.mockReset();
+    mockUseSession.mockReset();
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'u1', is_anonymous: false } },
+      isAnonymous: false,
+      isLoading: false,
+    });
+  });
+
+  it('auto-focuses the comment field and clears the param exactly once', async () => {
+    // `setParams` mutates the same object `useLocalSearchParams` reads back —
+    // a mock that just recorded the call, leaving the param frozen at '1',
+    // would pass this test even if the screen never actually cleared it.
+    let params: { id: string; focusRating?: string } = { id: 'p1', focusRating: '1' };
+    mockUseLocalSearchParams.mockImplementation(() => params);
+    mockRouter.setParams.mockImplementation((updates: Record<string, string | undefined>) => {
+      params = { ...params, ...updates };
+    });
+    mockProductAndNoExistingRating({
+      id: 'p1',
+      kind: 'CUSTOM',
+      name: 'Negroni',
+      brand: null,
+      image: null,
+      description: null,
+      packaged: null,
+    });
+
+    const { findByTestId, rerender } = await render(<ProductScreen />, {
+      wrapper: GestureHandlerRootView,
+    });
+    const commentInput = await findByTestId('rating-comment-input');
+    expect(commentInput.props.autoFocus).toBe(true);
+    expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
+    expect(mockRouter.setParams).toHaveBeenCalledWith({ focusRating: undefined });
+    expect(params.focusRating).toBeUndefined();
+
+    // Re-rendering (e.g. the screen re-focusing) with the param now cleared
+    // must not call setParams again.
+    await rerender(<ProductScreen />);
+    expect(mockRouter.setParams).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not auto-focus the comment field when there is no focusRating param', async () => {
+    mockUseLocalSearchParams.mockReturnValue({ id: 'p1' });
+    mockProductAndNoExistingRating({
+      id: 'p1',
+      kind: 'PACKAGED',
+      name: 'Sourdough Loaf',
+      brand: null,
+      image: null,
+      description: null,
+      packaged: { gtin: '0000000000001' },
+    });
+
+    const { findByTestId } = await render(<ProductScreen />, { wrapper: GestureHandlerRootView });
+    const commentInput = await findByTestId('rating-comment-input');
+    expect(commentInput.props.autoFocus).toBe(false);
+    expect(mockRouter.setParams).not.toHaveBeenCalled();
   });
 });

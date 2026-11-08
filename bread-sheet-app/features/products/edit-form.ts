@@ -1,4 +1,4 @@
-import type { ProductDetail, ProductEditChanges } from './types';
+import type { ProductDetail, ProductEditChanges, ProductKind } from './types';
 
 /**
  * Form logic for the Edit Product screen (TICKET-P5-006). Lives in
@@ -38,6 +38,19 @@ export const EDIT_FORM_FIELDS = [
 ] as const;
 
 export type EditFormField = (typeof EDIT_FORM_FIELDS)[number];
+
+/**
+ * Fields a given product kind may edit (TICKET-P6-007 / ADR 0006). A
+ * `CUSTOM` product has no `PackagedProduct` row, so `name` and the photo
+ * (`productImageKey`, handled separately by the caller) are the only
+ * editable fields — a nutrition or allergen field in the payload is a `400`
+ * server-side, and the client must not send one in the first place.
+ * Defaults to `PACKAGED` so every existing call site keeps its old
+ * behaviour without passing a `kind`.
+ */
+export function editableFieldsForKind(kind: ProductKind): readonly EditFormField[] {
+  return kind === 'CUSTOM' ? (['name'] as const) : EDIT_FORM_FIELDS;
+}
 
 /** Human-readable labels, shared by the edit form and the reviewer diff screen. */
 export const FIELD_LABELS: Record<string, string> = {
@@ -103,12 +116,18 @@ export function productToFormValues(product: ProductDetail): EditFormValues {
   };
 }
 
-/** Per-field validation errors (numeric fields must parse when non-empty). */
+/**
+ * Per-field validation errors (numeric fields must parse when non-empty).
+ * `kind` restricts which fields are even considered — a `CUSTOM` product's
+ * numeric fields are never rendered, so there is nothing to validate.
+ */
 export function validateFormValues(
   form: EditFormValues,
+  kind: ProductKind = 'PACKAGED',
 ): Partial<Record<EditFormField, string>> {
   const errors: Partial<Record<EditFormField, string>> = {};
   if (!form.name.trim()) errors.name = 'Product name is required.';
+  if (kind === 'CUSTOM') return errors;
   for (const field of NUMERIC_FIELDS) {
     if (form[field] !== '' && parseNumeric(form[field]) === null) {
       errors[field] = 'Must be a positive number.';
@@ -131,15 +150,19 @@ function typedValue(field: EditFormField, form: EditFormValues): string | number
  * only the changed fields as a wire payload. A replaced photo is carried as
  * `productImageKey`. Returns `null` when nothing changed — the submit button
  * is disabled in that case (spec: unchanged submits are blocked client-side).
+ * `kind` restricts the diff to the fields that kind may edit — for `CUSTOM`
+ * that is `name` only (ADR 0006), so a packaged-only field is never sent and
+ * never risks the server's `400`.
  */
 export function buildEditChanges(
   initial: EditFormValues,
   current: EditFormValues,
   newImageKey: string | null,
+  kind: ProductKind = 'PACKAGED',
 ): ProductEditChanges | null {
   const changes: ProductEditChanges = {};
 
-  for (const field of EDIT_FORM_FIELDS) {
+  for (const field of editableFieldsForKind(kind)) {
     const before = typedValue(field, initial);
     const after = typedValue(field, current);
     if (before !== after) {
@@ -157,13 +180,21 @@ export function buildEditChanges(
 }
 
 /**
- * Full payload for the PENDING_REVIEW correction path (PATCH). All fields are
- * sent; `productImageKey` only when the photo was replaced.
+ * Full payload for the PENDING_REVIEW correction path (PATCH). For a
+ * `PACKAGED` product every field is sent; for a `CUSTOM` product only `name`
+ * (and the photo key, if replaced) — the packaged-only fields are omitted
+ * entirely rather than sent as `null`, since the server 400s on their mere
+ * presence in a `CUSTOM` payload (ADR 0006).
  */
 export function buildCorrectionPayload(
   form: EditFormValues,
   newImageKey: string | null,
+  kind: ProductKind = 'PACKAGED',
 ) {
+  const photo = newImageKey ? { productImageKey: newImageKey } : {};
+  if (kind === 'CUSTOM') {
+    return { name: form.name.trim(), ...photo };
+  }
   return {
     name: form.name.trim(),
     brand: form.brand.trim() || null,
@@ -177,7 +208,7 @@ export function buildCorrectionPayload(
     salt: parseNumeric(form.salt),
     servingSize: form.servingSize.trim() || null,
     ingredients: form.ingredients.trim() || null,
-    ...(newImageKey ? { productImageKey: newImageKey } : {}),
+    ...photo,
   };
 }
 
@@ -186,9 +217,10 @@ export function formHasChanges(
   initial: EditFormValues,
   current: EditFormValues,
   newImageKey: string | null,
+  kind: ProductKind = 'PACKAGED',
 ): boolean {
   if (newImageKey) return true;
-  return EDIT_FORM_FIELDS.some(
+  return editableFieldsForKind(kind).some(
     (f) => typedValue(f, initial) !== typedValue(f, current),
   );
 }

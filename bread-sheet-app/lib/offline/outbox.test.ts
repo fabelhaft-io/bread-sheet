@@ -41,14 +41,18 @@ const files = (require('expo-file-system/legacy') as { __files: Map<string, stri
 
 const mockPost = api.post as jest.Mock;
 
-function savedRating(productId: string, taste: number): RatingEntry {
+function savedRating(
+  productId: string,
+  taste: number,
+  kind: 'PACKAGED' | 'CUSTOM' = 'PACKAGED',
+): RatingEntry {
   return {
     id: `r-${productId}`,
     score: taste,
     taste,
     comment: null,
     createdAt: '2026-07-29T00:00:00.000Z',
-    product: { id: productId, kind: 'PACKAGED', name: 'Bread', brand: null, image: null },
+    product: { id: productId, kind, name: kind === 'CUSTOM' ? 'Negroni' : 'Bread', brand: null, image: null },
   };
 }
 
@@ -175,6 +179,26 @@ describe('rating outbox', () => {
     expect(mockPost).toHaveBeenCalledTimes(1);
     expect(result.synced).toHaveLength(0);
     expect(result.remaining.map((item) => item.productId)).toEqual(['111', '222']);
+  });
+
+  // TICKET-P6-007: the outbox is keyed by productId alone and knows nothing
+  // about `kind` — a CUSTOM product's rating must queue and sync exactly
+  // like a PACKAGED one's.
+  it('queues and syncs a rating for a CUSTOM product the same as a PACKAGED one', async () => {
+    mockPost.mockImplementation((_path: string, body: { productId: string; taste: number }) =>
+      Promise.resolve(savedRating(body.productId, body.taste, 'CUSTOM')),
+    );
+    await enqueueRating({ productId: 'custom-1', taste: 9, comment: 'great cocktail' });
+    expect(peekOutbox()).toMatchObject([{ productId: 'custom-1', taste: 9 }]);
+
+    const result = await flushOutbox();
+
+    expect(result.synced).toEqual(['custom-1']);
+    expect(result.remaining).toHaveLength(0);
+    expect((await ratingsCache.read())?.[0]).toMatchObject({
+      id: 'r-custom-1',
+      product: { id: 'custom-1', kind: 'CUSTOM' },
+    });
   });
 
   it('survives a restart — the queue is read back from disk', async () => {

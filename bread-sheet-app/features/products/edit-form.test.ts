@@ -111,3 +111,65 @@ describe('buildCorrectionPayload', () => {
     expect(buildCorrectionPayload(initial, key).productImageKey).toBe(key);
   });
 });
+
+// ─── CUSTOM products (TICKET-P6-007 / ADR 0006) ─────────────────────────────
+// Only `name` (and the photo) are editable — a packaged-only field must never
+// appear in the payload, even as an explicit `null`, since the server 400s on
+// its mere presence.
+
+const CUSTOM_PRODUCT: ProductDetail = {
+  id: 'c1',
+  kind: 'CUSTOM',
+  name: 'Negroni',
+  brand: null,
+  image: null,
+  description: null,
+  status: 'PENDING_REVIEW',
+  packaged: null,
+};
+
+const customInitial = productToFormValues(CUSTOM_PRODUCT);
+
+describe('CUSTOM products', () => {
+  it('only diffs the name field', () => {
+    const current = { ...customInitial, name: 'Negroni Sbagliato', fat: '999' };
+    expect(buildEditChanges(customInitial, current, null, 'CUSTOM')).toEqual({
+      name: 'Negroni Sbagliato',
+    });
+  });
+
+  it('builds a correction payload with only name (and photo), never packaged-only fields', () => {
+    const payload = buildCorrectionPayload(
+      { ...customInitial, name: 'Negroni Fixed' },
+      null,
+      'CUSTOM',
+    );
+    expect(payload).toEqual({ name: 'Negroni Fixed' });
+    expect('brand' in payload).toBe(false);
+    expect('energyKcal' in payload).toBe(false);
+  });
+
+  it('attaches the photo key when replaced, still with no packaged fields', () => {
+    const key = 'processed/123e4567-e89b-42d3-a456-426614174000.jpg';
+    const payload = buildCorrectionPayload(customInitial, key, 'CUSTOM');
+    expect(payload).toEqual({ name: 'Negroni', productImageKey: key });
+  });
+
+  it('ignores a (hypothetical) change to a packaged-only field when computing hasChanges', () => {
+    const current = { ...customInitial, fat: '999' };
+    expect(formHasChanges(customInitial, current, null, 'CUSTOM')).toBe(false);
+  });
+
+  it('reports a change when the name differs', () => {
+    const current = { ...customInitial, name: 'Negroni Sbagliato' };
+    expect(formHasChanges(customInitial, current, null, 'CUSTOM')).toBe(true);
+  });
+
+  it('never raises numeric field errors for a CUSTOM product', () => {
+    expect(validateFormValues({ ...customInitial, fat: 'lots' }, 'CUSTOM')).toEqual({});
+  });
+
+  it('still requires a name for a CUSTOM product', () => {
+    expect(validateFormValues({ ...customInitial, name: ' ' }, 'CUSTOM').name).toBeTruthy();
+  });
+});

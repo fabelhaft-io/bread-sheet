@@ -103,6 +103,35 @@ export interface ProductDetail {
   packaged: PackagedDetails | null;
 }
 
+/**
+ * Payload for `PATCH /products/:productId` (the PENDING_REVIEW correction
+ * path). A `PACKAGED` product sends every field; a `CUSTOM` product
+ * (TICKET-P6-007 / ADR 0006) sends only `name` (and the photo, if replaced)
+ * — the packaged-only fields are omitted entirely, since the server `400`s
+ * on their mere presence in a `CUSTOM` payload.
+ */
+export type ProductCorrectionPayload =
+  | (Omit<ProductSubmission, 'gtin' | 'productImageKey'> & { productImageKey?: string })
+  | { name: string; productImageKey?: string };
+
+// ─── Custom products (TICKET-P6-007) ─────────────────────────────────────────
+
+/**
+ * Wire payload for `POST /api/custom-products`. `imageKey` is the S3 object
+ * key returned by `POST /api/products/upload-image` with `kind=item`, same
+ * convention as `ProductSubmission.productImageKey`.
+ */
+export interface CreateCustomProductPayload {
+  name: string;
+  imageKey?: string;
+}
+
+/** Response of `POST /api/custom-products` on success — always starts PENDING_REVIEW. */
+export interface CreateCustomProductResult {
+  id: string;
+  status: ProductStatus;
+}
+
 // ─── Product editing & peer review (TICKET-P5-006) ──────────────────────────
 
 export type EditVote = 'APPROVE' | 'REJECT';
