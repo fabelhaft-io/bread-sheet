@@ -498,24 +498,28 @@ will be the final word.
 1. **`bread-sheet-app` lint is red on `main` and unguarded by CI.** Add `scripts/` to the lint
    environment (or an `eslint.config.js` `globals.node` entry for `scripts/**`) to clear the
    `Buffer` `no-undef`, and add an app-lint step to `.github/workflows/test.yml` so it cannot
-   rot again. (F2)
+   rot again. (F2) → **filed under [TICKET-P9-008]**, which already owned the app-lint and CI-lint work.
 2. **Spot-check the `kind=item` plausibility prompt against `PLAUSIBILITY_MODE=gemini`** — a
    cocktail in a glass must get `ok`, obvious abuse must still get `abuse` with no reason leaked.
    Mock mode cannot cover this. **This one gates an unticked acceptance criterion**, so it is the
-   only follow-up that must happen before P6-007 is considered fully closed. (F5)
-3. **Fix the stale migration name in the `Product.nameKey` schema comment.** (F3)
+   only follow-up that must happen before P6-007 is considered fully closed. (F5) → **[TICKET-P6-013]**.
+3. **Fix the stale migration name in the `Product.nameKey` schema comment.** (F3) → **fixed on this branch** (comment now names `20261108204955_custom_products`).
 4. **Make the app's own e2e specs runnable without a backend** (or document that `test:e2e`
    needs one): `e2e/auth.spec.ts` and `e2e/scan-tab.spec.ts` are the only two specs that do not
-   mock `GET /api/users/me/ratings`, and they are the two that fail locally.
+   mock `GET /api/users/me/ratings`, and they are the two that fail locally. → **filed under [TICKET-P9-006]**.
 5. **Assert `UserAbuseFlag` creation in the `kind=item` abuse test** (one line, mirroring the
-   `product`/`label` cases). (F9)
+   `product`/`label` cases). (F9) → **[TICKET-P6-014]**.
 6. **Drain the `mockSearch` once-queue in `add-custom-product.test.tsx`'s `beforeEach`** so one
-   failure cannot cascade into the next test. (F10)
+   failure cannot cascade into the next test. (F10) → **[TICKET-P6-014]**.
 7. **Add a CUSTOM case to `app/(app)/edit-product/edit-product.test.tsx`** asserting the
    packaged-only fields are not rendered — currently only the reviewer's browser probe covers
-   the edit screen's half of that AC.
+   the edit screen's half of that AC. → **[TICKET-P6-014]**.
 
 ---
+
+Also filed from the open questions below: the `custom_product_name_unique` real-DB invariants and the
+apply-time rename collision (F6, open question 4) → **[TICKET-P9-011]**; the first-page-only soft-gate
+residual (open question 3) → a note on the *Merge duplicate custom products* backlog idea.
 
 ## Open questions for the implementer / human
 

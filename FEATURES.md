@@ -1143,7 +1143,7 @@ review plus edits.
       *(Built and routed; the `kind=item` path, the `422`, the no-leak rule and the kind-independent
       `UserAbuseFlag` write are covered. Left unticked because the model's own verdicts can only be
       exercised with `PLAUSIBILITY_MODE=gemini` — a paid live call. Needs one human spot-check; see
-      `docs/P6-007-findings.md` F5.)*
+      `docs/P6-007-findings.md` F5, filed as **[TICKET-P6-013]**.)*
 - [x] Creation is online-only and reports being offline via `formatApiError`; rating an existing custom
       product offline still queues in the outbox.
 - [x] Anonymous users get `403` from `POST /api/custom-products` and see the sign-up gate on the create
@@ -1380,6 +1380,48 @@ needs the name score. It's an accident for the *ordering*. Follow-up 6 in `docs/
 - [ ] Cursor pagination stays gap- and duplicate-free under the new ordering, verified against a real
       Postgres (see P9-011).
 
+### [TICKET-P6-013] Spot-Check the `kind=item` Plausibility Prompt Against Live Gemini
+**Goal:** Close P6-007's last open acceptance criterion: the `kind=item` prompt accepts a plausible
+non-packaged subject and still flags abuse, observed with the real model rather than mock mode.
+**Context:** P6-007 added `kind=item` to `imagePlausibilityService` with a prompt tuned to "a real thing a
+person could have consumed, photographed in good faith". Everything around the model call is tested: the
+routing, the `422`, the never-leak-the-reason rule and the kind-independent `UserAbuseFlag` write. The
+model's own verdicts are not. `PLAUSIBILITY_MODE=mock` accepts everything by construction, and `gemini` is a
+paid live call that needs credentials no agent has. Follow-up 2 / F5 in `docs/P6-007-findings.md`.
+**Implementation:**
+- One manual run with `PLAUSIBILITY_MODE=gemini` (local `GEMINI_API_KEY`, or against dev once it is
+  resumed). Use a cocktail in a glass, a plated dish, and an abusive or clearly non-consumable image.
+- Record the verdicts, latency and the `GeminiDailyUsage` increments in `docs/P6-007-findings.md`. If a
+  plausible subject is rejected, tune the prompt and repeat.
+- Optionally also check `REJECTION_MESSAGES` for `kind=item`. It reuses the "doesn't look like a food
+  product" copy, which may read oddly for a cocktail (backend note in the P6-007 hand-back).
+**Acceptance Criteria:**
+- [ ] A cocktail-in-a-glass photo returns `ok` under `PLAUSIBILITY_MODE=gemini`.
+- [ ] An abusive image returns `abuse`, writes a `UserAbuseFlag` row, and the client body carries no reason.
+- [ ] P6-007's plausibility box is ticked, with the evidence in its findings doc.
+
+### [TICKET-P6-014] Close P6-007's Test-Coverage Gaps
+**Goal:** Each P6-007 behaviour that only a reviewer's one-off probe proved gets a committed test that
+fails if it regresses.
+**Context:** The P6-007 review (`docs/P6-007-findings.md`, follow-ups 5–7, F9, F10) found three small holes:
+- **F9.** The `kind=item` abuse case in `server/src/controllers/uploadImage.test.ts` stages
+  `mockAbuseFlagCreate` but never asserts it. The `product` and `label` cases do. This is the test that
+  would catch a refactor that gates the flag write on `kind`.
+- **F10.** `add-custom-product.test.tsx` leaves `mockSearch.mockResolvedValueOnce` values queued when a test
+  fails, and `jest.clearAllMocks()` doesn't drain a once-queue. One failure then cascades into the next
+  test.
+- **Follow-up 7.** Nothing tests that the edit screen hides packaged-only fields for a `CUSTOM` product.
+  Only `edit-form.ts`'s logic is covered; the rendered half was proved by a reviewer's browser probe.
+**Implementation:**
+- Add the `toHaveBeenCalledWith` assertion for `kind=item`, mirroring the other two kinds.
+- Reset `mockSearch` in `beforeEach` (`mockReset()`, or `mockSearch.mockReset().mockResolvedValue(...)`).
+- Add a `CUSTOM` case to `app/(app)/edit-product/edit-product.test.tsx` that asserts no packaged-only field
+  `testID` renders, with a `PACKAGED` control in the same file.
+**Acceptance Criteria:**
+- [ ] Removing the `UserAbuseFlag` write for `kind=item` fails a server test.
+- [ ] Deliberately failing one `add-custom-product` test leaves the others green.
+- [ ] Rendering a packaged-only field for a `CUSTOM` product fails `edit-product.test.tsx`.
+
 ## Phase 7: Auth Enhancements
 
 ### [TICKET-P7-001] Social Login Providers (Google, Apple)
@@ -1584,11 +1626,13 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 - Commit `supabase/config.toml` (`enable_anonymous_sign_ins = true`, unused services excluded) and document the podman socket (`DOCKER_HOST`) in README.md.
 - Have `scripts/test-maestro.js` and the Playwright `webServer` default to the local stack's URL and demo key when nothing is exported (the emulator uses `10.0.2.2`).
 - Have the `/dev-team` coordinator prepare the worktree before spawning agents: `npm ci` in both packages, Postgres up (with the `GCLOUD_ADC_PATH` podman-compose workaround), local Supabase up, non-secret local values from a checked-in template.
+- **Two specs need a backend (P6-007 follow-up 4):** `e2e/auth.spec.ts` and `e2e/scan-tab.spec.ts` are the only Playwright specs that don't mock `GET /api/users/me/ratings`, and they're the two that fail locally with no server running, identically on `main`. Mock that call with `page.route()` like the other specs, or document that `test:e2e` needs the server up. Either way, a red result should mean a real failure.
 **Acceptance Criteria:**
 - [ ] In a fresh worktree, `test:e2e` and the full `test:maestro` pass with no env file present and no value supplied by the user.
 - [ ] No real Supabase key appears in any committed file, findings doc or agent transcript.
 - [ ] `docs/architecture/agent-dev-team.md` describes the worktree preparation.
-- [ ] Rootless podman runs `supabase start` without a hand-built shim (upstream fix, real Docker, or a committed `scripts/` shim).
+- [ ] Rootless podman runs `supabase start` without a hand-built shim (upstream fix, real Docker, or a committed `scripts/` shim). The P6-007 reviewer hit the same `pids.max = 0` failure on 2026-11-09 and ran Playwright on a hand-built GoTrue instead.
+- [ ] `auth.spec.ts` and `scan-tab.spec.ts` pass locally, or the README states which backend they need.
 
 ### [TICKET-P9-007] Playwright Spec for the GTIN Resolver
 **Goal:** Make the web e2e suite cover the product flow, not just auth and the camera prompt.
@@ -1608,8 +1652,9 @@ implement adr 0003, but make changes for dev - target is identical setup for dev
 **Implementation:**
 - Add a flat-config block with `globals.node` for `scripts/**/*.{js,mjs}` and `lambda/**/*.js`, or ignore build output explicitly.
 - Optionally widen the `lint` script to the same scope so `npm run lint` and `eslint .` agree.
-- **Also the app (P6-008 follow-up 8):** `npm run lint` in `bread-sheet-app/` is red on `main`, with
-  `scripts/test-maestro.js:1009` `'Buffer' is not defined`. Give `scripts/` Node globals there too.
+- **Also the app (P6-008 follow-up 8, again P6-007 follow-up 1):** `npm run lint` in `bread-sheet-app/` is
+  red on `main`, with `scripts/test-maestro.js:1009` `'Buffer' is not defined`. Give `scripts/` Node globals
+  there too. Every dev-team run since P6-008 has had to re-prove this error is pre-existing.
 - **No workflow runs lint at all** (`grep -rn "run lint\|eslint" .github/workflows/` is empty), which is
   how both packages went red unnoticed. Add a lint step to the `server` and `app` jobs in `test.yml`.
 **Acceptance Criteria:**
@@ -1669,6 +1714,12 @@ same gap, and P6-007's `custom_product_name_unique` index will too. Follow-up 1 
 - [ ] CI runs the real-DB suite on every PR touching `server/`, and it fails if `searchProducts` stops
       excluding `REJECTED` or stops matching "nutela" → "Nutella".
 - [ ] A second `PENDING` edit for one product is refused by the database in that suite.
+- [ ] `custom_product_name_unique` (P6-007): concurrent creates of "Negroni" / "negroni" / "Négroni " leave
+      one row and `409 duplicate_name` carrying the winner's id, and a `REJECTED` row does not block the
+      name. P6-007's unit "race" tests stage the `P2002` by hand, so they cover the error mapping, not the
+      index; the reviewer proved the index once against a throwaway container (`docs/P6-007-findings.md`
+      F6). Also cover the apply-time rename collision (edit auto-`REJECTED`), which P6-007 unit-tests but
+      never reproduced live.
 - [ ] Locally, `npm test` without the guard var still needs no database.
 
 ### [TICKET-P9-012] Prove the Rate Limiters Actually Throttle
@@ -1748,6 +1799,8 @@ in Pipeline and Security of the Pipeline (Static Code analysis SAST, Dynamic DAS
   ratings to the surviving row. `Rating` is `@@unique([userId, productId])`, so a user who rated both keeps
   their most recently updated rating, and the other is deleted. Build it only once duplicates actually show
   up in real usage.
+- The soft gate only looks at the first page of results (20) and only fires at `similarity ≥ 0.6`, so this
+  residual is a known limit, not a bug (P6-007 findings, open question 3).
 
 ## Search by name
 - *Promoted to **[TICKET-P6-008]** (2026-07-30).* Still an idea here: querying Open Food Facts by name for

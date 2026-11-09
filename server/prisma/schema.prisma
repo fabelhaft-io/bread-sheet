@@ -95,7 +95,7 @@ model Product {
   // every applied rename. Null for PACKAGED products, whose identity is the
   // GTIN, not the name. A hand-written partial unique index
   // (`custom_product_name_unique`, see the
-  // 20261108180000_custom_products migration — Prisma's DSL can't express a
+  // 20261108204955_custom_products migration — Prisma's DSL can't express a
   // partial index) enforces "Negroni"/"negroni"/"Négroni " as the same
   // product, scoped to non-REJECTED CUSTOM rows.
   nameKey              String?
