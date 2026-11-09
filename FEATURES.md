@@ -870,30 +870,30 @@ in `bread-sheet-app/features/search/match.ts` is the composition point. Pass the
 real chip ∧ query test, then tick the P6-008 box.
 
 **Acceptance Criteria:**
-- [ ] A user can assign a category to a rating, and change or remove it later.
-- [ ] A rating with no category is a supported state, filterable as "Uncategorised".
-- [ ] The picker pre-selects the machine suggestion, mapped to the user's existing category when one
+- [x] A user can assign a category to a rating, and change or remove it later.
+- [x] A rating with no category is a supported state, filterable as "Uncategorised".
+- [x] The picker pre-selects the machine suggestion, mapped to the user's existing category when one
       matches; otherwise it offers the seed label as a one-tap create.
-- [ ] Picking a seed label materialises exactly one `UserCategory` row for that user; nothing is written
+- [x] Picking a seed label materialises exactly one `UserCategory` row for that user; nothing is written
       per user before that.
-- [ ] `Product.suggestedCategory` is filled from the OFF tag mapping and from the product-photo
+- [x] `Product.suggestedCategory` is filled from the OFF tag mapping and from the product-photo
       plausibility response, and is never rendered as the product's category.
-- [ ] Categories are never peer-reviewed and are absent from the P5-005 edit flow and diff screen.
-- [ ] A user can create a custom category from the picker (1–24 chars, max 40 per user).
-- [ ] Creating a name that near-matches an existing category or seed offers "Did you mean …?" first, but
+- [x] Categories are never peer-reviewed and are absent from the P5-005 edit flow and diff screen.
+- [x] A user can create a custom category from the picker (1–24 chars, max 40 per user).
+- [x] Creating a name that near-matches an existing category or seed offers "Did you mean …?" first, but
       still allows the new category to be created.
-- [ ] Renaming a category updates it everywhere it appears, with no per-rating writes.
-- [ ] Merging a category reassigns its ratings and deletes the source.
-- [ ] Deleting a category leaves its ratings intact and uncategorised, and the confirmation copy says so.
-- [ ] One user cannot read, assign or modify another user's categories (`403`).
-- [ ] The Home tab shows a chip only for categories the user has ratings in, each with a count, plus
+- [x] Renaming a category updates it everywhere it appears, with no per-rating writes.
+- [x] Merging a category reassigns its ratings and deletes the source.
+- [x] Deleting a category leaves its ratings intact and uncategorised, and the confirmation copy says so.
+- [x] One user cannot read, assign or modify another user's categories (`403`).
+- [x] The Home tab shows a chip only for categories the user has ratings in, each with a count, plus
       "Uncategorised" when applicable.
-- [ ] Chip filtering issues no network request and works offline; the selected chip survives a restart.
-- [ ] `GET /api/users/me/ratings` includes each entry's category.
-- [ ] Rating and categorising in one step is possible in a single request (`categoryId` or `seedSlug` on
+- [x] Chip filtering issues no network request and works offline; the selected chip survives a restart.
+- [x] `GET /api/users/me/ratings` includes each entry's category.
+- [x] Rating and categorising in one step is possible in a single request (`categoryId` or `seedSlug` on
       the rating write).
-- [ ] Anonymous users can create and use categories (`requireAuth`, not `requireRegistered`).
-- [ ] Custom category names are queryable across users for the seed-promotion review.
+- [x] Anonymous users can create and use categories (`requireAuth`, not `requireRegistered`).
+- [x] Custom category names are queryable across users for the seed-promotion review.
 
 ### [TICKET-P6-004] Supermarket Lookup — Rating Overview Before Editor
 **Goal:** The dominant in-store question is "have we already decided about this?", not "let me rate this".
@@ -1165,9 +1165,10 @@ symbol in the app is `useLocalSearchParams`, i.e. route params). This ticket bui
   route back is scrolling "My Ratings" or filtering by category (P6-003), which works for the first weeks and
   stops working as history grows.
 
-**Status (2026-11-08, PR #201):** both slices are built, ahead of P6-007 and P6-003. Two Slice A boxes stay
-open until those tickets land: chip composition (P6-003) and finding a P6-007 item (P6-007). Each of those
-tickets carries the note for closing its box. Run record and follow-ups: `docs/P6-008-findings.md`.
+**Status (2026-11-08, PR #201):** both slices are built, ahead of P6-007 and P6-003. Two Slice A boxes were
+left open until those tickets landed: chip composition (P6-003 — **closed 2026-11-09**, see
+`docs/P6-003-findings.md`) and finding a P6-007 item (P6-007). Each of those tickets carries the note for
+closing its box. Run record and follow-ups: `docs/P6-008-findings.md`.
 
 **One bar, two scopes.** The same input serves both, with a scope toggle that defaults to **Mine**:
 - **Mine** — my ratings. Instant, client-side, works offline.
@@ -1192,7 +1193,7 @@ tickets carries the note for closing its box. Run record and follow-ups: `docs/P
 - [x] A search input on the Home tab filters my ratings as I type, with no network request.
 - [x] Matching covers name and brand, case- and diacritic-insensitively, on substrings.
 - [x] It works offline against cached ratings.
-- [ ] It composes with the category chips. *(Deferred to P6-003; see the note there.)*
+- [x] It composes with the category chips. *(Closed by TICKET-P6-003 — real chip ∧ query test in `app/(tabs)/home-search-mine.test.tsx`.)*
 - [x] A barcode-less item created in P6-007 is findable by name. *(Closed by P6-007.)*
 - [x] Matching uses plain string containment, not a regex built from user input.
 - [x] The empty state distinguishes "no match" from "nothing rated yet".
