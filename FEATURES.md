@@ -1119,32 +1119,36 @@ review plus edits.
 - The hand-written partial unique index `custom_product_name_unique` described above.
 
 **Acceptance Criteria:**
-- [ ] A registered user can create a custom product with only a name and rate it straight away.
-- [ ] A new custom product is `PENDING_REVIEW`, visible to every caller (anonymous included) with the
+- [x] A registered user can create a custom product with only a name and rate it straight away.
+- [x] A new custom product is `PENDING_REVIEW`, visible to every caller (anonymous included) with the
       "Needs review" banner, and ratable by anyone signed in.
-- [ ] Two net peer approvals verify it; two net rejections hide it.
-- [ ] A `PENDING_REVIEW` custom product can be corrected in place; a change to a `VERIFIED` one goes
+- [x] Two net peer approvals verify it; two net rejections hide it.
+- [x] A `PENDING_REVIEW` custom product can be corrected in place; a change to a `VERIFIED` one goes
       through the P5-006 proposal flow with two approvals.
-- [ ] Only name and photo are editable; nutrition or allergen fields in a create, correction or edit
+- [x] Only name and photo are editable; nutrition or allergen fields in a create, correction or edit
       payload for a `CUSTOM` product return `400`.
-- [ ] The add-custom-product screen searches before it offers creation, and its results include
+- [x] The add-custom-product screen searches before it offers creation, and its results include
       barcoded products.
-- [ ] A query whose top match has similarity ≥ 0.6 requires a "Did you mean …?" confirmation before
+- [x] A query whose top match has similarity ≥ 0.6 requires a "Did you mean …?" confirmation before
       creating.
-- [ ] Creating a name that normalises to an existing non-rejected custom product returns `409
+- [x] Creating a name that normalises to an existing non-rejected custom product returns `409
       duplicate_name` with the existing `productId`, and the app opens that product. Concurrent creates
       of the same name produce exactly one row.
-- [ ] A rejected custom product does not block its name.
-- [ ] Renaming a custom product to an existing name is refused with `409 duplicate_name`.
-- [ ] The product, edit and review screens render no barcode, nutrition or allergen UI for a `CUSTOM`
+- [x] A rejected custom product does not block its name.
+- [x] Renaming a custom product to an existing name is refused with `409 duplicate_name`.
+- [x] The product, edit and review screens render no barcode, nutrition or allergen UI for a `CUSTOM`
       product.
 - [ ] The image plausibility gate runs on custom-product photos via `kind=item`, accepts a plausible
       non-packaged subject (a cocktail in a glass), and still flags abusive uploads with a `UserAbuseFlag`.
-- [ ] Creation is online-only and reports being offline via `formatApiError`; rating an existing custom
+      *(Built and routed; the `kind=item` path, the `422`, the no-leak rule and the kind-independent
+      `UserAbuseFlag` write are covered. Left unticked because the model's own verdicts can only be
+      exercised with `PLAUSIBILITY_MODE=gemini` — a paid live call. Needs one human spot-check; see
+      `docs/P6-007-findings.md` F5.)*
+- [x] Creation is online-only and reports being offline via `formatApiError`; rating an existing custom
       product offline still queues in the outbox.
-- [ ] Anonymous users get `403` from `POST /api/custom-products` and see the sign-up gate on the create
+- [x] Anonymous users get `403` from `POST /api/custom-products` and see the sign-up gate on the create
       action; searching and rating work for them as for packaged products.
-- [ ] A custom product created here, then rated, is findable by name in the Home tab's **Mine** search.
+- [x] A custom product created here, then rated, is findable by name in the Home tab's **Mine** search.
       This closes P6-008's open Slice A box, so tick that one too. Today it's covered only by a
       `kind: 'CUSTOM'`, `brand: null` fixture in `features/search/match.test.ts`.
 
@@ -1189,7 +1193,7 @@ tickets carries the note for closing its box. Run record and follow-ups: `docs/P
 - [x] Matching covers name and brand, case- and diacritic-insensitively, on substrings.
 - [x] It works offline against cached ratings.
 - [ ] It composes with the category chips. *(Deferred to P6-003; see the note there.)*
-- [ ] A barcode-less item created in P6-007 is findable by name. *(Deferred to P6-007; see the note there.)*
+- [x] A barcode-less item created in P6-007 is findable by name. *(Closed by P6-007.)*
 - [x] Matching uses plain string containment, not a regex built from user input.
 - [x] The empty state distinguishes "no match" from "nothing rated yet".
 - [x] The query does not survive an app restart.
