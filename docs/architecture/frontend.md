@@ -440,6 +440,16 @@ scope that still works without a network. Any other failure goes through `format
 "Needs review" badge treatment as the product detail screen's banner (P5-007), just compact —
 `search-result-unverified-<id>`.
 
+**`hasSettled` (added for TICKET-P6-007, review finding F1).** `isLoading` is only set once the
+debounced request itself starts, so `!isLoading` is also true for the whole `DEBOUNCE_MS` window
+right after a keystroke, before any request for the new query has even been sent — a caller that
+needs "the results on screen genuinely belong to, and loaded for, this exact query" (P6-007's
+add-custom-product screen gates its "Create" action on exactly that) cannot use `!isLoading` for
+it. `hasSettled` is `true` only once a non-aborted, successful first-page response has come back
+for the **current** `query` value; it goes `false` again the instant `query` changes (compared
+against the query a prior success actually settled, not a separate "is it loading" flag), and a
+failed or offline request never sets it at all.
+
 **"Can't scan this?" → search by name.** The scan tab's manual-entry dock (P6-006) gained a
 second button, `scan-search-by-name`, alongside `scan-manual-entry`. There is no route for
 "Home, All-products scope, focused", so it navigates to `/(tabs)` with a `focusSearch: 'all'`
@@ -468,7 +478,7 @@ one tap further in.
 ticket: search before create). It renders one of four modes, held in local component state:
 
 ```
-search ──(2+ trimmed chars, results settled, tap "Create")──┐
+search ──(2+ trimmed chars, current query's search settled, tap "Create")──┐
   │                                                           │
   │  top result similarity ≥ 0.6?                             │
   │     yes → confirm ("Did you mean <name>?")                │
@@ -484,10 +494,20 @@ search ──(2+ trimmed chars, results settled, tap "Create")──┐
   `CUSTOM` kinds, so typing "Coca-Cola" finds the barcoded product and tapping it opens that
   product instead of inviting a duplicate. "Create '\<query\>'" (`custom-product-create`) only
   appears once `features/products/custom.ts#canOfferCreate(query)` is true (≥ 2 trimmed
-  characters — mirrors `isSearchableQuery`'s floor) **and** the current search request has
-  settled (`!isLoading`), so the action never flashes in ahead of a result that would have
-  satisfied it. Offline renders the same `OFFLINE_MESSAGE` copy as Home's search
-  (`custom-product-search-offline`); a non-network failure goes through `formatApiError`.
+  characters — mirrors `isSearchableQuery`'s floor) **and** `useProductSearch`'s `hasSettled` is
+  true for the *current* `query`. `hasSettled` is deliberately not `!isLoading`: `isLoading` is
+  only set once the debounced request itself starts, so for the whole 300 ms debounce window
+  after every keystroke `isLoading` is already `false` while `results` is still the previous
+  query's (or empty) — gating on `!isLoading` let "Create" render, and the "Did you mean…?" gate
+  below be bypassed, before any request for the typed name had even been issued (review finding
+  F1). `hasSettled` tracks *which query* a successful first page actually came back for and
+  compares that against the live `query`, so a keystroke un-settles it immediately, before the
+  new debounce timer is even scheduled, and a failed or offline search never settles at all —
+  creation is online-only regardless, and "no duplicate" is not a conclusion a search that didn't
+  load is entitled to. Offline renders the same `OFFLINE_MESSAGE` copy as Home's search
+  (`custom-product-search-offline`); a non-network failure goes through `formatApiError`; neither
+  ever offers "Create". `handleCreatePress` re-checks this gate itself (defence in depth) before
+  running the similarity decision against `results`.
 - **confirm** — `findLikelyDuplicate(results)` (same module) picks the highest-similarity result
   among whatever is already on screen and offers it only if it clears
   `DUPLICATE_SIMILARITY_THRESHOLD` (0.6, matching the ticket). This is a **soft, client-side**

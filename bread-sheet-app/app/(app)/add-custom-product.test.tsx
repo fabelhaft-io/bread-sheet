@@ -121,6 +121,51 @@ describe('AddCustomProductScreen', () => {
     expect(getByTestId('custom-product-create')).toHaveTextContent(/negroni/);
   });
 
+  // Review finding F1: `isLoading` only becomes true once the debounced
+  // request itself starts, ~300ms after the keystroke — before that,
+  // "Create" must not be offered at all, or the similarity gate below it is
+  // trivially bypassed against stale/empty results.
+  it('does NOT offer "Create" immediately after a searchable keystroke, before the debounce fires (F1)', async () => {
+    mockSearch.mockResolvedValue({
+      results: [result('x1', { name: 'Negroni', similarity: 0.95 })],
+      nextCursor: null,
+    });
+    const { getByTestId, queryByTestId } = await render(<AddCustomProductScreen />);
+
+    await fireEvent.changeText(getByTestId('custom-product-search-input'), 'negroni sbagliato');
+    // No timer advance at all — asserted the instant the keystroke lands.
+    expect(queryByTestId('custom-product-create')).toBeNull();
+    expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  // F1: a settled query's "loaded" state must not leak into a new, not-yet-
+  // settled query — otherwise typing a new name right after a previous
+  // search settled re-opens the same bypass window.
+  it('hides "Create" again for a new query until IT settles, even right after a previous query settled (F1)', async () => {
+    mockSearch.mockResolvedValueOnce({
+      results: [result('x1', { name: 'Daiquiri', similarity: 0.1 })],
+      nextCursor: null,
+    });
+    const { getByTestId, findByTestId, queryByTestId } = await render(<AddCustomProductScreen />);
+    await typeAndSettle(getByTestId, 'daiquiri');
+    await findByTestId('custom-product-create');
+
+    mockSearch.mockResolvedValueOnce({
+      results: [result('x2', { name: 'Negroni', similarity: 0.95 })],
+      nextCursor: null,
+    });
+    await fireEvent.changeText(getByTestId('custom-product-search-input'), 'negroni sbagliato');
+
+    // Still within the new query's debounce window — "Create" must be gone,
+    // not left over from "daiquiri" having settled a moment ago.
+    expect(queryByTestId('custom-product-create')).toBeNull();
+
+    await act(async () => {
+      jest.advanceTimersByTime(300);
+    });
+    await findByTestId('custom-product-create');
+  });
+
   it('renders search results including both kinds, and opens one on tap', async () => {
     mockSearch.mockResolvedValue({
       results: [result('x1', { name: 'Coca-Cola', kind: 'PACKAGED', brand: 'Coca-Cola Company', similarity: 0.95 })],
@@ -197,12 +242,25 @@ describe('AddCustomProductScreen', () => {
     });
   });
 
-  it('reports offline search via the existing offline copy', async () => {
+  it('reports offline search via the existing offline copy, and never offers "Create" (F1: a failed search never settles)', async () => {
     mockSearch.mockRejectedValue(new NetworkError());
-    const { getByTestId, findByTestId } = await render(<AddCustomProductScreen />);
+    const { getByTestId, findByTestId, queryByTestId } = await render(<AddCustomProductScreen />);
     await typeAndSettle(getByTestId, 'negroni');
 
     await findByTestId('custom-product-search-offline');
+    expect(queryByTestId('custom-product-create')).toBeNull();
+  });
+
+  // F1: a non-network failure must not count as "loaded" either — creation
+  // is online-only, and deciding "no duplicate" off a search that never came
+  // back is not a basis for skipping the soft gate.
+  it('never offers "Create" while the current query errored (non-network failure)', async () => {
+    mockSearch.mockRejectedValue(new ApiError(500, 'boom', {}));
+    const { getByTestId, findByTestId, queryByTestId } = await render(<AddCustomProductScreen />);
+    await typeAndSettle(getByTestId, 'negroni');
+
+    await findByTestId('custom-product-search-error');
+    expect(queryByTestId('custom-product-create')).toBeNull();
   });
 
   describe('create form', () => {

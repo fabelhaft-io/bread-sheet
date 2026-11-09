@@ -70,6 +70,7 @@ export default function AddCustomProductScreen() {
     error: searchError,
     hasMore: searchHasMore,
     loadMore: searchLoadMore,
+    hasSettled: searchHasSettled,
   } = useProductSearch(query, mode === 'search');
 
   const [duplicateCandidate, setDuplicateCandidate] = useState<ProductSearchResult | null>(null);
@@ -84,7 +85,17 @@ export default function AddCustomProductScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const canOfferCreateAction = canOfferCreate(query) && !searchLoading;
+  // F1 (review finding): `!searchLoading` is true for the whole DEBOUNCE_MS
+  // window after every keystroke too — `isLoading` is only set once the
+  // debounced request actually starts, so gating on it let "Create" render
+  // before any request for the current query had even been issued, against
+  // stale (or empty) `results`, bypassing the "Did you mean…?" soft gate
+  // entirely. `hasSettled` is true only once the *current* query's own
+  // request has itself succeeded; a failed or offline search never counts
+  // as settled, by design — creation is online-only anyway, and deciding
+  // "no duplicate" from a search that didn't load is not a basis for
+  // anything.
+  const canOfferCreateAction = canOfferCreate(query) && searchHasSettled;
 
   const startCreate = useCallback((prefillName: string) => {
     setName(prefillName);
@@ -97,6 +108,13 @@ export default function AddCustomProductScreen() {
   }, []);
 
   const handleCreatePress = useCallback(() => {
+    // Defence in depth (F1): `results` is only guaranteed to belong to the
+    // *current* query once `searchHasSettled` is true — the hook does not
+    // clear `results` the instant `query` changes, only once a fetch for
+    // the new query actually resolves. The button is hidden whenever this
+    // is false, but a caller that somehow reached this handler anyway must
+    // not run the similarity gate against a stale or empty list.
+    if (!canOfferCreateAction) return;
     if (!session || isAnonymous) {
       setMode('signup-gate');
       return;
@@ -108,7 +126,7 @@ export default function AddCustomProductScreen() {
     } else {
       startCreate(trimmedQuery);
     }
-  }, [session, isAnonymous, results, trimmedQuery, startCreate]);
+  }, [canOfferCreateAction, session, isAnonymous, results, trimmedQuery, startCreate]);
 
   const handleCapturePhoto = useCallback(async (source: CaptureSource) => {
     setPhotoError(null);
