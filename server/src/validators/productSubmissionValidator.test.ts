@@ -25,7 +25,25 @@ describe('validateProductSubmission', () => {
   describe('happy path', () => {
     it('returns the normalised payload when all fields are valid', () => {
       const result = validateProductSubmission(VALID_PAYLOAD);
-      expect(result).toEqual(VALID_PAYLOAD);
+      expect(result).toEqual({ ...VALID_PAYLOAD, suggestedCategory: null });
+    });
+
+    it('echoes back a valid suggestedCategory seed slug', () => {
+      const result = validateProductSubmission({ ...VALID_PAYLOAD, suggestedCategory: 'wine' });
+      expect(result.suggestedCategory).toBe('wine');
+    });
+
+    it('coerces an unknown suggestedCategory to null rather than rejecting the submission', () => {
+      const result = validateProductSubmission({
+        ...VALID_PAYLOAD,
+        suggestedCategory: 'not-a-real-seed',
+      });
+      expect(result.suggestedCategory).toBeNull();
+    });
+
+    it('defaults suggestedCategory to null when omitted', () => {
+      const result = validateProductSubmission(VALID_PAYLOAD);
+      expect(result.suggestedCategory).toBeNull();
     });
 
     it('trims whitespace from string fields', () => {

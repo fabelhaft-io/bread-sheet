@@ -5,6 +5,7 @@ const mockProductFindFirst = vi.hoisted(() => vi.fn());
 const mockRatingUpsert = vi.hoisted(() => vi.fn());
 const mockRatingFindMany = vi.hoisted(() => vi.fn());
 const mockRatingFindUnique = vi.hoisted(() => vi.fn());
+const mockResolveRatingCategory = vi.hoisted(() => vi.fn());
 
 vi.mock('../db.js', () => ({
   default: {
@@ -16,6 +17,16 @@ vi.mock('../db.js', () => ({
     },
   },
 }));
+
+// Category resolution (TICKET-P6-003) is unit-tested on its own in
+// categoryService.test.ts; here it's mocked so these tests stay about the
+// rating write path's own concerns (taste validation, upsert semantics).
+vi.mock('../services/categoryService.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/categoryService.js')>(
+    '../services/categoryService.js',
+  );
+  return { ...actual, resolveRatingCategory: mockResolveRatingCategory };
+});
 
 // Mutable per-test "session" so a test can switch to an anonymous caller
 // without re-mocking the module (same pattern as productController.test.ts).
@@ -48,6 +59,8 @@ describe('POST /api/ratings', () => {
     mockProductFindFirst.mockReset();
     mockRatingUpsert.mockReset();
     mockRatingFindUnique.mockReset();
+    mockResolveRatingCategory.mockReset();
+    mockResolveRatingCategory.mockResolvedValue({ kind: 'unset' });
     session.user = { id: 'user-1', email: 'test@test.com', isAnonymous: false };
   });
 
@@ -248,6 +261,135 @@ describe('POST /api/ratings', () => {
         update: expect.objectContaining({ comment: 'Tasty!' }),
       })
     );
+  });
+
+  // ── Categories (TICKET-P6-003) ──────────────────────────────────────────
+
+  it('omitting categoryId/seedSlug leaves an existing category untouched (outbox-safe replay)', async () => {
+    mockProductFindFirst.mockResolvedValue(PRODUCT);
+    mockRatingFindUnique.mockResolvedValue({ id: 1 });
+    mockResolveRatingCategory.mockResolvedValue({ kind: 'unset' });
+    mockRatingUpsert.mockResolvedValue({ id: 1, taste: 8, score: 8, product: PRODUCT, category: null });
+
+    await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ productId: PRODUCT_ID, taste: 8 });
+
+    const call = mockRatingUpsert.mock.calls[0][0];
+    expect(call.create).not.toHaveProperty('categoryId');
+    expect(call.update).not.toHaveProperty('categoryId');
+  });
+
+  it('categoryId: null explicitly clears the category', async () => {
+    mockProductFindFirst.mockResolvedValue(PRODUCT);
+    mockRatingFindUnique.mockResolvedValue({ id: 1 });
+    mockResolveRatingCategory.mockResolvedValue({ kind: 'set', categoryId: null });
+    mockRatingUpsert.mockResolvedValue({ id: 1, taste: 8, score: 8, product: PRODUCT, category: null });
+
+    await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ productId: PRODUCT_ID, taste: 8, categoryId: null });
+
+    const call = mockRatingUpsert.mock.calls[0][0];
+    expect(call.create.categoryId).toBeNull();
+    expect(call.update.categoryId).toBeNull();
+  });
+
+  it('a valid categoryId is applied to both create and update', async () => {
+    const CATEGORY_ID = '33333333-3333-4333-8333-333333333333';
+    mockProductFindFirst.mockResolvedValue(PRODUCT);
+    mockRatingFindUnique.mockResolvedValue(null);
+    mockResolveRatingCategory.mockResolvedValue({ kind: 'set', categoryId: CATEGORY_ID });
+    mockRatingUpsert.mockResolvedValue({
+      id: 6,
+      taste: 7,
+      score: 7,
+      product: PRODUCT,
+      category: { id: CATEGORY_ID, name: 'Wine' },
+    });
+
+    const res = await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ productId: PRODUCT_ID, taste: 7, categoryId: CATEGORY_ID });
+
+    expect(res.status).toBe(201);
+    expect(res.body.category).toEqual({ id: CATEGORY_ID, name: 'Wine' });
+    expect(mockRatingUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ categoryId: CATEGORY_ID }),
+        update: expect.objectContaining({ categoryId: CATEGORY_ID }),
+      }),
+    );
+  });
+
+  it('seedSlug find-or-creates the seed and assigns it in the same request', async () => {
+    mockProductFindFirst.mockResolvedValue(PRODUCT);
+    mockRatingFindUnique.mockResolvedValue(null);
+    mockResolveRatingCategory.mockResolvedValue({ kind: 'set', categoryId: 'cat-wine' });
+    mockRatingUpsert.mockResolvedValue({
+      id: 7,
+      taste: 9,
+      score: 9,
+      product: PRODUCT,
+      category: { id: 'cat-wine', name: 'Wine' },
+    });
+
+    const res = await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ productId: PRODUCT_ID, taste: 9, seedSlug: 'wine' });
+
+    expect(res.status).toBe(201);
+    expect(mockResolveRatingCategory).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ kind: 'seed', seedSlug: 'wine' }),
+    );
+    expect(mockRatingUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ categoryId: 'cat-wine' }),
+      }),
+    );
+  });
+
+  it('returns 400 when both categoryId and seedSlug are provided', async () => {
+    const res = await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ productId: PRODUCT_ID, taste: 9, categoryId: 'cat-1', seedSlug: 'wine' });
+
+    // Validation runs for real (only resolveRatingCategory is mocked), so this
+    // 400 comes from validateRatingCategoryFields itself.
+    expect(res.status).toBe(400);
+    expect(mockProductFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when categoryId doesn't belong to any category", async () => {
+    const { CategoryNotFoundError } = await import('../services/categoryService.js');
+    mockResolveRatingCategory.mockRejectedValue(new CategoryNotFoundError('cat-missing'));
+
+    const res = await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ productId: PRODUCT_ID, taste: 9, categoryId: '22222222-2222-4222-8222-222222222222' });
+
+    expect(res.status).toBe(404);
+    expect(mockProductFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when categoryId belongs to another user', async () => {
+    const { CategoryForbiddenError } = await import('../services/categoryService.js');
+    mockResolveRatingCategory.mockRejectedValue(new CategoryForbiddenError());
+
+    const res = await request(app)
+      .post('/api/ratings')
+      .set('Authorization', 'Bearer token')
+      .send({ productId: PRODUCT_ID, taste: 9, categoryId: '22222222-2222-4222-8222-222222222222' });
+
+    expect(res.status).toBe(403);
+    expect(mockProductFindFirst).not.toHaveBeenCalled();
   });
 });
 

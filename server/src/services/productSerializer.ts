@@ -49,6 +49,10 @@ export interface SerializableProduct {
   description: string | null;
   status: ProductStatus;
   submittedByUserId: string | null;
+  // TICKET-P6-003 — machine-derived suggestion, never a fact. See
+  // `Product.suggestedCategory` in schema.prisma. Always present on the
+  // response (not gated by visibility/anonymity — it carries no user data).
+  suggestedCategory: string | null;
   packaged: SerializablePackaged | null;
 }
 
@@ -67,6 +71,7 @@ export interface SerializedProduct {
   status: ProductStatus;
   unverified: boolean;
   submittedByUserId?: string | null;
+  suggestedCategory: string | null;
   packaged: SerializedPackaged | null;
   submission?: {
     name: string;
@@ -107,6 +112,7 @@ export function serializeProduct(
     description: product.description,
     status: product.status,
     unverified,
+    suggestedCategory: product.suggestedCategory,
     packaged,
   };
 

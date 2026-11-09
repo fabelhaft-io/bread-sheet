@@ -1,5 +1,6 @@
 import { ProductSubmissionInput } from '../services/productService.js';
 import { isValidUuid } from './idValidator.js';
+import { normalizeSuggestedCategory } from '../services/categorySuggestion.js';
 
 export class SubmissionValidationError extends Error {
   constructor(
@@ -85,10 +86,19 @@ export function validateProductSubmission(
     );
   }
 
+  // TICKET-P6-003 — optional, machine-derived suggestion the client echoes
+  // back from `POST /upload-image`'s `category` field (see
+  // `imagePlausibilityService.ts`). Never trusted blindly: anything that
+  // isn't one of the curated seed slugs collapses to `null` rather than
+  // rejecting the whole submission — it is a suggestion, not a claim the
+  // submitter is making.
+  const suggestedCategory = normalizeSuggestedCategory(b.suggestedCategory);
+
   return {
     ...validateSharedFields(b),
     gtin,
     productImageKey,
+    suggestedCategory,
   };
 }
 
@@ -98,8 +108,15 @@ export function validateProductSubmission(
  * instead of a GTIN, except `productImageKey` is optional — the client only
  * holds a resolved image URL, not the S3 key, so it omits the field unless
  * the photo was actually replaced. `null` = keep current image.
+ *
+ * `suggestedCategory` is deliberately excluded (TICKET-P6-003): it is
+ * machine-derived and recomputable, never part of what a correction changes
+ * — see `Product.suggestedCategory` in schema.prisma.
  */
-export type ProductCorrectionInput = Omit<ProductSubmissionInput, 'productImageKey' | 'gtin'> & {
+export type ProductCorrectionInput = Omit<
+  ProductSubmissionInput,
+  'productImageKey' | 'gtin' | 'suggestedCategory'
+> & {
   productId: string;
   productImageKey: string | null;
 };

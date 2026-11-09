@@ -24,6 +24,8 @@ docs {
   - VERIFIED products: unverified: false.
   - PENDING_REVIEW products: unverified: true, plus a flat submission object, and submittedByUserId for registered callers.
   - Nutrition/ingredients sit under `packaged` (null for a CUSTOM product), never at the top level.
+  - `suggestedCategory` (TICKET-P6-003) is a top-level, machine-derived seed slug or null — never shown
+    as fact, never inside `submission`. See List my categories / Create category for the seed list.
 
   Visibility (P5-007, via services/productVisibility.ts):
   - PENDING_REVIEW products are returned to every caller. The anonymous copy omits submittedByUserId — anonymous users cannot submit, and the field links a user UUID to content.

@@ -112,7 +112,44 @@ describe('fetchFromOpenFoodFacts', () => {
       brand: 'BakeryCo',
       image: 'https://example.com/img.jpg',
       description: 'Bread',
+      suggestedCategory: null,
     });
+  });
+
+  it('derives suggestedCategory from OFF categories_tags (TICKET-P6-003), first match wins', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValue(
+        makeResponse({
+          status: 1,
+          product: {
+            product_name: 'Chianti',
+            categories_tags: ['en:beverages', 'en:alcoholic-beverages', 'en:wines'],
+          },
+        }),
+      ),
+    );
+
+    const result = await fetchFromOpenFoodFacts('1234567890123');
+    expect(result?.suggestedCategory).toBe('wine');
+  });
+
+  it('suggestedCategory is null when categories_tags matches nothing known', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockReturnValue(
+        makeResponse({
+          status: 1,
+          product: {
+            product_name: 'Mystery Item',
+            categories_tags: ['en:some-unmapped-tag'],
+          },
+        }),
+      ),
+    );
+
+    const result = await fetchFromOpenFoodFacts('1234567890123');
+    expect(result?.suggestedCategory).toBeNull();
   });
 
   it('uses "Unknown Product" fallback and null fields when product data is sparse', async () => {
@@ -164,6 +201,7 @@ const VALID_INPUT: ProductSubmissionInput = {
   servingSize: '50g',
   productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
   ingredients: 'Flour, water, salt, yeast',
+  suggestedCategory: null,
 };
 
 describe('createSubmittedProduct', () => {

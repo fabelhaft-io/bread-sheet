@@ -30,6 +30,7 @@ const VERIFIED_PACKAGED: SerializableProduct = {
   description: null,
   status: ProductStatus.VERIFIED,
   submittedByUserId: 'user-1',
+  suggestedCategory: null,
   packaged: PACKAGED,
 };
 
@@ -102,6 +103,17 @@ describe('serializeProduct', () => {
     });
   });
 
+  it('exposes suggestedCategory (TICKET-P6-003), never inside the submission block', () => {
+    const pending: SerializableProduct = {
+      ...VERIFIED_PACKAGED,
+      status: ProductStatus.PENDING_REVIEW,
+      suggestedCategory: 'wine',
+    };
+    const result = serializeProduct(pending, { isAnonymous: false });
+    expect(result.suggestedCategory).toBe('wine');
+    expect(result.submission).not.toHaveProperty('suggestedCategory');
+  });
+
   it('never leaks a field outside the explicit allowlist', () => {
     const withExtras = {
       ...VERIFIED_PACKAGED,
@@ -114,7 +126,7 @@ describe('serializeProduct', () => {
 
     const result = serializeProduct(withExtras, { isAnonymous: false });
     expect(Object.keys(result).sort()).toEqual(
-      ['brand', 'description', 'id', 'image', 'kind', 'name', 'packaged', 'status', 'submittedByUserId', 'unverified'].sort(),
+      ['brand', 'description', 'id', 'image', 'kind', 'name', 'packaged', 'status', 'submittedByUserId', 'suggestedCategory', 'unverified'].sort(),
     );
     expect(result.packaged && Object.keys(result.packaged).sort()).toEqual(
       ['carbohydrates', 'energyKcal', 'fat', 'genericName', 'gtin', 'ingredients', 'protein', 'salt', 'saturatedFat', 'servingSize', 'sugars'].sort(),

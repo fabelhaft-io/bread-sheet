@@ -1422,6 +1422,28 @@ fails if it regresses.
 - [ ] Deliberately failing one `add-custom-product` test leaves the others green.
 - [ ] Rendering a packaged-only field for a `CUSTOM` product fails `edit-product.test.tsx`.
 
+### [TICKET-P6-015] Backfill `Product.suggestedCategory` for Already-Cached OFF Products
+**Goal:** `PACKAGED` products cached from Open Food Facts before TICKET-P6-003 shipped have
+`suggestedCategory: null` forever unless something re-fetches them — the OFF tag → seed-slug mapping
+(`services/categorySuggestion.ts`) only ever runs at the moment a GTIN is first resolved
+(`GET /products/gtin/:gtin`), which a product that's already in the local DB never goes through again.
+**Context:** P6-003's ticket text names exactly this gap and points at TICKET-P6-001's
+`backfill-off-metadata.ts` script as the natural home for the fix, since that script already re-fetches
+OFF (for allergens) for every cached `PACKAGED` product. TICKET-P6-001 itself is **not built** — this
+ticket is blocked on it and should not be started first.
+**Implementation:**
+- Once `backfill-off-metadata.ts` (TICKET-P6-001) exists, extend its per-product OFF re-fetch to also call
+  `suggestCategoryFromOffTags` on the response and write `Product.suggestedCategory` when it resolves to a
+  non-null slug and the column is currently `null` (never overwrite a value a later run already set, in
+  case the rule list has since been narrowed).
+- Record a before/after count of how many cached products gained a suggestion, same reporting convention
+  as TICKET-P6-010's migration.
+**Acceptance Criteria:**
+- [ ] Running the extended backfill script against a non-trivial local dataset sets `suggestedCategory` on
+      every `PACKAGED` product whose current OFF `categories_tags` map to a seed slug.
+- [ ] A product with no mapped tag is left `null`, not guessed from its name.
+- [ ] The before/after counts are recorded in the findings doc for this ticket.
+
 ## Phase 7: Auth Enhancements
 
 ### [TICKET-P7-001] Social Login Providers (Google, Apple)

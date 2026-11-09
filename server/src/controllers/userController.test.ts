@@ -108,4 +108,39 @@ describe('GET /api/users/me/ratings', () => {
       })
     );
   });
+
+  // TICKET-P6-003
+  it('includes each entry\'s category as { id, name } | null', async () => {
+    mockRatingFindMany.mockResolvedValue([
+      {
+        id: 4,
+        taste: 6,
+        product: { name: 'Chianti', image: null },
+        createdAt: '2026-04-07',
+        category: { id: 'cat-1', name: 'Wine' },
+      },
+      {
+        id: 5,
+        taste: 5,
+        product: { name: 'Water', image: null },
+        createdAt: '2026-04-06',
+        category: null,
+      },
+    ]);
+
+    const res = await request(app)
+      .get('/api/users/me/ratings')
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].category).toEqual({ id: 'cat-1', name: 'Wine' });
+    expect(res.body[1].category).toBeNull();
+    expect(mockRatingFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          category: { select: { id: true, name: true } },
+        }),
+      }),
+    );
+  });
 });

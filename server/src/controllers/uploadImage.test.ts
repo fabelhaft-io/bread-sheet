@@ -61,6 +61,7 @@ function okVerdict(overrides: Record<string, unknown> = {}) {
     name: 'Detected Name',
     brand: 'Detected Brand',
     genericName: 'detected category',
+    category: 'wine',
     ...overrides,
   };
 }
@@ -169,6 +170,7 @@ describe('POST /api/products/upload-image', () => {
       name: 'Detected Name',
       brand: 'Detected Brand',
       genericName: 'detected category',
+      category: 'wine',
     });
     expect(mockCheckImage).toHaveBeenCalledWith(FAKE_JPEG, 'image/jpeg', 'product');
     expect(mockUploadImageToS3).toHaveBeenCalledWith(FAKE_JPEG, 'product');
@@ -420,6 +422,7 @@ describe('POST /api/products/upload-image', () => {
     // A custom item has no brand or packaging-derived category.
     expect(res.body.brand).toBeUndefined();
     expect(res.body.genericName).toBeUndefined();
+    expect(res.body.category).toBeUndefined();
     expect(mockCheckImage).toHaveBeenCalledWith(FAKE_JPEG, 'image/jpeg', 'item');
     expect(mockUploadImageToS3).toHaveBeenCalledWith(FAKE_JPEG, 'item');
   });
@@ -460,5 +463,6 @@ describe('POST /api/products/upload-image', () => {
     expect(res.body.imageKey).toMatch(/^processed\//);
     expect(res.body.name).toBeUndefined();
     expect(res.body.brand).toBeUndefined();
+    expect(res.body.category).toBeUndefined();
   });
 });

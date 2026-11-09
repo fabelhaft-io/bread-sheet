@@ -134,6 +134,7 @@ const VALIDATED_PAYLOAD = {
   servingSize: '50g',
   productImageKey: 'processed/123e4567-e89b-42d3-a456-426614174000.jpg',
   ingredients: 'Flour, water, salt, yeast',
+  suggestedCategory: null,
 };
 
 function resetSession() {
@@ -472,6 +473,29 @@ describe('GET /api/products/:productId', () => {
       where: { id: PRODUCT_ID, status: { not: ProductStatus.REJECTED } },
       include: { packaged: true },
     });
+  });
+
+  it('exposes suggestedCategory (TICKET-P6-003) as a top-level field, never inside submission', async () => {
+    mockProductFindFirst.mockResolvedValue({
+      id: PRODUCT_ID,
+      kind: ProductKind.PACKAGED,
+      name: 'Chianti',
+      brand: null,
+      image: null,
+      description: null,
+      status: ProductStatus.PENDING_REVIEW,
+      submittedByUserId: 'user-1',
+      suggestedCategory: 'wine',
+      packaged: null,
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${PRODUCT_ID}`)
+      .set('Authorization', 'Bearer token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.suggestedCategory).toBe('wine');
+    expect(res.body.submission).not.toHaveProperty('suggestedCategory');
   });
 
   it('returns null packaged for a CUSTOM product', async () => {

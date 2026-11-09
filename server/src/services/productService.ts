@@ -1,6 +1,7 @@
 import { ProductKind, ProductStatus } from '../generated/prisma_client/enums.js';
 import prisma from '../db.js';
 import { Prisma } from '../generated/prisma_client/client.js';
+import { suggestCategoryFromOffTags } from './categorySuggestion.js';
 const OFF_API = 'https://world.openfoodfacts.org/api/v2/product';
 
 interface OFFResponse {
@@ -10,6 +11,7 @@ interface OFFResponse {
     brands?: string;
     image_url?: string;
     generic_name?: string;
+    categories_tags?: string[];
   };
 }
 
@@ -19,6 +21,9 @@ export interface ProductData {
   brand: string | null;
   image: string | null;
   description: string | null;
+  // TICKET-P6-003 — derived from OFF's own `categories_tags`, never from the
+  // name. See `services/categorySuggestion.ts`.
+  suggestedCategory: string | null;
 }
 
 // Returns null if the GTIN does not exist in OFF.
@@ -27,7 +32,7 @@ export async function fetchFromOpenFoodFacts(
   gtin: string,
 ): Promise<ProductData | null> {
   const res = await fetch(
-    `${OFF_API}/${gtin}?fields=product_name,brands,image_url,generic_name`,
+    `${OFF_API}/${gtin}?fields=product_name,brands,image_url,generic_name,categories_tags`,
     {
       signal: AbortSignal.timeout(5000),
     },
@@ -56,6 +61,7 @@ export async function fetchFromOpenFoodFacts(
     brand: product.brands?.trim() || null,
     image: product.image_url || null,
     description: product.generic_name?.trim() || null,
+    suggestedCategory: suggestCategoryFromOffTags(product.categories_tags),
   };
 }
 
@@ -75,6 +81,12 @@ export interface ProductSubmissionInput {
   /** S3 object key (`processed/{uuid}.jpg`) issued by POST /upload-image. */
   productImageKey: string;
   ingredients: string | null;
+  // TICKET-P6-003 — the `kind=product` plausibility response's `category`
+  // suggestion, echoed back by the client from `POST /upload-image` and
+  // persisted as `Product.suggestedCategory`. Re-validated against the seed
+  // list by the validator (`validateProductSubmission`), so this is always
+  // either a known seed slug or `null` by the time it reaches here.
+  suggestedCategory: string | null;
 }
 
 export type SubmissionAction = 'created' | 'updated';
@@ -232,6 +244,7 @@ function toProductData(payload: ProductSubmissionInput) {
     name: payload.name,
     brand: payload.brand,
     image: payload.productImageKey, // wire `productImageKey` → schema `image` (key, resolved to a URL at read time)
+    suggestedCategory: payload.suggestedCategory ?? null,
   };
 }
 

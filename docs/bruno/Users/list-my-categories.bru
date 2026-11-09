@@ -1,0 +1,26 @@
+meta {
+  name: List my categories
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/users/me/categories
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  TICKET-P6-003 — every `UserCategory` row the caller has materialised (seed-originated or custom), each
+  with how many of their own ratings currently carry it. `requireAuth` only — works for an anonymous
+  session too.
+
+  A seed (see `constants/categorySeeds.ts`) the caller has never picked simply has no row here — there is
+  nothing to filter.
+
+  Response: 200, an array of `{ id, name, slug, isSeed, createdAt, ratingCount }`.
+}

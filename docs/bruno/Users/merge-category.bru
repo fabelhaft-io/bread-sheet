@@ -1,0 +1,39 @@
+meta {
+  name: Merge category
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/api/users/me/categories/{{categoryId}}/merge
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "intoId": "{{targetCategoryId}}"
+  }
+}
+
+docs {
+  TICKET-P6-003 — the escape hatch for a fragmented list ("Wine" and "Wines" as two rows). Reassigns
+  every rating filed under the source (`:id`, in the URL) to the target (`intoId`, in the body), then
+  deletes the source, in one transaction.
+
+  Response:
+  - 200 `{ id, name, slug, isSeed, createdAt, ratingCount }` — the TARGET row, with its updated count.
+  - 400 `{ code: 'invalid_category_id' }` — `:id` is not a UUID.
+  - 400 `{ message, field }` — `intoId` is missing or not a UUID.
+  - 400 `{ error: 'self_merge', message }` — `:id` and `intoId` are the same category.
+  - 403 `{ error: 'category_forbidden', message }` — either category belongs to another user.
+  - 404 `{ error: 'category_not_found', message }` — either id doesn't exist.
+}

@@ -1,0 +1,39 @@
+meta {
+  name: Rename category
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/api/users/me/categories/{{categoryId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "Fine Wine"
+  }
+}
+
+docs {
+  TICKET-P6-003 — free, retroactive rename: one row changes, no per-rating writes.
+
+  Response:
+  - 200 `{ id, name, slug, isSeed, createdAt, ratingCount }`.
+  - 400 `{ code: 'invalid_category_id' }` — `:id` is not a UUID.
+  - 400 `{ message, field }` — validation error (bad name, or an unrecognised extra key).
+  - 403 `{ error: 'category_forbidden', message }` — the category belongs to another user.
+  - 404 `{ error: 'category_not_found', message }` — no category with that id.
+  - 409 `{ error: 'duplicate_category', categoryId, message }` — the new name re-slugifies to a slug the
+    caller already has on a *different* category (`categoryId` is that row's id). This is not a silent
+    merge — use Merge category if that's what's wanted.
+}

@@ -31,7 +31,8 @@ body:json {
     "salt": 0.5,
     "servingSize": "30g",
     "productImageKey": "{{productImageKey}}",
-    "ingredients": "oats, sugar, sunflower oil, salt"
+    "ingredients": "oats, sugar, sunflower oil, salt",
+    "suggestedCategory": "{{suggestedCategory}}"
   }
 }
 
@@ -55,4 +56,9 @@ docs {
 
   productImageKey must be a server-issued processed/{uuid}.jpg key — populate it by
   running Upload image first.
+
+  suggestedCategory (TICKET-P6-003, optional) — echoes back Upload image's `category` guess so it can
+  be persisted as `Product.suggestedCategory`. Anything that isn't one of `constants/categorySeeds.ts`'s
+  slugs is silently coerced to null rather than failing the submission (it's a suggestion, not a claim).
+  Never editable afterwards via Correct product / Propose product edit.
 }

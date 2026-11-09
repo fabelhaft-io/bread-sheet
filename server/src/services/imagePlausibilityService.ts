@@ -5,6 +5,7 @@ import { withGeminiDeadline } from './geminiDeadline.js';
 import { logGeminiUsage } from './geminiUsage.js';
 import { reserveGeminiCall } from './geminiQuota.js';
 import type { ImageKind } from './imageService.js';
+import { CATEGORY_SEEDS, isSeedSlug } from '../constants/categorySeeds.js';
 
 const MODEL = 'gemini-3.5-flash';
 
@@ -38,6 +39,12 @@ export interface PlausibilityResult {
   name: string | null;
   brand: string | null;
   genericName: string | null;
+  // TICKET-P6-003 — only meaningful for `kind === 'product'`. One of
+  // `constants/categorySeeds.ts`'s slugs, or `null`. Re-validated against
+  // that list below regardless of mode, so a model hallucination (or a
+  // stale prompt) can never persist an arbitrary string as
+  // `Product.suggestedCategory`.
+  category: string | null;
 }
 
 function buildPrompt(kind: ImageKind): string {
@@ -60,6 +67,11 @@ function buildPrompt(kind: ImageKind): string {
         ? `"name": only when verdict is "ok" and a confident, specific name is obvious from the image (e.g. a well-known cocktail), suggest one short display name; otherwise null. "brand", "genericName": always null — a custom item has no brand or packaging-derived category.`
         : `"name", "brand", "genericName": always null for label images.`;
 
+  const categoryRule =
+    kind === 'product'
+      ? `"category": only when verdict is "ok" and you are confident, pick the single best-fitting slug from this exact list: ${CATEGORY_SEEDS.map((s) => s.slug).join(', ')}. Use null if nothing fits confidently — never invent a slug outside this list.`
+      : `"category": always null — only product photos get a category suggestion.`;
+
   return `You are a content gate for a food-rating app. A user uploaded an image that is supposed to show ${subject}.
 
 Judge the image and return JSON matching the provided schema.
@@ -72,7 +84,9 @@ Judge the image and return JSON matching the provided schema.
 
 "reason": one short factual sentence describing what you see (for internal logging).
 
-${suggestionRule}`;
+${suggestionRule}
+
+${categoryRule}`;
 }
 
 const responseSchema = {
@@ -83,8 +97,9 @@ const responseSchema = {
     name: { type: Type.STRING, nullable: true },
     brand: { type: Type.STRING, nullable: true },
     genericName: { type: Type.STRING, nullable: true },
+    category: { type: Type.STRING, nullable: true },
   },
-  required: ['verdict', 'reason', 'name', 'brand', 'genericName'],
+  required: ['verdict', 'reason', 'name', 'brand', 'genericName', 'category'],
 };
 
 // Fixed verdict returned in mock mode regardless of image content, so the test
@@ -97,6 +112,10 @@ function checkMock(kind: ImageKind): PlausibilityResult {
     name: kind === 'product' ? 'Mock Product' : kind === 'item' ? 'Mock Item' : null,
     brand: kind === 'product' ? 'Mock Brand' : null,
     genericName: null,
+    // TICKET-P6-003: mock mode still returns a valid seed slug for kind=product
+    // so the downstream "validate against the seed list, else null" behaviour
+    // and the persistence path are exercisable without a live Gemini key.
+    category: kind === 'product' ? 'snacks' : null,
   };
 }
 
@@ -132,7 +151,11 @@ async function checkGemini(
   logGeminiUsage('plausibility', response.usageMetadata);
   const raw = response.text ?? '';
   logger.debug('plausibility:gemini raw response', { kind, length: raw.length, text: raw });
-  return JSON.parse(raw) as PlausibilityResult;
+  const parsed = JSON.parse(raw) as PlausibilityResult;
+  // TICKET-P6-003: validate against the seed list regardless of mode — a
+  // model hallucination (or a prompt drift) must never persist an arbitrary
+  // string as Product.suggestedCategory.
+  return { ...parsed, category: isSeedSlug(parsed.category) ? parsed.category : null };
 }
 
 /**
