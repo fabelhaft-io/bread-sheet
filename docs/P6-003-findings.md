@@ -292,8 +292,8 @@ disappears, Pinot Noir remains). It exercises the production path
    tab passes `categoryPredicateFor(...)` into it. CLAUDE.md's post-implementation step 2 covers
    "inline code comments or JSDoc on public interfaces that are now outdated". Not fixed here (the
    reviewer may not edit app source) and deliberately not treated as a blocker: it misleads a
-   reader, it does not mislead the program. Should be corrected in the PR or in a one-line
-   follow-up.
+   reader, it does not mislead the program. **Resolved in the PR** — the comment now describes the
+   chip ∧ query composition via `categoryPredicateFor`.
 4. **Minor, no AC implication:** in `createRating`, `resolveRatingCategory` runs *before* the
    product visibility lookup, so a `POST /api/ratings` with a valid `seedSlug` and a nonexistent
    `productId` materialises the seed `UserCategory` and then 404s. Harmless (the user did pick that
