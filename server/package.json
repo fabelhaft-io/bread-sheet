@@ -58,7 +58,7 @@
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "file-type": "^22.2.0",
-    "google-auth-library": "10.5.0",
+    "google-auth-library": "11.3.3",
     "multer": "^2.5.0",
     "pg": "^8.23.1",
     "sharp": "^0.35.5",
@@ -72,5 +72,10 @@
     "prisma@7.10.1": true,
     "protobufjs@7.6.6": true,
     "sharp@0.35.5": true
+  },
+  "overrides": {
+    "@google/genai": {
+      "google-auth-library": "$google-auth-library"
+    }
   }
 }
