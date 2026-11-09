@@ -1274,7 +1274,7 @@ a human approval even when every check is green.
 Routine remediation is `npm update` (in-range bumps) in each npm project, then `npm audit`; where
 nested duplicates survive, a **two-pass** `npm audit fix --package-lock-only` collapses them (the first
 pass leaves nested copies such as `brace-expansion` under `glob/` at the vulnerable version). Watch
-for duplicated libraries whose types are nominal — see the `google-auth-library` pin in
+for duplicated libraries whose types are nominal — see the `google-auth-library` pin and override in
 [`backend.md`](backend.md).
 
 The billing killswitch has **no lockfile**: Cloud Functions installs from `package.json` ranges at
