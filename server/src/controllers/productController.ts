@@ -108,6 +108,9 @@ export const getProductByGtin = async (req: AuthRequest, res: Response, next: Ne
             image: data.image,
             description: data.description,
             status: ProductStatus.VERIFIED,
+            // TICKET-P6-003: derived from OFF's own categories_tags, never guessed
+            // from the name — see services/categorySuggestion.ts.
+            suggestedCategory: data.suggestedCategory,
           },
         });
         const packaged = await tx.packagedProduct.create({
@@ -243,6 +246,9 @@ export const uploadImage = async (
         name: result.name,
         brand: result.brand,
         genericName: result.genericName,
+        // TICKET-P6-003: echoed back by the client as `suggestedCategory` on
+        // `POST /api/products` so it can be persisted with the submission.
+        category: result.category,
       });
     }
     // TICKET-P6-007: a custom item has no brand or packaging-derived

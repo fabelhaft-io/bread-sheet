@@ -83,6 +83,7 @@ function rating(
   name: string,
   brand: string | null,
   kind: 'PACKAGED' | 'CUSTOM' = 'PACKAGED',
+  category: RatingEntry['category'] = null,
 ): RatingEntry {
   return {
     id: `r-${id}`,
@@ -91,6 +92,7 @@ function rating(
     comment: null,
     createdAt: new Date().toISOString(),
     product: { id, kind, name, brand, image: null },
+    category,
   };
 }
 
@@ -197,12 +199,33 @@ describe('HomeScreen — Mine scope search (TICKET-P6-008 Slice A)', () => {
     await findByText('Negroni');
   });
 
-  // "Composes with the category chips" (deferred, TICKET-P6-003 not built):
-  // no chips exist yet, so there is nothing to exercise end-to-end at the
-  // screen level. `filterRatingsByQuery`'s `categoryPredicate` is already the
-  // AND-composition point P6-003's chips will plug into, and that composition
-  // is covered for real in `features/search/match.test.ts` ("composes with an
-  // optional category predicate").
+  // TICKET-P6-003: the category chip row composes with the search query
+  // (AND) via `categoryPredicateFor` passed into `filterRatingsByQuery` as
+  // its `categoryPredicate`. The pure composition is also covered directly
+  // in `features/search/match.test.ts` ("composes with an optional category
+  // predicate"); this is the screen-level version, closing the P6-008 box.
+  it('composes the category chip with the search query (AND)', async () => {
+    mockApiGet.mockResolvedValue([
+      rating('p1', 'Pinot Noir', null, 'PACKAGED', { id: 'cat-wine', name: 'Wine' }),
+      rating('p2', 'Chardonnay', null, 'PACKAGED', { id: 'cat-wine', name: 'Wine' }),
+      rating('p3', 'Negroni', null, 'CUSTOM', { id: 'cat-cocktails', name: 'Cocktails' }),
+    ]);
+
+    const { findByText, queryByText, getByTestId, findByTestId } = await render(<HomeScreen />);
+    await findByText('Pinot Noir');
+
+    // Selecting the "Wine" chip scopes the list to the two wine ratings only.
+    const wineChip = await findByTestId('category-chip-cat-wine');
+    await fireEvent.press(wineChip);
+    await waitFor(() => expect(queryByText('Negroni')).toBeNull());
+    expect(queryByText('Pinot Noir')).toBeTruthy();
+    expect(queryByText('Chardonnay')).toBeTruthy();
+
+    // AND with the search query narrows further, to just "Pinot Noir".
+    await fireEvent.changeText(getByTestId('home-search-input'), 'pinot');
+    await waitFor(() => expect(queryByText('Chardonnay')).toBeNull());
+    expect(queryByText('Pinot Noir')).toBeTruthy();
+  });
 
   it('does not persist the query across a remount (cold start)', async () => {
     mockApiGet.mockResolvedValue([rating('p1', 'Coca-Cola', null), rating('p2', 'Rye Bread', null)]);

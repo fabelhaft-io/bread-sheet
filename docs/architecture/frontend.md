@@ -377,7 +377,7 @@ One search bar in the Home tab header (`app/(tabs)/index.tsx`), with a scope tog
 (`home-search-scope-mine` / `home-search-scope-all`) that defaults to **Mine**. The same `query`
 state drives both scopes — switching scope re-interprets what's already typed rather than
 clearing it, and the query itself is plain component state, so it does **not** survive a cold
-start (unlike the P6-003 category-chip selection, which will be persisted).
+start (unlike the P6-003 category-chip selection below, which is persisted).
 
 **Slice A — Mine.** Filters the ratings list already loaded by
 `useCachedResource` in memory: no endpoint, no request, works offline for free because it
@@ -388,10 +388,10 @@ in `features/search/match.ts`:
   is plain `String.includes` over two normalized strings — never a regex built from user input
   (CLAUDE.md's regex convention), and it has no backtracking failure mode to guard against in the
   first place.
-- `filterRatingsByQuery(entries, query, categoryPredicate?)` is the AND-composition point the
-  (not yet built) P6-003 category chips are meant to plug into — `categoryPredicate` is accepted
-  and applied today, but no caller passes one yet. **Deferred, not built**, recorded here rather
-  than silently dropped.
+- `filterRatingsByQuery(entries, query, categoryPredicate?)` is the AND-composition point
+  TICKET-P6-003's category chips (below) plug into: the Home screen passes
+  `categoryPredicateFor(categoryFilter)` as `categoryPredicate`, so the selected chip and the
+  typed query narrow the list together rather than either one alone.
 - Matching never depends on `brand` being present (it's nullable on `RatedProduct`), which is
   what makes a TICKET-P6-007 barcode-less custom product (`brand: null`) findable by name alone —
   see `features/search/match.test.ts` and `app/(tabs)/home-search-mine.test.tsx`'s `CUSTOM`
@@ -457,6 +457,115 @@ param — the Home screen consumes it once (mirrors the P9-003 scan-injection se
 consumed-once-per-arrival pattern: a ref tracks the last-seen value so re-focusing the tab later
 doesn't re-trigger it), flips the scope, and clears the param via `router.setParams`. Every
 existing scan-tab `testID` is unchanged.
+
+---
+
+## Categories — User-Owned Labels (TICKET-P6-003)
+
+A category is a label the **user** owns, kept deliberately separate from `ProductDetail.suggestedCategory`
+(a machine-derived guess, exposed by the backend but never rendered as fact — see the ticket's
+"label vs. suggestion" design stance). All of the pure logic lives in `features/categories/`, so
+every screen and component below stays UI-only:
+
+| File | Responsibility |
+|------|-----------------|
+| `types.ts` | `UserCategory`, `RatingCategory` (the narrower shape embedded on a rating), `CreateCategoryPayload` |
+| `api.ts` | `listMyCategories`, `createCategory`, `renameCategory`, `deleteCategory`, `mergeCategory` — thin wrappers over `lib/api.ts`, one per backend route |
+| `seeds.ts` | `CATEGORY_SEEDS` — mirrors `server/src/constants/categorySeeds.ts` verbatim (23 slugs, no `other`) |
+| `validation.ts` | `validateCategoryName` — 1–24 raw chars, mirrors the server's own check |
+| `match.ts` | `findNearMatch` / `nameSimilarity` — plain-string Levenshtein distance for the "Did you mean…?" nudge. **No regex**: both inputs are already capped at 24 raw characters by `validation.ts` before this ever runs, and the distance function is ordinary nested-loop arithmetic, not pattern matching |
+| `picker.ts` | `mapSuggestion`, `sortOwnCategories`, `unusedSeeds`, `buildRatingCategoryFields` — the rating screen's picker logic |
+| `filter.ts` | `buildCategoryChips`, `categoryPredicateFor`, `isSelectionVisible` — the Home tab's chip row |
+
+**Rating screen (`app/(app)/product/[id].tsx`) — the category row.** Sits beneath the taste
+control, backed by `hooks/use-my-categories.ts` (the same stale-while-revalidate
+`useCachedResource` pattern the ratings list uses, over a new `categoriesCache` document).
+`mapSuggestion(product.suggestedCategory, categories)` decides what the row shows by default:
+
+- An **existing** own category with a matching slug → pre-selected *and already applied* — the
+  AC is that this is sent on submit with no further tap, not merely shown, so the effect that
+  applies it also marks the selection "touched" immediately. Re-opening a rating that is already
+  categorised always wins over the suggestion (it isn't second-guessed).
+- A **seed** with no existing match → offered as a one-tap chip (`category-chip-suggestion`,
+  "+ Wine") that is deliberately *not* pre-applied — nothing is selected until the user acts, so
+  nothing is written before they do.
+- Neither → a plain "+ Add category" chip (`category-chip-add`).
+
+Tapping the chip (once something is selected) or the "Change"/"Browse" link
+(`category-change-link`) opens `components/category-picker-sheet.tsx`: own categories most-used
+first (`sortOwnCategories`), then unused seeds (`unusedSeeds`), then "+ New category". The sheet
+is pure presentation — every network call is a prop the screen supplies
+(`onSelectExisting`/`onSelectSeed`/`onCreate`/`onClear`, each returning `{ ok: true } | { ok:
+false, message }` rather than throwing), so it never imports `lib/api` directly. Picking a seed
+(the suggestion chip, or a row in the picker) calls `createCategory({ seedSlug })` — find-or-create,
+so this is safe to call unconditionally. If that call throws a `NetworkError`, the screen falls
+back to carrying the bare seed slug as the selection instead of surfacing an error: `POST
+/api/ratings` accepts `seedSlug` directly and resolves it server-side, so rating and categorising
+in one request still works **offline**. A brand-new custom name ("+ New category") is online-only
+by design — creating one needs the near-match check (`findNearMatch`, threshold 0.7, against the
+caller's own categories *and* the seed list) run against a live list, and rejecting the "Did you
+mean…?" nudge still creates the typed name.
+
+`buildRatingCategoryFields(selection, touched)` decides what the rating write actually sends:
+omitted entirely when the user never touched the control (which is what leaves an *existing*
+rating's category untouched per the backend contract — a stale offline retry must not wipe a
+category assigned since), `categoryId: null` for an explicit removal (`category-chip-remove`),
+`categoryId`/`seedSlug` otherwise. The offline rating outbox (`lib/offline/outbox.ts`)
+carries both fields straight through `OutboxRating` — each `enqueueRating` call already carries
+the complete current intent (not a partial patch), so collapsing repeated offline edits of the
+same product already keeps the latest category decision for free, with no extra merge logic.
+
+**Home tab (`app/(tabs)/index.tsx`) — the chip row.** `CategoryChipRow`, rendered above "My
+Ratings" whenever there is at least one rating, shows "All", one chip per category actually
+present in the already-cached ratings list with its count (`buildCategoryChips`, most-used
+first), then "Uncategorised" last when any rating lacks one — purely derived from the list
+`useCachedResource` already painted, so this costs **no request** and works offline exactly like
+Mine-scope search. The selected chip (`categoryFilter` state) is persisted across restarts in a
+new `categoryFilterCache` document (`lib/offline/caches.ts`, user-namespaced like every other
+offline document) and composes with the search query via `categoryPredicateFor`, passed as
+`filterRatingsByQuery`'s `categoryPredicate` (see *Search*, above — the two AND together). If the
+persisted selection no longer corresponds to a visible chip — its category was deleted, merged
+away, or simply has no ratings left — an effect falls back to "All" (`isSelectionVisible`) rather
+than silently filtering the list to nothing.
+
+**Manage Categories (`app/(app)/manage-categories.tsx`).** Reachable from the profile tab's new
+"Organise" section (`manage-categories` route, registered in `app/(app)/_layout.tsx`), this lists
+the caller's own categories (`sortOwnCategories`, most-used first) with their rating counts and
+three inline actions per row: **Rename** (text input, same `validateCategoryName` check as the
+picker), **Merge** (pick a target from the remaining categories in the list — reassigns, then
+deletes the source server-side), and **Delete**, whose confirmation copy explicitly says ratings
+are kept and become uncategorised ("Ratings tagged with "X" will keep their rating but become
+uncategorised. This cannot be undone.") — never implying a rating itself is removed. All three
+actions are plain network requests (no offline queue; categories are cheap and these actions are
+rare enough that the outbox's complexity isn't worth it here) and show a row-scoped error on
+failure rather than a screen-wide one.
+
+**`lib/api.ts`'s `204 No Content` case.** `DELETE /api/users/me/categories/:id` is the first
+endpoint in this API to ever return an empty body. The generic `request()` wrapper used to call
+`res.json()` unconditionally on a 2xx response — which throws on an empty body — so a successful
+delete would have surfaced to the caller as a thrown error. `request()` now short-circuits to
+`undefined` on a `204` before attempting to parse anything.
+
+**Cache version bumped to 3.** `RatingEntry.category` became a required field (not optional) and
+`OutboxRating` grew `categoryId`/`seedSlug`. Per the project's no-install-base policy this ships
+as a clean wipe (`lib/offline/store.ts#CACHE_SCHEMA_VERSION`) rather than a migration — there is
+nobody's cache to preserve.
+
+**Absent from the edit flow, by design.** `ProductDetail.suggestedCategory` never appears in
+`features/products/edit-form.ts` or its `ProductEditChanges` payload — it is machine-derived,
+freely recomputable, and never peer-reviewed, so it has no place in the P5-006 edit diff screens
+(`edit-product/[id].tsx`, `review-edit/[editId].tsx`).
+
+**Where a brand-new product's suggestion comes from.** A product created via `GET
+/api/products/gtin/:gtin` gets `suggestedCategory` from Open Food Facts' own category tags,
+server-side — no client involvement. A product created via **Add Product**
+(`app/(app)/add-product.tsx`, TICKET-P5-002) has no OFF data to draw on, so the client is the one
+that has to carry it: `uploadProductImage(uri, 'product', authHeader)` now also returns a
+`category` guess (`ProductImageUploadResult.category`, `kind: 'product'` only — always `null` for
+`label`/`item`), captured into its own piece of state (not folded into `PhotoSuggestion`/`FormState`,
+since it isn't a user-editable text field) and echoed back verbatim as
+`ProductSubmission.suggestedCategory` when the form is submitted. A rejected or re-captured photo
+clears it alongside the other photo-derived suggestions.
 
 ---
 

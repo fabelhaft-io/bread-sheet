@@ -212,6 +212,12 @@ function AddProductFlow({
   const [productImageKey, setProductImageKey] = useState<string | null>(null);
   // Front-of-pack name/brand/genericName read off the product photo.
   const [suggestion, setSuggestion] = useState<PhotoSuggestion | null>(null);
+  // TICKET-P6-003: the plausibility check's category guess for the product
+  // photo — a seed slug or `null`, echoed back verbatim on submission as
+  // `suggestedCategory` so it can be persisted onto `Product.suggestedCategory`.
+  // Not a form field (never user-editable text), so it's tracked separately
+  // from `suggestion`/`FormState` rather than folded into `applyPhotoSuggestion`.
+  const [suggestedCategory, setSuggestedCategory] = useState<string | null>(null);
   const [labelPhotoUri, setLabelPhotoUri] = useState<string | null>(null);
   const [processingSlot, setProcessingSlot] = useState<'product' | 'label' | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
@@ -255,6 +261,7 @@ function AddProductFlow({
             brand: uploaded.brand,
             genericName: uploaded.genericName,
           });
+          setSuggestedCategory(uploaded.category);
         } else {
           setLabelPhotoUri(processed.uri);
         }
@@ -269,6 +276,7 @@ function AddProductFlow({
             setProductPhotoUri(null);
             setProductImageKey(null);
             setSuggestion(null);
+            setSuggestedCategory(null);
           }
         } else {
           // Local/network failure before a structured API response (e.g. image
@@ -395,6 +403,7 @@ function AddProductFlow({
         servingSize: form.servingSize.trim() || null,
         productImageKey,
         ingredients: form.ingredients.trim() || null,
+        suggestedCategory,
       };
 
       const result = await submitProduct(payload);
@@ -420,7 +429,7 @@ function AddProductFlow({
       }
       setStep('review');
     }
-  }, [productPhotoUri, productImageKey, canSubmit, form, gtinInput, onSubmitted]);
+  }, [productPhotoUri, productImageKey, canSubmit, form, gtinInput, suggestedCategory, onSubmitted]);
 
   // ─── Rendering ────────────────────────────────────────────────────────
   if (step === 'extracting') {

@@ -34,6 +34,8 @@ Anonymous (guest) users have a Supabase UUID and session but no email or usernam
 | Edit proposals | `ProductEdit.*` | No (content); pseudonymous (authorUserId) | |
 | Edit votes | `ProductEditVote.*` | Pseudonymous | `userId` only; vote itself is not PII |
 | Peer verification vote | `ProductVerification.vote` | Pseudonymous | `userId` links vote to user UUID; `vote` value (`APPROVE`/`REJECT`) is not PII |
+| Category label | `UserCategory.name`/`.slug` | Potentially | TICKET-P6-003 — a free-text name the user picks for their own organisation ("Wine", "Dad's Cigars"); private to the owning `userId`, never exposed to another user. Seed-originated rows (`isSeed: true`) carry only a curated name and are not user-authored text |
+| Rating category assignment | `Rating.categoryId` | Pseudonymous | Links a rating to one of the user's own `UserCategory` rows; never visible to another user (enforced by `requireAuth`-scoped routes, not peer-visible like a rating's score/comment) |
 
 ### 1.3 Behavioural / Derived Data
 
@@ -42,6 +44,7 @@ Anonymous (guest) users have a Supabase UUID and session but no email or usernam
 | Recently viewed products | `RecentProductsProvider` context | No | In-memory only; not persisted to DB or server |
 | Plausibility flag | `Product.plausibilityFlag` | No | Internal moderation signal |
 | Verification count | Derived from `ProductVerification` | No | |
+| Suggested category | `Product.suggestedCategory` | No | TICKET-P6-003 — machine-derived (OFF `categories_tags` or the image-plausibility response), never user-authored, never a fact about who submitted it |
 
 ### 1.4 Infrastructure / Session Data
 
@@ -131,7 +134,11 @@ When a registered user uploads a product photo:
 ```
 User ──────────────────────────────────────────────┐
  │                                                  │
- ├─── Rating (userId, productId, taste, comment)    │
+ ├─── Rating (userId, productId, taste, comment,    │
+ │        categoryId? FK → UserCategory)            │
+ │         │                                        │
+ ├─── UserCategory (id PK, userId, name, slug,      │
+ │        isSeed, createdAt) — private to userId     │
  │                                                  │
  ├─── GroupMember (userId, groupId, role)           │
  │         │                                        │
@@ -146,7 +153,7 @@ User ─────────────────────────
  │         └─── ProductEditDismissal (editId, userId)
  │                                                  │
  └─── Product (id PK, kind PACKAGED|CUSTOM, name,  ◄┘
-          brand, image, status,        (submittedByUserId)
+          brand, image, status, suggestedCategory?,
           submittedByUserId?)
                │
                └─── PackagedProduct (productId 1:1 FK, gtin unique,
@@ -158,9 +165,15 @@ User ─────────────────────────
 
 TICKET-P6-009 (ADR 0006) split the single `Product` table above: the GTIN,
 nutrition and ingredient fields moved to the 1:1 `PackagedProduct` table so
-that a future `CUSTOM` product (P6-007, not yet built — no rows exist yet)
-cannot hold label data at all. `submittedByUserId` and the peer-review /
-edit lifecycle are unchanged and still live on `Product`.
+that a `CUSTOM` product (P6-007) cannot hold label data at all.
+`submittedByUserId` and the peer-review / edit lifecycle are unchanged and
+still live on `Product`.
+
+TICKET-P6-003 added `UserCategory` (a private, user-owned organisational
+label — never peer-reviewed, never visible to another user) and two new
+columns: `Rating.categoryId` (the user's own label on their own rating,
+`onDelete: SetNull`) and `Product.suggestedCategory` (machine-derived, never
+user-authored, never a fact anyone claims — see §1.2/§1.3 above).
 
 Full schema with types and constraints: `server/prisma/schema.prisma`.
 

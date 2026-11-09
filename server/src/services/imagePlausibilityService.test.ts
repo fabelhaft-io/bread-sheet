@@ -35,6 +35,7 @@ const OK_RESPONSE = {
   name: 'Oat Drink',
   brand: 'Alpro',
   genericName: 'Oat drink',
+  category: 'dairy',
 };
 
 describe('imagePlausibilityService', () => {
@@ -87,6 +88,25 @@ describe('imagePlausibilityService', () => {
       expect(result.verdict).toBe('ok');
       expect(result.name).toBeNull();
       expect(result.brand).toBeNull();
+      expect(result.category).toBeNull();
+    });
+
+    // TICKET-P6-003: mock mode exercises the category field too, so the
+    // "validate against the seed list" behaviour downstream has something to
+    // persist without needing a live Gemini key.
+    it('returns a valid seed slug as category for product photos', async () => {
+      const { checkImage } = await import('./imagePlausibilityService.js');
+      const result = await checkImage(Buffer.from('x'), 'image/jpeg', 'product');
+
+      const { isSeedSlug } = await import('../constants/categorySeeds.js');
+      expect(isSeedSlug(result.category)).toBe(true);
+    });
+
+    it('returns null category for item photos — no packaging to read a category from', async () => {
+      const { checkImage } = await import('./imagePlausibilityService.js');
+      const result = await checkImage(Buffer.from('x'), 'image/jpeg', 'item');
+
+      expect(result.category).toBeNull();
     });
 
     it('never consults the daily quota', async () => {
@@ -184,6 +204,30 @@ describe('imagePlausibilityService', () => {
       const reserveOrder = mockReserveGeminiCall.mock.invocationCallOrder[0]!;
       const callOrder = mockGenerateContent.mock.invocationCallOrder[0]!;
       expect(reserveOrder).toBeLessThan(callOrder);
+    });
+
+    // TICKET-P6-003: a model hallucination outside the curated seed list must
+    // never reach Product.suggestedCategory.
+    it('coerces a category outside the seed list to null', async () => {
+      mockGenerateContent.mockResolvedValue({
+        text: JSON.stringify({ ...OK_RESPONSE, category: 'made-up-category' }),
+      });
+      const { checkImage } = await import('./imagePlausibilityService.js');
+
+      const result = await checkImage(Buffer.from('x'), 'image/jpeg', 'product');
+
+      expect(result.category).toBeNull();
+    });
+
+    it('passes through a valid seed slug for category', async () => {
+      mockGenerateContent.mockResolvedValue({
+        text: JSON.stringify({ ...OK_RESPONSE, category: 'wine' }),
+      });
+      const { checkImage } = await import('./imagePlausibilityService.js');
+
+      const result = await checkImage(Buffer.from('x'), 'image/jpeg', 'product');
+
+      expect(result.category).toBe('wine');
     });
 
     it('never calls Gemini once the daily cap is exhausted', async () => {

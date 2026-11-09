@@ -25,7 +25,12 @@ docs {
   falls back to Open Food Facts and creates the Product + PackagedProduct rows in one transaction.
 
   Response shape: { id, kind, name, brand, image, description, status, unverified,
-  submittedByUserId?, packaged: { gtin, genericName, ...nutrition, ingredients } | null, submission? }.
+  submittedByUserId?, suggestedCategory, packaged: { gtin, genericName, ...nutrition, ingredients } |
+  null, submission? }.
+
+  suggestedCategory (TICKET-P6-003) is machine-derived from Open Food Facts' own categories_tags (never
+  from the name), one of constants/categorySeeds.ts's slugs or null. Never shown as fact — it only
+  exists to pre-select the rating screen's category picker.
 
   - All products include unverified: boolean.
   - VERIFIED products: unverified: false.

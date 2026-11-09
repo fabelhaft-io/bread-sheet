@@ -43,11 +43,10 @@ export function matchesNameOrBrand(
 /**
  * Filters a list of rating-shaped entries by product name/brand.
  *
- * `categoryPredicate` is the composition point TICKET-P6-003's category
- * chips are meant to plug into later (`category = cocktails AND query =
- * "negroni"`, per the ticket) — chips don't exist yet, so this parameter is
- * unused by any caller today, but the AND-composition shape is already here
- * so Slice A doesn't need to change when they land. **Deferred, not built.**
+ * `categoryPredicate` is how the Home tab's TICKET-P6-003 category chips
+ * compose with the query (`category = cocktails AND query = "negroni"`): the
+ * selected chip's predicate (`features/categories/filter.ts`
+ * `categoryPredicateFor`) is ANDed with the name/brand match.
  */
 export function filterRatingsByQuery<T extends { product: { name: string; brand: string | null } }>(
   entries: T[],

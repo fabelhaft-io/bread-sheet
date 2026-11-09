@@ -20,6 +20,15 @@ import { AddChoiceSheet } from '@/components/add-choice-sheet';
 import { ManualBarcodeSheet } from '@/components/manual-barcode-sheet';
 import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
+import {
+  ALL_FILTER,
+  UNCATEGORIZED_CHIP_ID,
+  buildCategoryChips,
+  categoryPredicateFor,
+  isSelectionVisible,
+  type CategoryChip,
+  type CategoryFilterSelection,
+} from '@/features/categories/filter';
 import type { RatingEntry } from '@/features/ratings/types';
 import { isSearchableQuery, type ProductSearchResult } from '@/features/search/api';
 import { filterRatingsByQuery } from '@/features/search/match';
@@ -31,7 +40,7 @@ import { useProductSearch } from '@/hooks/use-product-search';
 import { useSession } from '@/hooks/use-session';
 import { useRecentProducts, RecentProduct } from '@/hooks/use-recent-products';
 import { api } from '@/lib/api';
-import { ratingsCache } from '@/lib/offline/caches';
+import { categoryFilterCache, ratingsCache } from '@/lib/offline/caches';
 import { formatApiError, OFFLINE_MESSAGE } from '@/lib/format-error';
 
 /** TICKET-P6-008 — the search bar's scope toggle. Defaults to "Mine". */
@@ -427,6 +436,104 @@ function SearchResultCard({
   );
 }
 
+// ─── Category chips (TICKET-P6-003) ───────────────────────────────────────────
+
+/**
+ * "All", one chip per category the user has ratings in (most-used first,
+ * counts included), then "Uncategorised" when applicable. Purely derived
+ * from the already-cached ratings list — no request, works offline — and
+ * composes with the Mine-scope search box via `categoryPredicateFor`
+ * (TICKET-P6-008's deferred AND-composition point).
+ */
+function CategoryChipRow({
+  chips,
+  selection,
+  onSelect,
+  colors,
+  compact,
+}: {
+  chips: CategoryChip[];
+  selection: CategoryFilterSelection;
+  onSelect: (next: CategoryFilterSelection) => void;
+  colors: typeof Colors.light;
+  compact: boolean;
+}) {
+  return (
+    <ScrollView
+      testID="category-chip-row"
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={[chipRowStyles.container, compact && compactStyles.searchContainer]}
+      contentContainerStyle={chipRowStyles.content}
+    >
+      <TouchableOpacity
+        testID="category-chip-all"
+        accessibilityRole="button"
+        accessibilityState={{ selected: selection.kind === 'all' }}
+        style={[
+          chipRowStyles.chip,
+          selection.kind === 'all' && { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+        ]}
+        onPress={() => onSelect(ALL_FILTER)}
+      >
+        <Text
+          style={[chipRowStyles.chipText, { color: selection.kind === 'all' ? colors.tint : colors.icon }]}
+        >
+          All
+        </Text>
+      </TouchableOpacity>
+      {chips.map((chip) => {
+        const isUncategorized = chip.id === UNCATEGORIZED_CHIP_ID;
+        const next: CategoryFilterSelection = isUncategorized
+          ? { kind: 'uncategorized' }
+          : { kind: 'category', id: chip.id, name: chip.name };
+        const selected =
+          (isUncategorized && selection.kind === 'uncategorized') ||
+          (selection.kind === 'category' && selection.id === chip.id);
+        return (
+          <TouchableOpacity
+            key={chip.id}
+            testID={isUncategorized ? 'category-chip-uncategorized' : `category-chip-${chip.id}`}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            style={[
+              chipRowStyles.chip,
+              selected && { backgroundColor: colors.tint + '22', borderColor: colors.tint },
+            ]}
+            onPress={() => onSelect(next)}
+          >
+            <Text style={[chipRowStyles.chipText, { color: selected ? colors.tint : colors.icon }]}>
+              {chip.name} ({chip.count})
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+const chipRowStyles = StyleSheet.create({
+  container: {
+    marginTop: 12,
+  },
+  content: {
+    paddingHorizontal: 16,
+    gap: 8,
+    flexDirection: 'row',
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  chipText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+});
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function HomeScreen() {
@@ -487,11 +594,59 @@ export default function HomeScreen() {
     searchInputRef.current?.focus();
   }, [focusSearch, router]);
 
+  // ─── Category chips (TICKET-P6-003) ─────────────────────────────────────
+  // The selected chip is a view preference, not a server resource, but is
+  // still persisted the same way (user-namespaced, on disk) so it survives a
+  // restart. Seeded synchronously from the in-memory mirror so a warm value
+  // paints in the first frame, same convention `useCachedResource` uses.
+  const [categoryFilter, setCategoryFilterState] = useState<CategoryFilterSelection>(
+    () => categoryFilterCache.peek() ?? ALL_FILTER,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    categoryFilterCache.read().then((stored) => {
+      if (!cancelled && stored) setCategoryFilterState(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setCategoryFilter = useCallback((next: CategoryFilterSelection) => {
+    setCategoryFilterState(next);
+    void categoryFilterCache.write(next);
+  }, []);
+
+  const categoryChips = ratings ? buildCategoryChips(ratings) : [];
+
+  // The category chip row only ever shows what the list in front of the user
+  // actually contains — if the selection no longer corresponds to a visible
+  // chip (its category was deleted, merged away, or lost its last rating),
+  // fall back to "All" rather than silently filtering to nothing. This is a
+  // reaction to `ratings` finishing an asynchronous load/revalidation — not
+  // something derivable during render — so it belongs in an effect, same as
+  // the other "sync against an external, asynchronously-arriving read"
+  // effects in this codebase (e.g. `product/[id].tsx`'s pending-edit lookup).
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!ratings) return;
+    if (!isSelectionVisible(categoryFilter, categoryChips)) setCategoryFilter(ALL_FILTER);
+    // `categoryChips` is derived from `ratings` every render; comparing by
+    // `ratings` identity (set by `useCachedResource`) is enough to re-check
+    // this exactly when the list itself changes, without an unstable
+    // array dependency re-running the effect every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ratings, categoryFilter]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   // Slice A: filters the already-cached ratings list in memory — no network
   // request, works offline, instant. `null` ratings (nothing loaded yet /
   // errored) stays `null` so the existing loading/error/offline branches
-  // below are unaffected by the query.
-  const mineResults = ratings ? filterRatingsByQuery(ratings, searchQuery) : ratings;
+  // below are unaffected by the query. Composes with the category chip via
+  // `categoryPredicateFor` — TICKET-P6-008's AND-composition point.
+  const mineResults = ratings
+    ? filterRatingsByQuery(ratings, searchQuery, categoryPredicateFor(categoryFilter))
+    : ratings;
   const trimmedQuery = searchQuery.trim();
 
   // Slice B: global search, active only in the "All products" scope. Makes
@@ -621,6 +776,18 @@ export default function HomeScreen() {
 
       {searchScope === 'mine' ? (
         <>
+          {/* Category chips (TICKET-P6-003) — only once there is something to
+              filter; an empty list has no categories to show a chip for. */}
+          {ratings && ratings.length > 0 ? (
+            <CategoryChipRow
+              chips={categoryChips}
+              selection={categoryFilter}
+              onSelect={setCategoryFilter}
+              colors={colors}
+              compact={compact}
+            />
+          ) : null}
+
           {/* My Ratings */}
           <SectionHeader title="My Ratings" compact={compact} />
 

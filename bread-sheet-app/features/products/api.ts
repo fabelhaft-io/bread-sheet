@@ -57,6 +57,14 @@ export interface ProductImageUploadResult {
   name: string | null;
   brand: string | null;
   genericName: string | null;
+  /**
+   * TICKET-P6-003 — a seed slug guess (one of `features/categories/seeds.ts`)
+   * for `kind: 'product'` only; always `null` for `label`/`item`. The caller
+   * echoes this back verbatim as `ProductSubmission.suggestedCategory` so it
+   * can be persisted onto `Product.suggestedCategory` — it is never rendered
+   * as fact, only used to pre-select the rating screen's category picker.
+   */
+  category: string | null;
 }
 
 /**
@@ -107,6 +115,7 @@ export async function uploadProductImage(
     name: data.name ?? null,
     brand: data.brand ?? null,
     genericName: data.genericName ?? null,
+    category: data.category ?? null,
   };
 }
 

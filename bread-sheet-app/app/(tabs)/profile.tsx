@@ -150,6 +150,21 @@ export default function ProfileScreen() {
         </>
       )}
 
+      {/*
+        TICKET-P6-003: categories are `requireAuth` only, not
+        `requireRegistered` — an anonymous session's own ratings are already
+        durable and visible (P8-003), so organising them is available here too.
+      */}
+      <SectionHeader title="Organise" compact={compact} />
+      <View style={[styles.section, { backgroundColor: bg }]}>
+        <SettingsRow
+          icon="tag.fill"
+          label="Manage Categories"
+          onPress={() => router.push('/(app)/manage-categories')}
+          tint={tint}
+        />
+      </View>
+
       <SectionHeader title="Session" compact={compact} />
       <View style={[styles.section, { backgroundColor: bg }]}>
         <SettingsRow

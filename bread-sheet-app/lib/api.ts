@@ -93,6 +93,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new ApiError(res.status, message, body);
   }
 
+  // A `204 No Content` (TICKET-P6-003's `DELETE /api/users/me/categories/:id`
+  // is the first endpoint to use one) has no body at all — `res.json()` on
+  // an empty string throws, which would turn a successful delete into a
+  // thrown error at every call site. No other 2xx response in this API is
+  // ever empty, so this is the one exception worth special-casing here
+  // rather than in each caller.
+  if (res.status === 204) return undefined as T;
+
   return res.json() as Promise<T>;
 }
 

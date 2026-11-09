@@ -133,9 +133,10 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Model | Key fields | Notes |
 |-------|-----------|-------|
 | `User` | `id`, `email?`, `username`, `avatarUrl` | `id` mirrors the Supabase user UUID |
-| `Product` | `id` (PK, UUID), `kind`, `name`, `brand`, `image`, `description`, `status`, `submittedByUserId?`, `lastModifiedByUserId?`, `nameKey?` | **TICKET-P6-009 / ADR 0006:** the slim, rateable thing. `kind`: `PACKAGED \| CUSTOM` (TICKET-P6-007 ships `CUSTOM`: barcode-less items — cocktails, dishes, loose-leaf tea). `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED. No GTIN, nutrition, or ingredient columns — those moved to `PackagedProduct`, which a `CUSTOM` product has no row of. `nameKey` (TICKET-P6-007) is the normalised name — set for `CUSTOM` rows only, `null` for `PACKAGED` — backing the hand-written partial unique index `custom_product_name_unique` (see Custom Products below). GIN trigram indexes (`gin_trgm_ops`) on `name` and `brand` back `GET /api/products/search` (TICKET-P6-008 Slice B); the `pg_trgm` extension itself is created by the `product_search_trgm` migration, since Prisma's schema DSL has no concept of extensions |
+| `Product` | `id` (PK, UUID), `kind`, `name`, `brand`, `image`, `description`, `status`, `submittedByUserId?`, `lastModifiedByUserId?`, `nameKey?`, `suggestedCategory?` | **TICKET-P6-009 / ADR 0006:** the slim, rateable thing. `kind`: `PACKAGED \| CUSTOM` (TICKET-P6-007 ships `CUSTOM`: barcode-less items — cocktails, dishes, loose-leaf tea). `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED. No GTIN, nutrition, or ingredient columns — those moved to `PackagedProduct`, which a `CUSTOM` product has no row of. `nameKey` (TICKET-P6-007) is the normalised name — set for `CUSTOM` rows only, `null` for `PACKAGED` — backing the hand-written partial unique index `custom_product_name_unique` (see Custom Products below). `suggestedCategory` (TICKET-P6-003) is a machine-derived seed slug or `null` — see Categories below. GIN trigram indexes (`gin_trgm_ops`) on `name` and `brand` back `GET /api/products/search` (TICKET-P6-008 Slice B); the `pg_trgm` extension itself is created by the `product_search_trgm` migration, since Prisma's schema DSL has no concept of extensions |
 | `PackagedProduct` | `productId` (PK, FK → `Product.id`, `onDelete: Cascade`), `gtin` (unique), `genericName`, nutrition fields, `servingSize`, `ingredients` | 1:1 with a `PACKAGED` `Product`; a `CUSTOM` product has no row here, so it structurally cannot hold nutrition or ingredient data. The invariant "`kind = PACKAGED` ⇔ exactly one `PackagedProduct` row" is enforced by writing both rows in one transaction (`productService.ts`), not a DB constraint |
-| `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?`, `createdAt`, `updatedAt` | `@@unique([userId, productId])` — one rating per user per product; resubmission upserts the existing row (`createdAt` preserved, `updatedAt` advances) |
+| `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?`, `categoryId?` (FK → `UserCategory`, `onDelete: SetNull`), `createdAt`, `updatedAt` | `@@unique([userId, productId])` — one rating per user per product; resubmission upserts the existing row (`createdAt` preserved, `updatedAt` advances). `categoryId` (TICKET-P6-003) is the user's own organisational label; `@@index([categoryId])` |
+| `UserCategory` | `id` (PK, UUID), `userId` (FK → `User`, `onDelete: Cascade`), `name`, `slug`, `isSeed` (default `false`), `createdAt` | **TICKET-P6-003** — a private, user-owned label ("wine", "cigars"). `@@unique([userId, slug])`: the fragmentation guard, scoped per user. A seed (`constants/categorySeeds.ts`) and a custom category are the same row shape, distinguished only by `isSeed`; nothing is written until a user picks or creates one |
 | `Group` | `id`, `name`, `inviteCode` | Invite code is unique |
 | `GroupMember` | `userId`, `groupId`, `role` | `role`: `ADMIN \| MEMBER` |
 | `ProductVerification` | `productId`, `userId`, `vote`, `createdAt` | `@@unique([productId, userId])`; 2 net-approvals flip to `VERIFIED`; 2 net-rejections flip to `REJECTED` |
@@ -147,7 +148,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 
 **Product visibility helper (`services/productVisibility.ts`, TICKET-P6-009).** `visibleProductWhere(user)` returns the P5-007 rule — `{ status: { not: REJECTED } }` — for both `PACKAGED` and `CUSTOM` kinds, and `assertProductVisible(user, id)` throws `ProductNotFoundError` (→ `404`) unless it resolves. Every product-reading path (`productController`, `productEditController`, `productVerificationService`, `productEditService`, `ratingController`) goes through one of these instead of re-typing the `where` clause. Catalogue-only queries (OFF sync, OFF backfill, not yet built) filter on `kind: PACKAGED` explicitly — that is a different axis (manufactured-article-ness) from visibility. The module also exports `INVISIBLE_PRODUCT_STATUS` (today: `REJECTED`) so a caller that can't use a Prisma `where` object — `productSearchService`'s raw `$queryRaw` query, which ranks by `pg_trgm` `similarity()` and a `Rating` count — stays pinned to the same rule instead of re-typing the predicate (TICKET-P6-008).
 
-**Product serializer (`services/productSerializer.ts`, TICKET-P6-009).** `serializeProduct(product, user)` is an explicit allowlist, not a field spread — the pre-split `getProductByBarcode` spread the whole Prisma row, so a future internal column would have reached clients by accident. Emits `{ id, kind, name, brand, image (resolved), description, status, unverified, submittedByUserId? (registered callers only), packaged: {...} | null, submission? (unverified only, flat) }`. Rating responses embed a smaller `{ id, kind, name, brand, image }` via an explicit Prisma `select`, not this serializer — the GTIN isn't needed there.
+**Product serializer (`services/productSerializer.ts`, TICKET-P6-009).** `serializeProduct(product, user)` is an explicit allowlist, not a field spread — the pre-split `getProductByBarcode` spread the whole Prisma row, so a future internal column would have reached clients by accident. Emits `{ id, kind, name, brand, image (resolved), description, status, unverified, submittedByUserId? (registered callers only), suggestedCategory, packaged: {...} | null, submission? (unverified only, flat) }`. `suggestedCategory` (TICKET-P6-003) is always present (not gated by visibility/anonymity — it carries no user data) and never appears inside `submission` — see Categories below. Rating responses embed a smaller `{ id, kind, name, brand, image }` via an explicit Prisma `select`, not this serializer — the GTIN isn't needed there.
 
 ---
 
@@ -188,7 +189,12 @@ Everything else about a custom product — `GET /products/:productId`, `POST`/`D
 |--------|------|------|-------------|
 | `GET` | `/users/me` | Self | Fetch own profile |
 | `PATCH` | `/users/me` | Self | Update own profile |
-| `GET` | `/users/me/ratings` | Self | Fetch own rating history |
+| `GET` | `/users/me/ratings` | Self | Fetch own rating history. Each entry includes `category: { id, name } \| null` (TICKET-P6-003) |
+| `GET` | `/users/me/categories` | Auth (not `requireRegistered`) | My categories + rating counts (TICKET-P6-003). See Categories below |
+| `POST` | `/users/me/categories` | Auth | Find-or-create `{ name }` or `{ seedSlug }` |
+| `PATCH` | `/users/me/categories/:id` | Auth, owner | Rename. `:id` validated as a UUID (`400 invalid_category_id`) |
+| `DELETE` | `/users/me/categories/:id` | Auth, owner | Delete; ratings survive, uncategorised |
+| `POST` | `/users/me/categories/:id/merge` | Auth, owner | `{ intoId }` — reassign the source's ratings to the target, then delete the source |
 
 ### Groups
 
@@ -205,7 +211,7 @@ Everything else about a custom product — `GET /products/:productId`, `POST`/`D
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/ratings` | Auth | Upsert the caller's rating for a product. Body `{ productId, taste, comment? }` (TICKET-P6-009, was `{ barcode, taste, comment? }`); `productId` must be a valid UUID (`400` otherwise). `201` on first submission, `200` on update of an existing `(userId, productId)` row. |
+| `POST` | `/ratings` | Auth | Upsert the caller's rating for a product. Body `{ productId, taste, comment?, categoryId?, seedSlug? }` (TICKET-P6-009, was `{ barcode, taste, comment? }`; `categoryId`/`seedSlug` added by TICKET-P6-003, see Categories below); `productId` must be a valid UUID (`400` otherwise). `201` on first submission, `200` on update of an existing `(userId, productId)` row. |
 | `GET` | `/ratings/product/:productId` | Auth | All ratings for a product (most recent first) with author id / username / avatar. `:productId` validated as a UUID (`400 invalid_product_id`). |
 | `DELETE` | `/ratings/:id` | Owner | Delete own rating |
 
@@ -309,7 +315,68 @@ Every other part of the P5-006 edit/correction lifecycle (verifications reset, c
 
 **OFF sync never applies.** `TODO(P6-005)` / `TODO(P5-003-followup)` markers at both call sites (`productEditService.ts`, `productVerificationService.ts`) are commented to gate on `kind === PACKAGED` once OFF sync is actually implemented — a `CUSTOM` product has no `PackagedProduct` row to sync, so there is nothing to enqueue regardless.
 
-**Not built by this ticket:** P6-003 categories (the ticket lists them as a dependency, but no acceptance criterion requires them) and the search-before-create UI flow are frontend-only / already covered by P6-008 Slice B's `GET /products/search`, which already returns both `ProductKind`s.
+**Not built by this ticket:** the search-before-create UI flow is frontend-only / already covered by P6-008 Slice B's `GET /products/search`, which already returns both `ProductKind`s. (P6-003 categories, listed in the original ticket as a dependency, shipped separately — see Categories below.)
+
+---
+
+## Categories (`/api/users/me/categories`, TICKET-P6-003)
+
+Lets a user organise *their own* ratings ("which wine was good", "which cigars", "which cocktails did we like") without that organisation being a fact about the product. Two deliberately separate concepts:
+
+| | `UserCategory` + `Rating.categoryId` | `Product.suggestedCategory` |
+|---|---|---|
+| Owner | The user | Machine-derived |
+| Authority | Authoritative for that user's own view | A suggestion; never shown as fact |
+| Peer review | None | None — it's not a claim |
+| Visible to | Only the owning user | Everyone (it carries no user data) |
+
+**`UserCategory` CRUD (`services/categoryService.ts`, `controllers/categoryController.ts`, mounted in `routes/userRoutes.ts`).** Every route is `requireAuth` only — **not** `requireRegistered` — because a category is private by construction: it only ever touches the caller's own `Rating` rows and is never exposed to another user, so none of `requireRegistered`'s accountability reasoning applies (an anonymous user's ratings are already durable and visible per P8-003; their organisation of them should be too).
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/users/me/categories` | Every `UserCategory` row the caller has materialised, each as `{ id, name, slug, isSeed, createdAt, ratingCount }`. A seed the caller has never picked simply has no row — there is nothing to filter |
+| `POST` | `/users/me/categories` | Body `{ name }` XOR `{ seedSlug }`. Find-or-create on `(userId, slug)`: returns the existing row, unchanged, if the slug already exists for this user. `name`: 1–24 chars after trim, raw-length cap measured before trimming (CLAUDE.md convention). `seedSlug` must be one of `constants/categorySeeds.ts`'s slugs (`400` otherwise). `409 { error: 'too_many_categories' }` past 40 categories for the user — checked only on the brand-new-row path, never on a find-or-create hit |
+| `PATCH` | `/users/me/categories/:id` | Body `{ name }`. Free, retroactive rename — one row changes, no per-rating writes. A rename that re-slugifies to a slug the caller already has on a *different* category is `409 { error: 'duplicate_category', categoryId }` (the colliding row), not a silent merge |
+| `DELETE` | `/users/me/categories/:id` | Deletes the row. Ratings filed under it are **not** touched here — `Rating.categoryId`'s `onDelete: SetNull` does that at the database layer, so a rating simply becomes uncategorised |
+| `POST` | `/users/me/categories/:id/merge` | Body `{ intoId }`. Reassigns every rating from the source (`:id`) to the target (`intoId`), then deletes the source, in one transaction. `400 { error: 'self_merge' }` if `id === intoId` |
+
+Every mutating route 404s with `{ error: 'category_not_found' }` for an unknown id and 403s with `{ error: 'category_forbidden' }` for a category that exists but belongs to someone else (ownership is checked by `categoryService.ts#getOwnedCategoryOrThrow` before any write) — this is what satisfies the ticket's "one user cannot read, assign or modify another user's categories" acceptance criterion. `:id` is validated as a UUID by `router.param('id', ...)` in `userRoutes.ts` (`400 { code: 'invalid_category_id' }` before any handler runs, same pattern as `:productId` in `productRoutes.ts`/`ratingRoutes.ts`).
+
+**Seed labels (`constants/categorySeeds.ts`).** A shared, hand-maintained constant — 23 curated `{ slug, name }` pairs (`wine`, `beer`, `spirits`, `cocktails`, `cigars`, `coffee`, `tea`, `soft-drinks`, `water`, `bread-bakery`, `dairy`, `cheese`, `chocolate`, `sweets`, `snacks`, `cereals`, `meat`, `fish-seafood`, `fruit-vegetables`, `ready-meals`, `sauces-condiments`, `supplements`, `baby-food`) — deliberately **no `other`**: "uncategorised" is the absence of a category, and a second way to say the same thing would split the same ratings across two chips. Mirrored client-side (`bread-sheet-app`); the slugs and display names here are the wire contract. Nothing is written per user until they pick one — `isSeedSlug`/`getSeedBySlug` are the only things that read this constant at request time.
+
+**Fragmentation guard (`services/categorySlug.ts#slugifyCategoryName`).** Unicode NFKD decomposition, strip combining-mark diacritics, lowercase, collapse non-`[a-z0-9]` runs into a single `-`, trim leading/trailing `-` — "Wine", "wine" and "WINE " all produce `wine`, matching the dash-joined shape of the seed slugs (`bread-bakery`, not `bread bakery`). Every quantifier is applied to a disjoint character class (CLAUDE.md ReDoS convention); callers cap the raw name at 24 chars before this ever runs. The near-match "Did you mean …?" nudge from the ticket is a **client-side-only** affordance (same pattern as P6-007's duplicate-product nudge) — there is no server-side gate blocking a near-duplicate custom category from being created; a user explicitly choosing to create "Wines" next to their existing "Wine" is allowed.
+
+**`POST /api/ratings`'s category fields (`validators/categoryValidator.ts#validateRatingCategoryFields`, `services/categoryService.ts#resolveRatingCategory`).** Body gains two optional, mutually exclusive fields:
+
+- `categoryId: "<uuid>"` — must be the caller's own category (`404` unknown id, `403` another user's).
+- `categoryId: null` — explicitly clears the rating's category.
+- `seedSlug: "<slug>"` — find-or-create that seed for the caller in the same request (one round trip to rate *and* categorise), then assign it.
+- **Both fields omitted** — the rating's `categoryId` is left **untouched**. This is the semantics that matters for the offline rating outbox (`bread-sheet-app/lib/offline/outbox.ts`, TICKET-P8-004): a stale queued replay of `POST /api/ratings` that predates a category assignment must not silently wipe it on last-write-wins delivery. The controller only ever includes a `categoryId` key in the Prisma `upsert`'s `create`/`update` objects when the request actually said something about it (`resolveRatingCategory` returns a `{ kind: 'unset' } | { kind: 'set'; categoryId: string | null }` discriminated union specifically so "don't know" and "clear it" can never be confused) — omitting the key from a Prisma update leaves the column as-is, by construction, rather than relying on an extra read-modify-write.
+- `categoryId` and `seedSlug` together is `400` (ambiguous).
+
+`GET /api/ratings/product/:productId` deliberately does **not** include `category` on its embedded ratings — that endpoint lists ratings from potentially many users, and a category is private to its own author.
+
+**`Product.suggestedCategory` (machine-derived, never a fact).** Filled from, in priority order:
+
+1. **Open Food Facts' `categories_tags`** (`services/categorySuggestion.ts#suggestCategoryFromOffTags`) — an ordered rule list of OFF tag → seed-slug mappings, first match wins, applied the moment `GET /api/products/gtin/:gtin` creates a `Product` from an OFF response (`productService.ts#fetchFromOpenFoodFacts` now also requests the `categories_tags` field). Plain array/set lookups, no regex, no app-level fuzzy matching, and never looks at the product name.
+2. **The `kind=product` image-plausibility response's own `category` field** (`services/imagePlausibilityService.ts`) — the same Gemini call that already returns front-of-pack `name`/`brand`/`genericName` suggestions gains a `category` guess, prompted with the exact seed-slug list so the model can't invent one; re-validated against `isSeedSlug` regardless of mode (mock mode returns a fixed valid slug too, so the "validate against the seed list" path is exercisable without a live Gemini key). `POST /products/upload-image`'s `kind=product` response gains `category` alongside `name`/`brand`/`genericName`; the client echoes it back as `suggestedCategory` on `POST /products` (validated again by `validateProductSubmission` — an unrecognised value silently becomes `null` rather than failing the submission, since it's a suggestion, not a claim). Not returned for `kind=label` or `kind=item` (an item has no packaging-derived category).
+3. Otherwise `null`.
+
+Deliberately **not** part of `PRODUCT_EDIT_FIELDS`/`CUSTOM_EDITABLE_FIELDS` (`productEditService.ts`) — it never goes through peer review or the correction/edit flow, and `validateProductCorrection`'s type explicitly excludes it. `serializeProduct` exposes it as a top-level `suggestedCategory` field (never inside `submission`), for the picker to pre-select — the product detail screen itself never renders it as "the" category.
+
+**Custom category names are queryable across users for the seed-promotion review** (the ticket's "learning loop" — a name that keeps showing up gets promoted into `categorySeeds.ts`) without a cross-user API endpoint, which would leak one user's private labels to another. The intended query, run ad hoc (psql / a script), not exposed over HTTP:
+
+```sql
+SELECT slug, COUNT(DISTINCT "userId") AS user_count, MIN(name) AS example_name
+FROM "UserCategory"
+WHERE "isSeed" = false
+GROUP BY slug
+ORDER BY user_count DESC;
+```
+
+**Testing.** `categoryService.test.ts` / `categoryController.test.ts` / `categoryValidator.test.ts` / `categorySlug.test.ts` / `categorySeeds.test.ts` cover the CRUD + merge + ownership rules against a mocked Prisma client (same pattern as `customProductService.test.ts`); `categorySuggestion.test.ts` covers the OFF tag mapping; `ratingController.test.ts`/`userController.test.ts` cover the rating write-path semantics (including the omitted-field-preserves-category case) and `GET /users/me/ratings`'s embedded `category`; `imagePlausibilityService.test.ts`/`uploadImage.test.ts` cover the plausibility `category` field end to end in mock mode (a live-Gemini spot-check is out of scope here, same gap already tracked for `kind=item` by TICKET-P6-013).
+
+**Known follow-up, not built by this ticket:** `Product.suggestedCategory` for `PACKAGED` products that were already cached from OFF *before* this ticket shipped stays `null` until they're re-fetched — there is no backfill script. TICKET-P6-001's `backfill-off-metadata.ts` (itself not yet built) is the natural place to add this re-fetch once it exists; see TICKET-P6-015 in `FEATURES.md`.
 
 ---
 

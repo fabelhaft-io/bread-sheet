@@ -1,0 +1,27 @@
+meta {
+  name: Delete category
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/api/users/me/categories/{{categoryId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+docs {
+  TICKET-P6-003 — deletes the category. Ratings filed under it are NOT deleted and are not touched by
+  the controller at all: `Rating.categoryId`'s `onDelete: SetNull` does the work at the database layer,
+  so they simply become uncategorised.
+
+  Response:
+  - 204, empty body.
+  - 400 `{ code: 'invalid_category_id' }` — `:id` is not a UUID.
+  - 403 `{ error: 'category_forbidden', message }` — the category belongs to another user.
+  - 404 `{ error: 'category_not_found', message }` — no category with that id.
+}

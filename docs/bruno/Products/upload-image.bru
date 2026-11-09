@@ -27,12 +27,16 @@ script:post-response {
       console.log('productImageKey set to', body.imageKey);
     }
     // For kind=product the response also carries front-of-pack suggestions.
-    if (body.name || body.brand || body.genericName) {
+    if (body.name || body.brand || body.genericName || body.category) {
       console.log('photo suggestions', {
         name: body.name,
         brand: body.brand,
         genericName: body.genericName,
+        category: body.category,
       });
+      if (body.category) {
+        bru.setEnvVar('suggestedCategory', body.category);
+      }
     }
   }
 }
@@ -42,12 +46,15 @@ docs {
   BEFORE being stored, so a rejected image is never persisted.
 
   Success (200):
-    - kind=product → { imageKey, name, brand, genericName } — `imageKey` is the S3
+    - kind=product → { imageKey, name, brand, genericName, category } — `imageKey` is the S3
       object key (processed/{uuid}.jpg) of the eventual resized image; the server
       resolves keys to public URLs (ASSET_BASE_URL) when serving products.
       name/brand/genericName are front-of-pack suggestions read off the photo (any
-      may be null). The post-response script stores `imageKey` as productImageKey
-      so Submit product can reuse it.
+      may be null). `category` (TICKET-P6-003) is a guess at one of
+      `constants/categorySeeds.ts`'s seed slugs, or null — re-validated against that
+      list server-side regardless of mode, so it's always either a known slug or null.
+      The post-response script stores `imageKey` as productImageKey and `category` as
+      suggestedCategory so Submit product can reuse both.
     - kind=label   → { imageKey } only.
     - kind=item (TICKET-P6-007, custom products — a cocktail, a dish, loose-leaf tea)
       → { imageKey, name } only. The plausibility prompt for this kind asks "is this a

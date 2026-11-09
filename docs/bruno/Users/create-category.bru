@@ -1,0 +1,54 @@
+meta {
+  name: Create category
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/users/me/categories
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "seedSlug": "wine"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setEnvVar("categoryId", res.getBody().id);
+  }
+}
+
+docs {
+  TICKET-P6-003 — find-or-create on `(userId, slug)`. Body is `{ name }` XOR `{ seedSlug }`:
+  - `seedSlug` — one of `constants/categorySeeds.ts`'s curated slugs (`wine`, `beer`, `spirits`,
+    `cocktails`, `cigars`, `coffee`, `tea`, `soft-drinks`, `water`, `bread-bakery`, `dairy`, `cheese`,
+    `chocolate`, `sweets`, `snacks`, `cereals`, `meat`, `fish-seafood`, `fruit-vegetables`,
+    `ready-meals`, `sauces-condiments`, `supplements`, `baby-food`). `400` on an unrecognised slug.
+  - `name` — a custom category, 1–24 chars after trim (raw-length cap measured before trimming).
+    Slugified + case-folded before storing (the fragmentation guard) — "Wine", "wine" and "WINE " all
+    resolve to the same row for this user.
+
+  If the resulting slug already exists for this user, the existing row is returned unchanged (200-shaped
+  body, still `201` status — this is deliberately idempotent for the rating-write-path's `seedSlug`
+  shortcut, see Create or update rating).
+
+  `requireAuth` only — works for an anonymous session too (a category is private to its owner).
+
+  Response:
+  - 201 `{ id, name, slug, isSeed, createdAt, ratingCount }`.
+  - 400 `{ message, field }` — validation error (bad name, unknown seedSlug, both/neither of
+    name/seedSlug provided, or an unrecognised extra key).
+  - 409 `{ error: 'too_many_categories', message }` — past 40 categories for this user.
+}

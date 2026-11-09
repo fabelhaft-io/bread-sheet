@@ -24,6 +24,7 @@ model User {
   productEdits        ProductEdit[]
   productEditVotes    ProductEditVote[]
   productEditDismissals ProductEditDismissal[]
+  categories          UserCategory[]
 }
 
 // Server-side moderation record raised when an uploaded image is judged to be
@@ -89,6 +90,20 @@ model Product {
 
   plausibilityFlag    Boolean  @default(false)
 
+  // TICKET-P6-003 — machine-derived, never user-authored (ADR: "a category is a
+  // label the user owns, not a fact about the product"). Holds a seed slug
+  // (see `constants/categorySeeds.ts`) or null. Filled, in priority order, from
+  // (1) the Open Food Facts `categories_tags` → seed-slug rule list at the
+  // point `GET /products/gtin/:gtin` creates the row from OFF, and (2) the
+  // `kind=product` image-plausibility response's `category` field when a
+  // submitted product is persisted with that image. Never guessed from the
+  // name alone, never peer-reviewed, and deliberately NOT in
+  // `PRODUCT_EDIT_FIELDS`/`CUSTOM_EDITABLE_FIELDS` (services/productEditService.ts)
+  // — it is a suggestion, recomputable at any time, not a claim anyone needs
+  // to approve. Only ever read by `serializeProduct` to pre-select a user's
+  // own category picker; never rendered as "the" category.
+  suggestedCategory  String?
+
   // TICKET-P6-007: normalised name (Unicode NFKD, diacritics stripped,
   // lowercased, whitespace collapsed + trimmed — see
   // services/nameNormalization.ts), set for CUSTOM rows only. Recomputed on
@@ -151,10 +166,53 @@ model Rating {
   productId String
   product   Product  @relation(fields: [productId], references: [id])
 
+  // TICKET-P6-003 — the user's own organisation of their rating, never a fact
+  // about the product (see `UserCategory` below). `onDelete: SetNull`:
+  // deleting a category must never delete the ratings filed under it — they
+  // become uncategorised, which is a normal, supported state, not an error.
+  categoryId String?
+  category   UserCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
   // One rating per user per product. Re-rating upserts the existing row,
   // so `createdAt` stays as the first submission and `updatedAt` tracks
   // the latest edit.
   @@unique([userId, productId])
+  @@index([categoryId])
+}
+
+// TICKET-P6-003 — a user-owned label for organising their own ratings
+// ("wine", "cocktails", "which cigars did we like"). Deliberately NOT a
+// canonical fact about a product (see `Product.suggestedCategory` above) and
+// never peer-reviewed: it is private to the owning user and touches only
+// their own `Rating` rows, which is also why every category route is
+// `requireAuth` only, not `requireRegistered` (an anonymous user's ratings
+// are already durable per P8-003, so organising them should be too).
+//
+// A seed label (`constants/categorySeeds.ts`) and a custom one are the same
+// kind of row, distinguished only by `isSeed` — nothing is written per user
+// until they actually pick a seed or create a custom name (find-or-create on
+// `(userId, slug)`), so a user who only rates one kind of thing never carries
+// rows for the other 22 seeds.
+model UserCategory {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  // Slugified + case-folded form of `name` (see services/categorySlug.ts) —
+  // the fragmentation guard: "Wine", "wine" and "WINE " all resolve to the
+  // same row for a given user. For a seed-originated row this is exactly the
+  // seed's slug from `categorySeeds.ts`.
+  slug      String
+  isSeed    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  ratings   Rating[]
+
+  // Fragmentation guard, scoped per user — two different users may each have
+  // their own "wine" category; find-or-create within one user's rows is what
+  // keeps a single user from accumulating "Wine" / "wine" / "WINE" as three
+  // rows.
+  @@unique([userId, slug])
 }
 
 // A proposed correction to a VERIFIED product (TICKET-P5-006). Changes are not
