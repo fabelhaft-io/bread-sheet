@@ -156,20 +156,27 @@ export default function ReviewProductScreen() {
   }
 
   const submission = product.submission ?? {};
-  const rows: [string, string | number | null | undefined][] = [
-    ['Name', submission.name ?? product.name],
-    ['Brand', submission.brand ?? product.brand],
-    ['Generic name', submission.genericName],
-    ['Energy (kcal/100 g)', submission.energyKcal],
-    ['Fat (g)', submission.fat],
-    ['of which saturates (g)', submission.saturatedFat],
-    ['Carbohydrates (g)', submission.carbohydrates],
-    ['of which sugars (g)', submission.sugars],
-    ['Protein (g)', submission.protein],
-    ['Salt (g)', submission.salt],
-    ['Serving size', submission.servingSize],
-    ['Ingredients', submission.ingredients],
-  ];
+  // TICKET-P6-007 / ADR 0006: a CUSTOM product has no PackagedProduct row —
+  // name (and the photo, shown as the hero above) is all there is to review.
+  // Showing every nutrition field as "Not provided" would misleadingly read
+  // as missing data rather than data that structurally cannot exist.
+  const rows: [string, string | number | null | undefined][] =
+    product.kind === 'CUSTOM'
+      ? [['Name', submission.name ?? product.name]]
+      : [
+          ['Name', submission.name ?? product.name],
+          ['Brand', submission.brand ?? product.brand],
+          ['Generic name', submission.genericName],
+          ['Energy (kcal/100 g)', submission.energyKcal],
+          ['Fat (g)', submission.fat],
+          ['of which saturates (g)', submission.saturatedFat],
+          ['Carbohydrates (g)', submission.carbohydrates],
+          ['of which sugars (g)', submission.sugars],
+          ['Protein (g)', submission.protein],
+          ['Salt (g)', submission.salt],
+          ['Serving size', submission.servingSize],
+          ['Ingredients', submission.ingredients],
+        ];
 
   return (
     <ScrollView

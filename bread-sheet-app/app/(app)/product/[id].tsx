@@ -340,7 +340,7 @@ const sliderStyles = StyleSheet.create({
  * error / the success card.
  */
 export default function ProductScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, focusRating } = useLocalSearchParams<{ id: string; focusRating?: string }>();
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
   const router = useRouter();
@@ -391,6 +391,29 @@ export default function ProductScreen() {
   const [submittedAsUpdate, setSubmittedAsUpdate] = useState(false);
   const [queuedOffline, setQueuedOffline] = useState(false);
   const [imageError, setImageError] = useState(false);
+
+  // TICKET-P6-007: creating a custom product lands here with `?focusRating=1`
+  // — the reason someone adds a cocktail is to rate it, so the rating control
+  // should be ready to use immediately rather than making them navigate again.
+  // Consumed once per arrival, mirroring the P9-003 scan-injection and the
+  // P6-008 `focusSearch` hand-off patterns, so re-focusing this screen later
+  // doesn't re-trigger it. The decision is latched into state rather than
+  // re-derived from `focusRating` on every render: the product itself loads
+  // asynchronously, and `router.setParams` clearing the param can easily land
+  // before the comment field has even mounted for the first time — at which
+  // point a render that just re-reads `focusRating` would see it already gone.
+  const [autoFocusRatingComment, setAutoFocusRatingComment] = useState(false);
+  const consumedFocusRating = useRef<string | null>(null);
+  useEffect(() => {
+    if (typeof focusRating !== 'string' || focusRating.length === 0) {
+      consumedFocusRating.current = null;
+      return;
+    }
+    if (consumedFocusRating.current === focusRating) return;
+    consumedFocusRating.current = focusRating;
+    setAutoFocusRatingComment(true);
+    router.setParams({ focusRating: undefined });
+  }, [focusRating, router]);
 
   // Pre-fill from the cached rating. Anonymous sessions are included (P8-003):
   // their ratings are stored server-side under their anonymous user id, and now
@@ -766,9 +789,10 @@ export default function ProductScreen() {
           <ThemedText style={styles.description}>{product.description}</ThemedText>
         ) : null}
         {/*
-          A CUSTOM product (P6-007, not built yet) has no `packaged` row and
-          therefore no GTIN to show — the chip (and, later, any nutrition
-          section) is omitted entirely rather than shown as "not provided".
+          A CUSTOM product (TICKET-P6-007 / ADR 0006) has no `packaged` row
+          and therefore no GTIN to show — the chip (and the nutrition and
+          allergen sections, which this screen never renders at all) is
+          omitted entirely rather than shown as "not provided".
         */}
         {product?.packaged ? (
           <ThemedText style={styles.barcodeChip}>{product.packaged.gtin}</ThemedText>
@@ -829,6 +853,8 @@ export default function ProductScreen() {
         <TasteSlider value={taste} onChange={setTaste} />
 
         <TextInput
+          testID="rating-comment-input"
+          autoFocus={autoFocusRatingComment}
           style={[
             styles.commentInput,
             compact && compactStyles.commentInput,

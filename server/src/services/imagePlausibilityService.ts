@@ -44,7 +44,21 @@ function buildPrompt(kind: ImageKind): string {
   const subject =
     kind === 'product'
       ? 'the front-of-pack of a packaged food or drink product (the shot used in listings)'
-      : "a packaged food or drink product's nutrition / ingredients label";
+      : kind === 'item'
+        ? 'a real food or drink item a person could plausibly have consumed — e.g. a cocktail in a glass, a home-cooked dish, a cup of loose-leaf tea — photographed in good faith to show what it looked like'
+        : "a packaged food or drink product's nutrition / ingredients label";
+
+  const notAProductRule =
+    kind === 'item'
+      ? '"not_a_product" if it is clearly something unrelated to a consumable food or drink item (a person, a pet, scenery, a random object, a screenshot, etc.) — a cocktail, plated dish, or drink in a cup all count as the item itself and must pass.'
+      : '"not_a_product" if it is clearly something unrelated to a packaged food/drink product (a person, a pet, scenery, a random object, a screenshot, etc.).';
+
+  const suggestionRule =
+    kind === 'product'
+      ? `"name", "brand", "genericName": only when verdict is "ok", read the product's display name, brand, and generic category (e.g. "Oat drink") off the packaging. Ignore taglines, slogans, and marketing copy. Use null for anything you cannot read with confidence.`
+      : kind === 'item'
+        ? `"name": only when verdict is "ok" and a confident, specific name is obvious from the image (e.g. a well-known cocktail), suggest one short display name; otherwise null. "brand", "genericName": always null — a custom item has no brand or packaging-derived category.`
+        : `"name", "brand", "genericName": always null for label images.`;
 
   return `You are a content gate for a food-rating app. A user uploaded an image that is supposed to show ${subject}.
 
@@ -53,16 +67,12 @@ Judge the image and return JSON matching the provided schema.
 "verdict":
 - "abuse" if the image contains sexual, pornographic, or graphic/violent content. This takes priority over everything else.
 - "unusable" if it is too blurry, dark, cropped, or low-quality to tell what it shows.
-- "not_a_product" if it is clearly something unrelated to a packaged food/drink product (a person, a pet, scenery, a random object, a screenshot, etc.).
+- ${notAProductRule}
 - "ok" otherwise.
 
 "reason": one short factual sentence describing what you see (for internal logging).
 
-${
-  kind === 'product'
-    ? `"name", "brand", "genericName": only when verdict is "ok", read the product's display name, brand, and generic category (e.g. "Oat drink") off the packaging. Ignore taglines, slogans, and marketing copy. Use null for anything you cannot read with confidence.`
-    : `"name", "brand", "genericName": always null for label images.`
-}`;
+${suggestionRule}`;
 }
 
 const responseSchema = {
@@ -84,7 +94,7 @@ function checkMock(kind: ImageKind): PlausibilityResult {
   return {
     verdict: 'ok',
     reason: 'mock mode — image accepted without inspection',
-    name: kind === 'product' ? 'Mock Product' : null,
+    name: kind === 'product' ? 'Mock Product' : kind === 'item' ? 'Mock Item' : null,
     brand: kind === 'product' ? 'Mock Brand' : null,
     genericName: null,
   };

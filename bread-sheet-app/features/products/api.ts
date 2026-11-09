@@ -1,9 +1,12 @@
 import { api, ApiError } from '@/lib/api';
 
 import type {
+  CreateCustomProductPayload,
+  CreateCustomProductResult,
   EditVote,
   ExtractedLabel,
   PendingEdit,
+  ProductCorrectionPayload,
   ProductDetail,
   ProductEditChanges,
   ProductSubmission,
@@ -67,14 +70,16 @@ export interface ProductImageUploadResult {
  */
 
 /**
- * Upload a product or label image. The API returns the predicted
- * `processed/` S3 object key immediately (a Lambda resize runs asynchronously,
- * see P5-003). The `kind` prefix (`product/` vs `label/`) tells the Lambda
- * which size cap to apply.
+ * Upload a product, label, or custom-product ("item") image. The API returns
+ * the predicted `processed/` S3 object key immediately (a Lambda resize runs
+ * asynchronously, see P5-003). The `kind` prefix (`product/` vs `label/` vs
+ * `item/`) tells the Lambda which size cap to apply, and `item` (TICKET-P6-007)
+ * drives the plausibility gate's "is this a real thing someone could have
+ * consumed" prompt rather than "is this a packaged product".
  */
 export async function uploadProductImage(
   imageUri: string,
-  kind: 'product' | 'label',
+  kind: 'product' | 'label' | 'item',
   authHeader: string | null,
 ): Promise<ProductImageUploadResult> {
   const form = new FormData();
@@ -154,6 +159,21 @@ export function getProduct(id: string) {
 }
 
 /**
+ * Create a custom product (TICKET-P6-007 / ADR 0006) — a `kind: CUSTOM`
+ * `Product` with no `PackagedProduct` row, identified by name alone. Persists
+ * as `PENDING_REVIEW`, same lifecycle as a user-submitted packaged product.
+ *
+ * `409 { code: 'duplicate_name', productId }` means the name (normalised)
+ * already belongs to a non-rejected custom product — the server's hard
+ * duplicate gate, independent of the client's softer similarity-based "Did
+ * you mean…?" prompt (`features/products/custom.ts`). Callers should
+ * navigate to `productId` rather than surfacing this as a form error.
+ */
+export function createCustomProduct(payload: CreateCustomProductPayload) {
+  return api.post<CreateCustomProductResult>('/api/custom-products', payload);
+}
+
+/**
  * Submit a new product. The server persists it as `PENDING_REVIEW` and runs
  * AI plausibility checks before responding. A 422 indicates the submission
  * was rejected for plausibility reasons and carries an inline error payload
@@ -193,10 +213,7 @@ export function rejectProduct(id: string) {
  * through `proposeProductEdit` instead. Returns the full serialized product
  * (same shape as `GET /api/products/:id`).
  */
-export function correctProduct(
-  id: string,
-  payload: Omit<ProductSubmission, 'gtin' | 'productImageKey'> & { productImageKey?: string },
-) {
+export function correctProduct(id: string, payload: ProductCorrectionPayload) {
   return api.patch<ProductDetail>(
     `/api/products/${encodeURIComponent(id)}`,
     payload,

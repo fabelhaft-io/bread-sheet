@@ -150,6 +150,29 @@ describe('ReviewProductScreen', () => {
     expect(queryByText(/^\d{8,13}$/)).toBeNull();
   });
 
+  // TICKET-P6-007 / ADR 0006: a CUSTOM product has no nutrition/ingredient
+  // data to review — showing those fields as "Not provided" would read as
+  // missing data rather than data that structurally cannot exist.
+  it('shows only the name row for a CUSTOM product, no "Not provided" nutrition rows', async () => {
+    productsApi.getProduct.mockResolvedValue({
+      id: 'p1',
+      kind: 'CUSTOM',
+      name: 'Whisky Sour',
+      brand: null,
+      image: null,
+      description: null,
+      unverified: true,
+      submittedByUserId: 'someone-else',
+      packaged: null,
+      submission: { name: 'Whisky Sour' },
+    });
+    const { findByTestId, queryByText } = await render(<ReviewProductScreen />);
+    await findByTestId('review-details');
+    expect(queryByText('Not provided')).toBeNull();
+    expect(queryByText('Energy (kcal/100 g)')).toBeNull();
+    expect(queryByText('Ingredients')).toBeNull();
+  });
+
   it('suppresses the rubber-band bounce on the scroll host (P5-006)', async () => {
     productsApi.getProduct.mockResolvedValue({
       id: 'p1',

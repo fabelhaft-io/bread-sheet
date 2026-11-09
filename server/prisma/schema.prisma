@@ -65,8 +65,8 @@ enum ProductKind {
 // Everything that can be rated. Identity is `id` — server-generated, the only
 // key the API and app use. A manufactured article's GTIN, nutrition and
 // ingredients live on the 1:1 `PackagedProduct` below (ADR 0006); a CUSTOM
-// product (P6-007, not yet built) has no `PackagedProduct` row and therefore
-// cannot hold that data.
+// product (TICKET-P6-007) has no `PackagedProduct` row and therefore cannot
+// hold that data.
 model Product {
   id          String      @id @default(uuid())
   kind        ProductKind
@@ -88,6 +88,17 @@ model Product {
   lastModifiedBy       User?        @relation("ProductLastModifier", fields: [lastModifiedByUserId], references: [id])
 
   plausibilityFlag    Boolean  @default(false)
+
+  // TICKET-P6-007: normalised name (Unicode NFKD, diacritics stripped,
+  // lowercased, whitespace collapsed + trimmed — see
+  // services/nameNormalization.ts), set for CUSTOM rows only. Recomputed on
+  // every applied rename. Null for PACKAGED products, whose identity is the
+  // GTIN, not the name. A hand-written partial unique index
+  // (`custom_product_name_unique`, see the
+  // 20261108204955_custom_products migration — Prisma's DSL can't express a
+  // partial index) enforces "Negroni"/"negroni"/"Négroni " as the same
+  // product, scoped to non-REJECTED CUSTOM rows.
+  nameKey              String?
 
   packaged             PackagedProduct?
   verifications       ProductVerification[]

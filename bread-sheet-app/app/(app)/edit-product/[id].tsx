@@ -32,6 +32,7 @@ import {
   proposeProductEdit,
   uploadProductImage,
 } from '@/features/products/api';
+import { isDuplicateNameConflict } from '@/features/products/custom';
 import {
   buildCorrectionPayload,
   buildEditChanges,
@@ -79,6 +80,9 @@ export default function EditProductScreen() {
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<EditFormField, string>>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // A rename collided with another custom product's normalised name
+  // (TICKET-P6-007 / ADR 0006) — offer to open it instead of just erroring.
+  const [duplicateProductId, setDuplicateProductId] = useState<string | null>(null);
 
   // Photo replacement (optional): a new photo is uploaded at capture time so
   // the plausibility gate can reject it immediately — same as Add Product.
@@ -114,11 +118,14 @@ export default function EditProductScreen() {
   }, [id, session, isAnonymous]);
 
   const isCorrection = product?.status === 'PENDING_REVIEW' || product?.unverified === true;
+  // TICKET-P6-007: a CUSTOM product has no PackagedProduct row, so only its
+  // name and photo are editable (ADR 0006) — no label fields at all.
+  const isCustom = product?.kind === 'CUSTOM';
 
   const hasChanges = useMemo(() => {
     if (!initialForm || !form) return false;
-    return formHasChanges(initialForm, form, newImageKey);
-  }, [initialForm, form, newImageKey]);
+    return formHasChanges(initialForm, form, newImageKey, product?.kind);
+  }, [initialForm, form, newImageKey, product?.kind]);
 
   const handleReplacePhoto = useCallback(
     async (source: CaptureSource) => {
@@ -159,8 +166,9 @@ export default function EditProductScreen() {
   const handleSubmit = useCallback(async () => {
     if (!form || !initialForm || !hasChanges || submitting) return;
     setSubmitError(null);
+    setDuplicateProductId(null);
 
-    const errors = validateFormValues(form);
+    const errors = validateFormValues(form, product?.kind);
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       return;
@@ -170,17 +178,23 @@ export default function EditProductScreen() {
 
     try {
       if (isCorrection) {
-        await correctProduct(id, buildCorrectionPayload(form, newImageKey));
+        await correctProduct(id, buildCorrectionPayload(form, newImageKey, product?.kind));
         Alert.alert('Thanks!', 'Your correction was saved — the review restarts from zero.');
       } else {
-        const changes = buildEditChanges(initialForm, form, newImageKey);
+        const changes = buildEditChanges(initialForm, form, newImageKey, product?.kind);
         if (!changes) return; // unreachable — hasChanges gates the button
         await proposeProductEdit(id, changes);
         Alert.alert('Thanks!', 'Your edit was submitted for peer review.');
       }
       router.replace({ pathname: '/(app)/product/[id]', params: { id } });
     } catch (err: unknown) {
-      if (err instanceof ApiError && err.status === 409) {
+      if (isDuplicateNameConflict(err)) {
+        // TICKET-P6-007: renaming a custom product to a name another one
+        // already normalises to. Offer the existing product rather than just
+        // a dead-end error.
+        setDuplicateProductId(err.body.productId);
+        setSubmitError('That name is already used by another product.');
+      } else if (err instanceof ApiError && err.status === 409) {
         const code = (err.body as { error?: string } | undefined)?.error;
         setSubmitError(
           code === 'edit_pending'
@@ -202,7 +216,7 @@ export default function EditProductScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [form, initialForm, hasChanges, submitting, isCorrection, id, newImageKey, router]);
+  }, [form, initialForm, hasChanges, submitting, isCorrection, id, newImageKey, router, product]);
 
   // ─── Anonymous gate (defence-in-depth; the entry point is already hidden) ──
   if (!session || isAnonymous) {
@@ -322,103 +336,126 @@ export default function EditProductScreen() {
             error={fieldErrors.name}
             colors={colors}
           />
-          <Field
-            label="Brand"
-            testID="field-brand"
-            value={form.brand}
-            onChangeText={(v) => set('brand', v)}
-            colors={colors}
-          />
-          <Field
-            label="Generic name"
-            testID="field-genericName"
-            value={form.genericName}
-            onChangeText={(v) => set('genericName', v)}
-            colors={colors}
-          />
-          <Field
-            label="Energy (kcal per 100 g)"
-            testID="field-energyKcal"
-            value={form.energyKcal}
-            onChangeText={(v) => set('energyKcal', v)}
-            keyboardType="decimal-pad"
-            error={fieldErrors.energyKcal}
-            colors={colors}
-          />
-          <Field
-            label="Fat (g)"
-            testID="field-fat"
-            value={form.fat}
-            onChangeText={(v) => set('fat', v)}
-            keyboardType="decimal-pad"
-            error={fieldErrors.fat}
-            colors={colors}
-          />
-          <Field
-            label="of which saturates (g)"
-            testID="field-saturatedFat"
-            value={form.saturatedFat}
-            onChangeText={(v) => set('saturatedFat', v)}
-            keyboardType="decimal-pad"
-            error={fieldErrors.saturatedFat}
-            colors={colors}
-          />
-          <Field
-            label="Carbohydrates (g)"
-            testID="field-carbohydrates"
-            value={form.carbohydrates}
-            onChangeText={(v) => set('carbohydrates', v)}
-            keyboardType="decimal-pad"
-            error={fieldErrors.carbohydrates}
-            colors={colors}
-          />
-          <Field
-            label="of which sugars (g)"
-            testID="field-sugars"
-            value={form.sugars}
-            onChangeText={(v) => set('sugars', v)}
-            keyboardType="decimal-pad"
-            error={fieldErrors.sugars}
-            colors={colors}
-          />
-          <Field
-            label="Protein (g)"
-            testID="field-protein"
-            value={form.protein}
-            onChangeText={(v) => set('protein', v)}
-            keyboardType="decimal-pad"
-            error={fieldErrors.protein}
-            colors={colors}
-          />
-          <Field
-            label="Salt (g)"
-            testID="field-salt"
-            value={form.salt}
-            onChangeText={(v) => set('salt', v)}
-            keyboardType="decimal-pad"
-            error={fieldErrors.salt}
-            colors={colors}
-          />
-          <Field
-            label="Serving size"
-            testID="field-servingSize"
-            value={form.servingSize}
-            onChangeText={(v) => set('servingSize', v)}
-            colors={colors}
-          />
-          <Field
-            label="Ingredients"
-            testID="field-ingredients"
-            value={form.ingredients}
-            onChangeText={(v) => set('ingredients', v)}
-            multiline
-            colors={colors}
-          />
+          {/* TICKET-P6-007 / ADR 0006: a CUSTOM product has no PackagedProduct
+              row, so brand and every label field below are both inapplicable
+              and, server-side, a 400 if sent — name and photo are the only
+              editable fields. */}
+          {!isCustom ? (
+            <>
+              <Field
+                label="Brand"
+                testID="field-brand"
+                value={form.brand}
+                onChangeText={(v) => set('brand', v)}
+                colors={colors}
+              />
+              <Field
+                label="Generic name"
+                testID="field-genericName"
+                value={form.genericName}
+                onChangeText={(v) => set('genericName', v)}
+                colors={colors}
+              />
+              <Field
+                label="Energy (kcal per 100 g)"
+                testID="field-energyKcal"
+                value={form.energyKcal}
+                onChangeText={(v) => set('energyKcal', v)}
+                keyboardType="decimal-pad"
+                error={fieldErrors.energyKcal}
+                colors={colors}
+              />
+              <Field
+                label="Fat (g)"
+                testID="field-fat"
+                value={form.fat}
+                onChangeText={(v) => set('fat', v)}
+                keyboardType="decimal-pad"
+                error={fieldErrors.fat}
+                colors={colors}
+              />
+              <Field
+                label="of which saturates (g)"
+                testID="field-saturatedFat"
+                value={form.saturatedFat}
+                onChangeText={(v) => set('saturatedFat', v)}
+                keyboardType="decimal-pad"
+                error={fieldErrors.saturatedFat}
+                colors={colors}
+              />
+              <Field
+                label="Carbohydrates (g)"
+                testID="field-carbohydrates"
+                value={form.carbohydrates}
+                onChangeText={(v) => set('carbohydrates', v)}
+                keyboardType="decimal-pad"
+                error={fieldErrors.carbohydrates}
+                colors={colors}
+              />
+              <Field
+                label="of which sugars (g)"
+                testID="field-sugars"
+                value={form.sugars}
+                onChangeText={(v) => set('sugars', v)}
+                keyboardType="decimal-pad"
+                error={fieldErrors.sugars}
+                colors={colors}
+              />
+              <Field
+                label="Protein (g)"
+                testID="field-protein"
+                value={form.protein}
+                onChangeText={(v) => set('protein', v)}
+                keyboardType="decimal-pad"
+                error={fieldErrors.protein}
+                colors={colors}
+              />
+              <Field
+                label="Salt (g)"
+                testID="field-salt"
+                value={form.salt}
+                onChangeText={(v) => set('salt', v)}
+                keyboardType="decimal-pad"
+                error={fieldErrors.salt}
+                colors={colors}
+              />
+              <Field
+                label="Serving size"
+                testID="field-servingSize"
+                value={form.servingSize}
+                onChangeText={(v) => set('servingSize', v)}
+                colors={colors}
+              />
+              <Field
+                label="Ingredients"
+                testID="field-ingredients"
+                value={form.ingredients}
+                onChangeText={(v) => set('ingredients', v)}
+                multiline
+                colors={colors}
+              />
+            </>
+          ) : null}
 
           {submitError ? (
             <ThemedText style={styles.errorText} testID="submit-error">
               {submitError}
             </ThemedText>
+          ) : null}
+          {duplicateProductId ? (
+            <TouchableOpacity
+              testID="edit-duplicate-open-existing"
+              onPress={() =>
+                router.replace({
+                  pathname: '/(app)/product/[id]',
+                  params: { id: duplicateProductId },
+                })
+              }
+            >
+              <Text style={[styles.photoBtnText, { color: colors.tint }]}>
+                Open existing product →
+              </Text>
+            </TouchableOpacity>
           ) : null}
 
           <TouchableOpacity

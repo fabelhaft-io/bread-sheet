@@ -272,7 +272,7 @@ Three entry points, all rendering the same component:
 | Where | Trigger | Notes |
 |---|---|---|
 | Scan tab (`app/(tabs)/scan.tsx`) | "Enter code manually" below the viewfinder | Rendered in **every** permission state — undetermined, denied, granted. Requiring the camera to reach the camera-free path would defeat the ticket. |
-| Home tab (`app/(tabs)/index.tsx`) | "＋" in the header | Adding without going through the camera tab at all. P6-007 turns this into a two-choice sheet; this is the single-purpose version. |
+| Home tab (`app/(tabs)/index.tsx`) | "＋" in the header | Adding without going through the camera tab at all. Since TICKET-P6-007, "＋" opens `components/add-choice-sheet.tsx` first — "Scan or enter a barcode" (this sheet) vs. "Something with no barcode" (`/(app)/add-custom-product`, below). |
 | GTIN resolver (`app/(app)/product/gtin/[gtin].tsx`) | Automatic, on a `400` from `GET /api/products/gtin/:gtin` | Opens pre-filled with the salvageable digits and submits via `router.replace`, so the corrected code takes the place of the broken resolver screen instead of stacking behind it. |
 
 **Validation is client-side and mirrors the server** (`BARCODE_RE` ≡ `productController.ts`'s
@@ -349,7 +349,9 @@ Submission always calls `POST /api/ratings` with `{ productId, taste, comment? }
 
 For registered users on `VERIFIED` products the screen additionally calls `GET /api/products/:id/edits/pending` (failures degrade to "no pending edit") to drive the P5-006 edit entry point and review banner, described below.
 
-**Nutrition / barcode chip and `CUSTOM` products.** The barcode chip reads `product.packaged?.gtin` and is omitted entirely when `packaged` is `null` — not even "no barcode" copy, matching ADR 0006's rule that a `CUSTOM` product makes no statement about data it cannot have. Nothing produces a `CUSTOM` product yet (that's P6-007), but the branch and its test land with this ticket.
+**Nutrition / barcode chip and `CUSTOM` products.** The barcode chip reads `product.packaged?.gtin` and is omitted entirely when `packaged` is `null` — not even "no barcode" copy, matching ADR 0006's rule that a `CUSTOM` product makes no statement about data it cannot have. This screen never renders a nutrition or allergen section for *any* product, so a `CUSTOM` product (TICKET-P6-007: cocktails, dishes, loose-leaf tea — see *Custom Products* below) needs no further branching here beyond the chip. The "Needs review" banner, reviewer screen and edit affordances behave identically for both kinds.
+
+**`focusRating` — landing on this screen ready to rate.** Creating a custom product hands off here with `?focusRating=1` (consumed once, same pattern as the scan-injection and `focusSearch` seams: a ref tracks the last-consumed value, `router.setParams({ focusRating: undefined })` clears it). The decision to auto-focus the comment field is latched into state the moment the param is consumed, not re-derived from `focusRating` on every render — the product itself loads asynchronously, and the param can finish clearing before the comment field has mounted for the first time, so a render that just re-read `focusRating` could land on `false` by the time anything is on screen to focus.
 
 ---
 
@@ -377,7 +379,7 @@ state drives both scopes — switching scope re-interprets what's already typed 
 clearing it, and the query itself is plain component state, so it does **not** survive a cold
 start (unlike the P6-003 category-chip selection, which will be persisted).
 
-**Slice A — Mine (ships with P6-007).** Filters the ratings list already loaded by
+**Slice A — Mine.** Filters the ratings list already loaded by
 `useCachedResource` in memory: no endpoint, no request, works offline for free because it
 operates on whatever `useCachedResource` already painted (cache or network). The matcher lives
 in `features/search/match.ts`:
@@ -391,7 +393,9 @@ in `features/search/match.ts`:
   and applied today, but no caller passes one yet. **Deferred, not built**, recorded here rather
   than silently dropped.
 - Matching never depends on `brand` being present (it's nullable on `RatedProduct`), which is
-  what makes a P6-007 barcode-less custom product findable by name alone once that ticket lands.
+  what makes a TICKET-P6-007 barcode-less custom product (`brand: null`) findable by name alone —
+  see `features/search/match.test.ts` and `app/(tabs)/home-search-mine.test.tsx`'s `CUSTOM`
+  fixtures.
 
 **Two distinct empty states**, keyed off whether `ratings` itself is empty vs. filtered empty:
 "nothing rated yet" (`home-search-nothing-rated`, same copy/testID as before this ticket, shown
@@ -436,6 +440,16 @@ scope that still works without a network. Any other failure goes through `format
 "Needs review" badge treatment as the product detail screen's banner (P5-007), just compact —
 `search-result-unverified-<id>`.
 
+**`hasSettled` (added for TICKET-P6-007, review finding F1).** `isLoading` is only set once the
+debounced request itself starts, so `!isLoading` is also true for the whole `DEBOUNCE_MS` window
+right after a keystroke, before any request for the new query has even been sent — a caller that
+needs "the results on screen genuinely belong to, and loaded for, this exact query" (P6-007's
+add-custom-product screen gates its "Create" action on exactly that) cannot use `!isLoading` for
+it. `hasSettled` is `true` only once a non-aborted, successful first-page response has come back
+for the **current** `query` value; it goes `false` again the instant `query` changes (compared
+against the query a prior success actually settled, not a separate "is it loading" flag), and a
+failed or offline request never sets it at all.
+
 **"Can't scan this?" → search by name.** The scan tab's manual-entry dock (P6-006) gained a
 second button, `scan-search-by-name`, alongside `scan-manual-entry`. There is no route for
 "Home, All-products scope, focused", so it navigates to `/(tabs)` with a `focusSearch: 'all'`
@@ -443,6 +457,118 @@ param — the Home screen consumes it once (mirrors the P9-003 scan-injection se
 consumed-once-per-arrival pattern: a ref tracks the last-seen value so re-focusing the tab later
 doesn't re-trigger it), flips the scope, and clears the param via `router.setParams`. Every
 existing scan-tab `testID` is unchanged.
+
+---
+
+## Custom Products (TICKET-P6-007)
+
+Lets a user rate something with no barcode — a cocktail, a dish, loose-leaf tea — and makes that
+same thing findable and ratable by everyone else instead of re-added under a slightly different
+name every time. A custom product is a `kind: CUSTOM` `Product` with no `PackagedProduct` row
+(ADR 0006): it carries a name and an optional photo, no brand, no nutrition, no allergens, and
+the same `PENDING_REVIEW` → peer-review lifecycle as a user-submitted packaged product.
+
+**Entry point.** The Home tab's "＋" (`app/(tabs)/index.tsx`) opens `components/add-choice-sheet.tsx`
+— a two-option modal, "Scan or enter a barcode" (the existing P6-006 manual-barcode sheet) vs.
+"Something with no barcode" (`router.push('/(app)/add-custom-product')`). Before this ticket "＋"
+opened the manual-barcode sheet directly; the P6-006 path and its `testID`s are unchanged, just
+one tap further in.
+
+**`app/(app)/add-custom-product.tsx` opens as a search box, not a form** (Decision 3 of the
+ticket: search before create). It renders one of four modes, held in local component state:
+
+```
+search ──(2+ trimmed chars, current query's search settled, tap "Create")──┐
+  │                                                           │
+  │  top result similarity ≥ 0.6?                             │
+  │     yes → confirm ("Did you mean <name>?")                │
+  │             [Open <name>] → router.push the existing id   │
+  │             [No, create "<query>"] ──────────────────────→│
+  │     no  ────────────────────────────────────────────────→ create
+  │
+  └─(anonymous)──────────────────────────────────────────→ signup-gate
+```
+
+- **search** — backed by `useProductSearch` (the same hook Home's "All products" scope uses,
+  TICKET-P6-008 Slice B), always `active` while in this mode. Results carry *both* `PACKAGED` and
+  `CUSTOM` kinds, so typing "Coca-Cola" finds the barcoded product and tapping it opens that
+  product instead of inviting a duplicate. "Create '\<query\>'" (`custom-product-create`) only
+  appears once `features/products/custom.ts#canOfferCreate(query)` is true (≥ 2 trimmed
+  characters — mirrors `isSearchableQuery`'s floor) **and** `useProductSearch`'s `hasSettled` is
+  true for the *current* `query`. `hasSettled` is deliberately not `!isLoading`: `isLoading` is
+  only set once the debounced request itself starts, so for the whole 300 ms debounce window
+  after every keystroke `isLoading` is already `false` while `results` is still the previous
+  query's (or empty) — gating on `!isLoading` let "Create" render, and the "Did you mean…?" gate
+  below be bypassed, before any request for the typed name had even been issued (review finding
+  F1). `hasSettled` tracks *which query* a successful first page actually came back for and
+  compares that against the live `query`, so a keystroke un-settles it immediately, before the
+  new debounce timer is even scheduled, and a failed or offline search never settles at all —
+  creation is online-only regardless, and "no duplicate" is not a conclusion a search that didn't
+  load is entitled to. Offline renders the same `OFFLINE_MESSAGE` copy as Home's search
+  (`custom-product-search-offline`); a non-network failure goes through `formatApiError`; neither
+  ever offers "Create". `handleCreatePress` re-checks this gate itself (defence in depth) before
+  running the similarity decision against `results`.
+- **confirm** — `findLikelyDuplicate(results)` (same module) picks the highest-similarity result
+  among whatever is already on screen and offers it only if it clears
+  `DUPLICATE_SIMILARITY_THRESHOLD` (0.6, matching the ticket). This is a **soft, client-side**
+  gate only — the **hard** gate is server-side (`Product.nameKey`, a partial unique index on
+  normalised `CUSTOM` names) and is checked again at submit time regardless of what happened
+  here.
+- **create** — name (pre-filled from the query, 1–80 raw characters,
+  `validateCustomProductName`) and an optional photo. The photo reuses the Add Product flow's
+  capture/resize helpers (`features/products/image-picker.ts`, `image-processing.ts`) with the
+  `'product'` resize profile (1200px cap) but uploads with **`kind=item`**
+  (`uploadProductImage(uri, 'item', authHeader)`) — a new classification, alongside `product` and
+  `label`, that the server's plausibility gate uses to prompt "is this a real thing someone could
+  have consumed" instead of "is this a packaged product". Submitting calls
+  `createCustomProduct({ name, imageKey? })` (`POST /api/custom-products`) and, on success,
+  `router.replace`s straight to `/(app)/product/<id>?focusRating=1` (see *Product Detail &
+  Rating*'s `focusRating` hand-off) — the point of adding a cocktail is to rate it, so there is no
+  reason to make the user navigate again. A `409 { code: 'duplicate_name', productId }` — the hard
+  gate firing even though the soft one didn't, e.g. someone else created the same name moments
+  earlier — replaces straight into the existing product rather than erroring.
+  `features/products/custom.ts#isDuplicateNameConflict` is the shared type guard for this shape,
+  reused by the edit screen below for the rename case. Any other failure (including
+  `NetworkError`) goes through `formatApiError` — creation is **online-only**, same as every other
+  contribution flow, because it needs search, the plausibility gate and a server id.
+- **signup-gate** — search and browse stay open to anonymous users exactly like packaged
+  products; only pressing "Create" is gated (P5-001's pattern, reused verbatim: "Sign up" carries
+  `returnTo: '/add-custom-product'`). The gate is a screen *mode*, not a route guard, so a guest
+  can freely search, open and rate existing custom products without ever seeing it.
+
+**Business logic lives in `features/products/custom.ts`**, not the screen: name validation
+(`validateCustomProductName`, `CUSTOM_PRODUCT_NAME_MAX_RAW_CHARS = 80`), the "offer create"
+threshold (`canOfferCreate`), the similarity-based duplicate decision (`findLikelyDuplicate`,
+`DUPLICATE_SIMILARITY_THRESHOLD`), and the `409 duplicate_name` type guard
+(`isDuplicateNameConflict`). The screen file is UI-only, per convention.
+
+**Editing a `CUSTOM` product is name-and-photo only** (ADR 0006: no `PackagedProduct` row, so no
+label fields exist to edit). `features/products/edit-form.ts` grew a `kind` parameter — defaulted
+to `'PACKAGED'` so every pre-P6-007 call site is unaffected — threading through
+`editableFieldsForKind`, `validateFormValues`, `buildEditChanges`, `buildCorrectionPayload` and
+`formHasChanges`. For `kind: 'CUSTOM'` the diff and the correction payload both touch `name` (and
+`productImageKey`, if replaced) only — packaged-only fields are **omitted from the payload
+entirely**, never sent as an explicit `null`, since the server treats their mere presence in a
+`CUSTOM` payload as a `400`. `app/(app)/edit-product/[id].tsx` hides every packaged-only field
+(barcode, brand, generic name, nutrition, serving size, ingredients) when `product.kind ===
+'CUSTOM'`, and surfaces a rename's `409 duplicate_name` with an "Open existing product →" link
+rather than a dead-end error. `app/(app)/review-product/[id].tsx` mirrors this: a `CUSTOM`
+product's review rows collapse to `Name` alone — showing every nutrition field as "Not provided"
+would read as missing data rather than data that structurally cannot exist (same reasoning as the
+product screen's missing allergen section). `app/(app)/review-edit/[editId].tsx` needed **no**
+change: it already renders whatever fields the server's `proposedChanges`/`originalValues` carry,
+which for a `CUSTOM` edit is just `name`/the photo.
+
+**Findable afterwards.** A rated custom product shows up in `/api/users/me/ratings` like any
+other rating, and TICKET-P6-008 Slice A's in-memory matcher never depended on `brand` being
+present — so it is findable by name in the Home tab's **Mine** search with no further client
+change (`features/search/match.test.ts`, `app/(tabs)/home-search-mine.test.tsx`).
+
+**Offline cache.** `lib/offline/caches.ts#productCache(id).write()` already treated
+`product.packaged?.gtin` as optional, so writing a `CUSTOM` product (no `gtin`) simply leaves the
+`gtin → id` reverse index untouched — no code change was needed, just a test confirming it.
+Rating an existing custom product offline goes through the outbox (`lib/offline/outbox.ts`)
+unchanged: it is keyed by `productId` alone and has never known about `kind`.
 
 ---
 

@@ -199,10 +199,23 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     mockApiGet.mockResolvedValue([]);
     const { findByTestId, getByTestId } = await render(<HomeScreen />);
 
+    // TICKET-P6-007: "＋" now opens a choice sheet first.
     await fireEvent.press(await findByTestId('home-add-product'));
+    await fireEvent.press(await findByTestId('add-choice-barcode'));
     await fireEvent.changeText(getByTestId('manual-barcode-input'), '4006381333931');
     await fireEvent.press(getByTestId('manual-barcode-submit'));
 
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/product/gtin/4006381333931');
+  });
+
+  // TICKET-P6-007: the other half of the choice sheet.
+  it('offers a "something with no barcode" entry point that routes to the custom-product screen', async () => {
+    mockApiGet.mockResolvedValue([]);
+    const { findByTestId } = await render(<HomeScreen />);
+
+    await fireEvent.press(await findByTestId('home-add-product'));
+    await fireEvent.press(await findByTestId('add-choice-custom'));
+
+    expect(mockRouter.push).toHaveBeenCalledWith('/(app)/add-custom-product');
   });
 });

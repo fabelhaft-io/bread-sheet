@@ -37,10 +37,10 @@ jest.mock('expo-file-system/legacy', () => {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const files = (require('expo-file-system/legacy') as { __files: Map<string, string> }).__files;
 
-function product(id: string, gtin?: string): ProductDetail {
+function product(id: string, gtin?: string, kind: 'PACKAGED' | 'CUSTOM' = 'PACKAGED'): ProductDetail {
   return {
     id,
-    kind: 'PACKAGED',
+    kind,
     name: `Product ${id}`,
     brand: null,
     image: null,
@@ -116,6 +116,18 @@ describe('offline caches', () => {
       expect(peekProductIdByGtin(`gtin-${PRODUCT_CACHE_LIMIT + 4}`)).toBe(
         `id-${PRODUCT_CACHE_LIMIT + 4}`,
       );
+    });
+
+    // TICKET-P6-007: a CUSTOM product has no GTIN — writing one must not
+    // crash and must leave the gtin index untouched.
+    it('stores a CUSTOM product (no packaged/gtin) without adding a gtin-index entry', async () => {
+      await productCache('p1').write(product('p1', '4006381333931'));
+      await productCache('custom-1').write(product('custom-1', undefined, 'CUSTOM'));
+
+      expect(await productCache('custom-1').read()).toMatchObject({ id: 'custom-1', kind: 'CUSTOM', packaged: null });
+      expect(peekProductIdByGtin('4006381333931')).toBe('p1');
+      // Nothing crashed, and no stray index entry was created for the custom product.
+      expect(await readProductIdByGtin('undefined')).toBeNull();
     });
 
     it('keeps a product alive when it is re-written after others', async () => {

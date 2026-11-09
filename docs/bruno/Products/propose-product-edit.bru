@@ -43,10 +43,21 @@ docs {
 
   On 201 the post-response script stores `editId` for the vote/dismiss requests.
 
+  TICKET-P6-007 — for a CUSTOM product, only `name` and `productImageKey` are editable; any
+  other field in the payload (brand, genericName, nutrition fields, servingSize, ingredients,
+  allergens) is a 400, not silently dropped. A proposed rename is checked for a name collision
+  against every other non-REJECTED custom product at proposal time (409 duplicate_name). If
+  another product takes that name later, between proposal and the second approving vote, the
+  edit is auto-REJECTED at apply time instead of being applied — rare, and the voters are not
+  shown an error for it (a warning is logged server-side).
+
   Errors:
+  - 400 — a packaged-only field was sent for a CUSTOM product ({ message })
   - 401 — unauthenticated
   - 403 — anonymous user
   - 404 — product not found, including REJECTED ({ error: 'product_not_found' })
-  - 409 — pending edit already exists ({ error: 'edit_pending' }) or product not VERIFIED ({ error: 'product_not_verified' })
+  - 409 — pending edit already exists ({ error: 'edit_pending' }), product not VERIFIED
+    ({ error: 'product_not_verified' }), or (CUSTOM only) the proposed name collides with
+    another custom product ({ code: 'duplicate_name', productId, message })
   - 422 — validation failure / no changes
 }

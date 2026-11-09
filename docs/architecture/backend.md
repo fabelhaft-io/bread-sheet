@@ -133,7 +133,7 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | Model | Key fields | Notes |
 |-------|-----------|-------|
 | `User` | `id`, `email?`, `username`, `avatarUrl` | `id` mirrors the Supabase user UUID |
-| `Product` | `id` (PK, UUID), `kind`, `name`, `brand`, `image`, `description`, `status`, `submittedByUserId?`, `lastModifiedByUserId?` | **TICKET-P6-009 / ADR 0006:** the slim, rateable thing. `kind`: `PACKAGED \| CUSTOM` (only `PACKAGED` rows exist until P6-007). `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED. No GTIN, nutrition, or ingredient columns — those moved to `PackagedProduct`. GIN trigram indexes (`gin_trgm_ops`) on `name` and `brand` back `GET /api/products/search` (TICKET-P6-008 Slice B); the `pg_trgm` extension itself is created by the `product_search_trgm` migration, since Prisma's schema DSL has no concept of extensions |
+| `Product` | `id` (PK, UUID), `kind`, `name`, `brand`, `image`, `description`, `status`, `submittedByUserId?`, `lastModifiedByUserId?`, `nameKey?` | **TICKET-P6-009 / ADR 0006:** the slim, rateable thing. `kind`: `PACKAGED \| CUSTOM` (TICKET-P6-007 ships `CUSTOM`: barcode-less items — cocktails, dishes, loose-leaf tea). `status`: `VERIFIED \| PENDING_REVIEW \| REJECTED`. `submittedByUserId` never changes after creation; `lastModifiedByUserId` is set when a `ProductEdit` is APPLIED. No GTIN, nutrition, or ingredient columns — those moved to `PackagedProduct`, which a `CUSTOM` product has no row of. `nameKey` (TICKET-P6-007) is the normalised name — set for `CUSTOM` rows only, `null` for `PACKAGED` — backing the hand-written partial unique index `custom_product_name_unique` (see Custom Products below). GIN trigram indexes (`gin_trgm_ops`) on `name` and `brand` back `GET /api/products/search` (TICKET-P6-008 Slice B); the `pg_trgm` extension itself is created by the `product_search_trgm` migration, since Prisma's schema DSL has no concept of extensions |
 | `PackagedProduct` | `productId` (PK, FK → `Product.id`, `onDelete: Cascade`), `gtin` (unique), `genericName`, nutrition fields, `servingSize`, `ingredients` | 1:1 with a `PACKAGED` `Product`; a `CUSTOM` product has no row here, so it structurally cannot hold nutrition or ingredient data. The invariant "`kind = PACKAGED` ⇔ exactly one `PackagedProduct` row" is enforced by writing both rows in one transaction (`productService.ts`), not a DB constraint |
 | `Rating` | `userId`, `productId`, `taste` (Float 0–10, 0.5 steps), `comment?`, `createdAt`, `updatedAt` | `@@unique([userId, productId])` — one rating per user per product; resubmission upserts the existing row (`createdAt` preserved, `updatedAt` advances) |
 | `Group` | `id`, `name`, `inviteCode` | Invite code is unique |
@@ -173,6 +173,14 @@ Full schema: `server/prisma/schema.prisma`. Summary of core models:
 | `POST` | `/products/edits/:editId/votes` | Registered, non-author | Vote `APPROVE` or `REJECT` on an edit; 2 approvals apply it to `Product` and/or `PackagedProduct` in one transaction (sets `lastModifiedByUserId`), 2 rejections discard it |
 | `DELETE` | `/products/edits/:editId/votes` | Registered | Retract own edit vote (while still `PENDING`) |
 | `POST` | `/products/edits/:editId/dismissals` | Registered | Dismiss the review banner for the caller (server-side, cross-device; not a vote) |
+
+### Custom Products
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/custom-products` | Registered | Create a barcode-less custom product (TICKET-P6-007). See the dedicated section below |
+
+Everything else about a custom product — `GET /products/:productId`, `POST`/`DELETE /products/:productId/verify`, `PATCH /products/:productId`, `POST /products/:productId/edits`, `POST /ratings` — goes through the **same** `/products/...` and `/ratings` routes as a packaged product, keyed by the same `Product.id`. There is no separate read/verify/edit/rate surface for `CUSTOM` — only creation gets its own endpoint, because creation is the one place the request shape (`{ name, imageKey? }`) is genuinely different from a packaged submission (`{ gtin, name, brand, ...nutrition, productImageKey }`).
 
 ### Users
 
@@ -260,11 +268,54 @@ Both endpoints call `castVote(productId, userId, vote)` in `services/productVeri
 
 `DELETE /products/:productId/verify` casts a `REJECT` vote (it does **not** retract a prior approval — it is an overloaded REJECT channel).
 
+`castVote` never reads `Product.kind` — the lifecycle is identical for a `CUSTOM` product (TICKET-P6-007): 2 net approvals → `VERIFIED`, 2 net rejections → `REJECTED` and hidden from everyone via `visibleProductWhere`, self-vote → `403`.
+
+---
+
+## Custom Products (`POST /api/custom-products`, TICKET-P6-007)
+
+Lets a user rate something with no barcode — a cocktail, a home-cooked dish, loose-leaf tea — and lets everyone else find and rate the *same* thing instead of re-adding it. A custom product is a `Product` row with `kind: CUSTOM` and **no `PackagedProduct` row** (ADR 0006): it structurally cannot hold nutrition or allergen data, because nobody can know exactly what went into someone else's cocktail.
+
+**Creation (`POST /custom-products`, `requireAuth` + `requireRegistered` — anonymous `403`).** Body `{ name, imageKey? }`:
+
+| Layer | File | Responsibility |
+|-------|------|-----------------|
+| Route | `routes/customProductRoutes.ts` | Mounted at `/api/custom-products` (a top-level resource, not `/api/products/...`) — `apiLimiter` → `requireAuth` → `requireRegistered` → `createCustomProductHandler` |
+| Validator | `validators/customProductValidator.ts` | `validateCustomProductCreate` — strict allowlist (`name`, `imageKey` only; any other key, including every packaged-only field and `brand`, is a `400` via `PackagedFieldNotAllowedError`, not silently dropped). `name`: required, 1–80 characters after trimming, with the 80-char cap measured on the **raw, untrimmed** string (CLAUDE.md convention — padding can't rescue an over-long name). `imageKey`, if present, must match the server-issued `processed/{uuid}.jpg` shape |
+| Controller | `controllers/customProductController.ts` | Maps `PackagedFieldNotAllowedError`/`SubmissionValidationError` → `400 { message }`; `DuplicateCustomProductNameError` → `409 { code: 'duplicate_name', productId, message }`; otherwise `201 { id, status: 'PENDING_REVIEW' }` |
+| Service | `services/customProductService.ts#createCustomProduct` | Creates the `Product` row directly (`kind: CUSTOM`, `brand: null`, `status: PENDING_REVIEW`, `submittedByUserId`, `nameKey`) — no transaction needed, there is no second table to write |
+
+**Identity is the name alone, enforced by the database.** `services/nameNormalization.ts#normalizeProductName` is the one shared normaliser (Unicode NFKD decomposition, strip combining-mark diacritics, lowercase, collapse internal whitespace, trim) — "Negroni", "negroni" and "Négroni " all produce `"negroni"`. The `custom_products` migration adds `Product.nameKey` (nullable, `CUSTOM`-only) and a hand-written partial unique index:
+
+```sql
+CREATE UNIQUE INDEX "custom_product_name_unique"
+  ON "Product"("nameKey")
+  WHERE "kind" = 'CUSTOM' AND "status" <> 'REJECTED';
+```
+
+(Prisma's schema DSL cannot express a partial index, same reason `one_pending_edit_per_product` is hand-written — see that migration.) Two concurrent creates of "Negroni" are race-safe at the database layer: one insert wins, the other's `P2002` is caught by `createCustomProduct` and re-queried (`findCustomProductNameCollision`) into a friendly `409 duplicate_name { productId }` pointing at the row that won. Scoping the index to `status <> 'REJECTED'` means a `REJECTED` custom product never blocks its name from being reused by a fresh, better submission.
+
+**Editable fields: `name` and the photo only.** ADR 0006 decision 2 / the ticket's decision 2 — a custom product has no brand and no `PackagedProduct` row, so `PATCH /products/:productId` and `POST /products/:productId/edits` are **kind-aware**:
+
+- `PATCH /products/:productId` — `productEditController#correctProduct` looks up the product's `kind` first (one extra `findFirst`) and dispatches to `correctCustomProduct` (body `{ name?, productImageKey? }`, validated by `validateCustomProductCorrection` with the same strict-allowlist/80-char-raw-cap rules as creation) instead of the full-payload `correctPendingProduct` used for `PACKAGED` products. Any packaged-only field in the body is `400`.
+- `POST /products/:productId/edits` — `productEditService#createEdit` fetches the product (as it always did) and, when `kind === CUSTOM`, rejects any proposed field outside `CUSTOM_EDITABLE_FIELDS = ['name', 'image']` with `PackagedFieldNotAllowedError` (`400`) before the pending-edit/diff checks run.
+- **A rename is checked for a `nameKey` collision at submit time** in both paths — a hit is `409 { code: 'duplicate_name', productId }` (the colliding row). **If a name collides only at apply time** — i.e. between a `POST .../edits` proposal and the second approving vote, another product took the name — `castEditVote`'s apply branch re-checks the collision right before writing, and on a hit marks the edit `REJECTED` (not `APPLIED`) and logs a `logger.warn`, rather than surfacing an error to whichever voter happened to cast the resolving vote. This is explicitly accepted as rare.
+
+Every other part of the P5-006 edit/correction lifecycle (verifications reset, corrector becomes submitter on `PATCH`, 2-approval apply / 2-rejection discard on an edit proposal, the `one_pending_edit_per_product` partial index) is unchanged and shared with `PACKAGED` products.
+
+**Verification, visibility, rating: all shared, unmodified.** `POST`/`DELETE /products/:productId/verify` (`castVote`), `GET /products/:productId` (`productVisibility` + `productSerializer`, which already emits `packaged: null` for any `CUSTOM` row), `GET /products/search`, and `POST /ratings` (`requireAuth` only — anonymous callers can rate a `PENDING_REVIEW` custom product, including their own) all operate on `Product.id` and never special-case `kind`. See the Peer Verification section above and `services/productSerializer.ts`.
+
+**Photo upload — `kind=item`.** `POST /products/upload-image` accepts a third `kind` value, `item`, for a custom product's photo. It is gated by the same plausibility/abuse check (see Image Processing below) with a prompt tuned to "is this a real thing a person could have consumed, photographed in good faith" rather than "is this a photo of packaging" — a cocktail in a glass passes `item` but would fail `product`. Response on success is `{ imageKey, name }` — **no `brand`/`genericName`** (a custom product has neither). Storage path `raw/item/{uuid}.jpg`; the resizer Lambda (`server/lambda/imageResizer`) caps `item` at 1200 px / quality 85, identical to `product` — there is no reason a custom item's listing photo should be capped differently.
+
+**OFF sync never applies.** `TODO(P6-005)` / `TODO(P5-003-followup)` markers at both call sites (`productEditService.ts`, `productVerificationService.ts`) are commented to gate on `kind === PACKAGED` once OFF sync is actually implemented — a `CUSTOM` product has no `PackagedProduct` row to sync, so there is nothing to enqueue regardless.
+
+**Not built by this ticket:** P6-003 categories (the ticket lists them as a dependency, but no acceptance criterion requires them) and the search-before-create UI flow are frontend-only / already covered by P6-008 Slice B's `GET /products/search`, which already returns both `ProductKind`s.
+
 ---
 
 ## Product Search (`GET /api/products/search`, TICKET-P6-008 Slice B)
 
-`GET /api/products/search?q=<query>&cursor=<cursor>` is the global, server-backed name/brand search the P6-007 "create a custom product" screen's search-before-create flow is built on (that ticket is not yet built; this endpoint ships ahead of it so nothing else duplicates the predicate it needs). `requireAuth` only — no `requireRegistered` — so an anonymous session can search too, and `userLimiter` rate-limits it per authenticated id (falls back to per-IP via `apiLimiter`'s outer gate for the handful of unauthenticated-but-past-`requireAuth` cases, which don't apply here since `requireAuth` always populates `req.user` or 401s first).
+`GET /api/products/search?q=<query>&cursor=<cursor>` is the global, server-backed name/brand search the P6-007 "create a custom product" screen's search-before-create flow is built on (this endpoint shipped ahead of P6-007's backend half so nothing duplicates the predicate it needs; both `ProductKind`s are searched, see Custom Products above). `requireAuth` only — no `requireRegistered` — so an anonymous session can search too, and `userLimiter` rate-limits it per authenticated id (falls back to per-IP via `apiLimiter`'s outer gate for the handful of unauthenticated-but-past-`requireAuth` cases, which don't apply here since `requireAuth` always populates `req.user` or 401s first).
 
 **Route ordering is load-bearing.** `/search` and `/gtin/:gtin` are both registered in `productRoutes.ts` ahead of `/:productId`, whose `router.param('productId', ...)` 400s any non-UUID segment — without the ordering, a request for `/products/search` would never reach its own handler.
 
@@ -313,12 +364,12 @@ A cursor is rejected with `400 { code: 'invalid_cursor' }` if it fails to base64
 ## Image Processing
 
 1. **API (synchronous):** Validates raw upload (size gate: 4 MB max via `multer` (`413`); format detection via magic bytes). Rejects unsupported formats (`415`).
-2. **Plausibility / abuse gate (synchronous, P5-005):** `imagePlausibilityService.checkImage(buffer, mime, kind)` runs on the in-memory buffer **before** any S3 write. Gated by `PLAUSIBILITY_MODE` (`mock` accepts all; `gemini` runs a Gemini multimodal classification). Applies to **both** `product` and `label` uploads. Verdicts:
-   - `ok` → proceed. For `product` photos the same call also returns front-of-pack `name`/`brand`/`genericName` suggestions (returned to the client to pre-fill the Add Product form).
+2. **Plausibility / abuse gate (synchronous, P5-005; `item` added TICKET-P6-007):** `imagePlausibilityService.checkImage(buffer, mime, kind)` runs on the in-memory buffer **before** any S3 write. Gated by `PLAUSIBILITY_MODE` (`mock` accepts all; `gemini` runs a Gemini multimodal classification). Applies to `product`, `label`, **and `item`** (a custom product's photo — a cocktail, a dish) uploads, each with its own prompt. Verdicts:
+   - `ok` → proceed. For `product` photos the same call also returns front-of-pack `name`/`brand`/`genericName` suggestions (pre-fills the Add Product form). For `item` photos it returns only a `name` suggestion (no brand/category — a custom product has neither); the prompt asks "is this a real thing a person could have consumed, photographed in good faith" rather than "is this packaging", so a cocktail in a glass passes `item` but would fail `product`.
    - `not_a_product` / `unusable` → `422 { error: 'image_rejected', reason }` with actionable copy; nothing stored, no record.
    - `abuse` → `422` with **generic** copy; a `UserAbuseFlag` row (`userId`, `reason`, `createdAt`) is recorded server-side — count + free-text reason only, no category. The model's specific reason is never returned to the client.
-3. **Upload:** Converts the validated bytes to JPEG using `sharp` in `imageService.ts` and uploads to S3 at `raw/product/{uuid}.jpg` or `raw/label/{uuid}.jpg`. The S3 client's addressing style is selected by `S3_MODE` (`localstack` | `aws`, no default): `localstack` forces path-style addressing (`{endpoint}/{bucket}/…`) because LocalStack's bucket-prefixed virtual-host names (e.g. `breadsheet-images-local.localstack`) don't resolve inside the Docker network; `aws` uses the SDK default (virtual-hosted style).
-4. **Lambda (async):** S3 `ObjectCreated` event triggers the resize Lambda. Writes to `processed/{uuid}.jpg` with the appropriate dimension cap (1200 px product / 1600 px label).
+3. **Upload:** Converts the validated bytes to JPEG using `sharp` in `imageService.ts` and uploads to S3 at `raw/product/{uuid}.jpg`, `raw/label/{uuid}.jpg`, or `raw/item/{uuid}.jpg`. The S3 client's addressing style is selected by `S3_MODE` (`localstack` | `aws`, no default): `localstack` forces path-style addressing (`{endpoint}/{bucket}/…`) because LocalStack's bucket-prefixed virtual-host names (e.g. `breadsheet-images-local.localstack`) don't resolve inside the Docker network; `aws` uses the SDK default (virtual-hosted style).
+4. **Lambda (async):** S3 `ObjectCreated` event triggers the resize Lambda. Writes to `processed/{uuid}.jpg` with the appropriate dimension cap (1200 px product, 1200 px item, 1600 px label — `item` deliberately shares `product`'s cap, see `server/lambda/imageResizer/src/index.ts`).
 5. **Response:** API returns the predicted `processed/{uuid}.jpg` object **key** immediately (`{ imageKey }`) — does not wait for Lambda.
 
 Because the gate runs before the S3 write, a rejected image is never persisted (no orphan objects to reap).

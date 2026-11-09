@@ -1,0 +1,63 @@
+meta {
+  name: Create custom product (TICKET-P6-007)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{baseUrl}}/api/custom-products
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{accessToken}}
+}
+
+body:json {
+  {
+    "name": "Negroni",
+    "imageKey": "{{productImageKey}}"
+  }
+}
+
+script:post-response {
+  if (res.getStatus() === 201) {
+    bru.setEnvVar("productId", res.getBody().id);
+  }
+}
+
+docs {
+  TICKET-P6-007 — create a barcode-less custom product (a cocktail, a dish, loose-leaf tea —
+  anything with no GTIN). Registered users only; anonymous tokens 403.
+
+  Body: { name, imageKey? }.
+  - `name` — required, 1–80 characters after trimming (the 80 cap is measured on the raw,
+    untrimmed string).
+  - `imageKey` — optional. A server-issued `processed/{uuid}.jpg` key from
+    Upload image with `kind: item` (NOT `kind: product` — that prompt expects packaging).
+
+  Any packaged-only field (gtin/barcode, brand, genericName, energyKcal, carbohydrates, sugars,
+  fat, saturatedFat, protein, salt, servingSize, ingredients, allergens) in the body is a 400 —
+  a custom product's identity is its name alone (ADR 0006) and it structurally cannot hold
+  nutrition/allergen data, so the server never silently drops these, it rejects the request.
+
+  Creates a `Product` row with kind: CUSTOM, status: PENDING_REVIEW, no PackagedProduct row.
+  Same lifecycle as a user-submitted packaged product from here: peer review via
+  Approve/Reject product, anyone can rate it immediately (incl. anonymously and the creator),
+  and renames go through Correct product / Propose product edit.
+
+  Duplicate names: the server normalises the name (Unicode NFKD, diacritics stripped,
+  lowercased, whitespace collapsed+trimmed) and enforces uniqueness among non-REJECTED CUSTOM
+  products at the database layer — "Negroni", "negroni" and "Négroni " collide. A REJECTED
+  custom product never blocks its name being reused.
+
+  Response:
+  - 201 { id, status: 'PENDING_REVIEW' }. The post-response script stores `id` as `productId`
+    for the chained verify/correct/edit/rate requests.
+  - 400 { message } — validation failure (missing/over-long name, or a packaged-only field).
+  - 403 — anonymous session ({ error: 'Registration required' }).
+  - 409 { code: 'duplicate_name', productId, message } — another non-REJECTED custom product
+    already has this (normalised) name; `productId` is that existing row. The client should
+    navigate there instead of retrying.
+}

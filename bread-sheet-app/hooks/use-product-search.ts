@@ -22,6 +22,19 @@ export interface ProductSearchState {
   error: unknown;
   hasMore: boolean;
   loadMore: () => void;
+  /**
+   * True only once the **current** `query`'s first page has itself
+   * successfully resolved — not merely once `isLoading` has gone back to
+   * `false`. `isLoading` is set inside `fetchPage`, which only runs *after*
+   * the `DEBOUNCE_MS` timer fires, so for the whole debounce window after
+   * every keystroke `isLoading` is `false` while `results` is still stale
+   * (the previous query's, or `[]`). A caller gating a "create new" action
+   * on "the results have loaded" must use this instead (TICKET-P6-007 /
+   * review finding F1) — a failed or offline search never counts as
+   * settled, by design: `results` for a query that failed to load is not a
+   * basis for deciding anything, soft-duplicate-gate included.
+   */
+  hasSettled: boolean;
 }
 
 /**
@@ -48,6 +61,12 @@ export function useProductSearch(query: string, active: boolean): ProductSearchS
   const [isOffline, setIsOffline] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [hasMore, setHasMore] = useState(false);
+  // The query a successful first-page response actually came back for — see
+  // `hasSettled` below. Deliberately a *value*, not a boolean: comparing it
+  // against the live `query` is what makes a new keystroke immediately
+  // un-settle the previous query's "yes, loaded" state, with no extra
+  // bookkeeping needed when a fetch starts.
+  const [settledQuery, setSettledQuery] = useState<string | null>(null);
 
   const controllerRef = useRef<AbortController | null>(null);
   const cursorRef = useRef<string | null>(null);
@@ -66,6 +85,9 @@ export function useProductSearch(query: string, active: boolean): ProductSearchS
         cursorRef.current = res.nextCursor;
         setHasMore(res.nextCursor !== null);
         setIsOffline(false);
+        // Only the first page settles the query — a `loadMore` page is an
+        // extension of an already-settled query, not a new one.
+        if (!append) setSettledQuery(q);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted || isAbortError(err)) return;
@@ -97,6 +119,7 @@ export function useProductSearch(query: string, active: boolean): ProductSearchS
       setIsOffline(false);
       setError(null);
       setHasMore(false);
+      setSettledQuery(null);
       cursorRef.current = null;
       return;
     }
@@ -120,5 +143,10 @@ export function useProductSearch(query: string, active: boolean): ProductSearchS
     fetchPage(query, cursorRef.current, true);
   }, [hasMore, isLoading, isLoadingMore, fetchPage, query]);
 
-  return { results, isLoading, isLoadingMore, isOffline, error, hasMore, loadMore };
+  // Settled for THIS query, not merely "a request for some earlier query
+  // once resolved" — a keystroke that changes `query` un-settles immediately,
+  // before the new debounce timer has even been scheduled.
+  const hasSettled = settledQuery === query;
+
+  return { results, isLoading, isLoadingMore, isOffline, error, hasMore, loadMore, hasSettled };
 }

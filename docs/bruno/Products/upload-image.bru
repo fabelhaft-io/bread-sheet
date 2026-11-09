@@ -49,9 +49,15 @@ docs {
       may be null). The post-response script stores `imageKey` as productImageKey
       so Submit product can reuse it.
     - kind=label   → { imageKey } only.
+    - kind=item (TICKET-P6-007, custom products — a cocktail, a dish, loose-leaf tea)
+      → { imageKey, name } only. The plausibility prompt for this kind asks "is this a
+      real thing a person could have consumed, photographed in good faith" rather than
+      "is this packaging" — a cocktail in a glass passes. There is no brand/genericName
+      suggestion: a custom product has no brand and no packaging-derived category. The
+      resizer caps `item` at 1200px, same as `product`. See Create custom product.
 
   Set the image field to a JPEG / PNG / WebP / GIF / TIFF / AVIF file (8 MB hard cap).
-  Set kind to either 'product' or 'label'.
+  Set kind to 'product', 'label', or 'item'.
 
   Requires a registered (non-anonymous) session — anonymous tokens get
   403 { error: 'Registration required' } before the plausibility check runs, so a guest

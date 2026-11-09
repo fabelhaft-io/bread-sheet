@@ -2,11 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 
 const mockCorrectPendingProduct = vi.hoisted(() => vi.fn());
+const mockCorrectCustomProduct = vi.hoisted(() => vi.fn());
 const mockCreateEdit = vi.hoisted(() => vi.fn());
 const mockGetPendingEdit = vi.hoisted(() => vi.fn());
 const mockCastEditVote = vi.hoisted(() => vi.fn());
 const mockRetractEditVote = vi.hoisted(() => vi.fn());
 const mockDismissEdit = vi.hoisted(() => vi.fn());
+// PATCH /:productId looks up the product's kind before dispatching
+// (TICKET-P6-007) — defaults to a PACKAGED product so the pre-existing
+// PACKAGED-flow tests below don't each need to stub this.
+const mockProductFindFirst = vi.hoisted(() => vi.fn());
 
 // Mutable per-test "session" (same pattern as productController.test.ts).
 const session = vi.hoisted(() => ({
@@ -22,6 +27,7 @@ vi.mock('../services/productEditService.js', async () => {
   return {
     ...actual,
     correctPendingProduct: mockCorrectPendingProduct,
+    correctCustomProduct: mockCorrectCustomProduct,
     createEdit: mockCreateEdit,
     getPendingEdit: mockGetPendingEdit,
     castEditVote: mockCastEditVote,
@@ -32,7 +38,9 @@ vi.mock('../services/productEditService.js', async () => {
 
 // The edit service (imported for its error classes above) must not drag the
 // real prisma/db or S3 stack into this test.
-vi.mock('../db.js', () => ({ default: {} }));
+vi.mock('../db.js', () => ({
+  default: { product: { findFirst: mockProductFindFirst } },
+}));
 vi.mock('../services/imageService.js', () => ({
   resolveImageUrl: (v: string | null) => v,
   uploadImageToS3: vi.fn(),
@@ -65,8 +73,10 @@ vi.mock('../middlewares/rateLimit.js', () => ({
 
 import app from '../app.js';
 import {
+  DuplicateCustomProductNameError,
   DuplicateEditVoteError,
   EditNotFoundError,
+  PackagedFieldNotAllowedError,
   PendingEditExistsError,
   ProductIsVerifiedError,
   ProductNotVerifiedError,
@@ -99,6 +109,7 @@ function resetSession() {
 beforeEach(() => {
   vi.clearAllMocks();
   resetSession();
+  mockProductFindFirst.mockResolvedValue({ kind: 'PACKAGED' });
 });
 
 describe('PATCH /api/products/:productId', () => {
@@ -128,6 +139,17 @@ describe('PATCH /api/products/:productId', () => {
   });
 
   it('returns 404 for an unknown product', async () => {
+    // The controller looks up the product's kind before dispatching
+    // (TICKET-P6-007); an unknown/invisible product never reaches the
+    // service at all.
+    mockProductFindFirst.mockResolvedValue(null);
+    const res = await request(app).patch(`/api/products/${PRODUCT_ID}`).send(CORRECTION_BODY);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('product_not_found');
+    expect(mockCorrectPendingProduct).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the service reports the product missing after dispatch', async () => {
     mockCorrectPendingProduct.mockRejectedValue(new ProductNotFoundError(PRODUCT_ID));
     const res = await request(app).patch(`/api/products/${PRODUCT_ID}`).send(CORRECTION_BODY);
     expect(res.status).toBe(404);
@@ -166,6 +188,58 @@ describe('PATCH /api/products/:productId', () => {
     // productId comes from the URL, not the body.
     expect(mockCorrectPendingProduct.mock.calls[0][0].productId).toBe(PRODUCT_ID);
     expect(mockCorrectPendingProduct.mock.calls[0][1]).toBe('user-1');
+  });
+
+  describe('a CUSTOM product (TICKET-P6-007)', () => {
+    beforeEach(() => {
+      mockProductFindFirst.mockResolvedValue({ kind: 'CUSTOM' });
+    });
+
+    it('dispatches to correctCustomProduct, not correctPendingProduct', async () => {
+      mockCorrectCustomProduct.mockResolvedValue({
+        id: PRODUCT_ID,
+        kind: 'CUSTOM',
+        name: 'Negroni',
+        brand: null,
+        image: null,
+        description: null,
+        status: 'PENDING_REVIEW',
+        submittedByUserId: 'user-1',
+        packaged: null,
+      });
+      const res = await request(app)
+        .patch(`/api/products/${PRODUCT_ID}`)
+        .send({ name: 'Negroni' });
+      expect(res.status).toBe(200);
+      expect(res.body.name).toBe('Negroni');
+      expect(res.body.packaged).toBeNull();
+      expect(mockCorrectCustomProduct).toHaveBeenCalledWith(
+        { productId: PRODUCT_ID, name: 'Negroni', imageKey: null },
+        'user-1',
+      );
+      expect(mockCorrectPendingProduct).not.toHaveBeenCalled();
+    });
+
+    it('rejects a packaged-only field with 400', async () => {
+      const res = await request(app)
+        .patch(`/api/products/${PRODUCT_ID}`)
+        .send({ name: 'Negroni', energyKcal: 120 });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/energyKcal/);
+      expect(mockCorrectCustomProduct).not.toHaveBeenCalled();
+    });
+
+    it('maps a rename collision to 409 duplicate_name with the existing productId', async () => {
+      mockCorrectCustomProduct.mockRejectedValue(
+        new DuplicateCustomProductNameError('already exists', 'existing-id'),
+      );
+      const res = await request(app)
+        .patch(`/api/products/${PRODUCT_ID}`)
+        .send({ name: 'Negroni' });
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('duplicate_name');
+      expect(res.body.productId).toBe('existing-id');
+    });
   });
 });
 
@@ -224,6 +298,27 @@ describe('POST /api/products/:productId/edits', () => {
     expect(res.body.editId).toBe(EDIT_ID);
     expect(res.body.productId).toBe(PRODUCT_ID);
     expect(mockCreateEdit).toHaveBeenCalledWith(PRODUCT_ID, 'user-1', { name: 'New Name' });
+  });
+
+  it('maps PackagedFieldNotAllowedError to 400 (TICKET-P6-007)', async () => {
+    mockCreateEdit.mockRejectedValue(new PackagedFieldNotAllowedError('energyKcal'));
+    const res = await request(app)
+      .post(`/api/products/${PRODUCT_ID}/edits`)
+      .send({ energyKcal: 120 });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/energyKcal/);
+  });
+
+  it('maps DuplicateCustomProductNameError to 409 duplicate_name (TICKET-P6-007)', async () => {
+    mockCreateEdit.mockRejectedValue(
+      new DuplicateCustomProductNameError('already exists', 'existing-id'),
+    );
+    const res = await request(app)
+      .post(`/api/products/${PRODUCT_ID}/edits`)
+      .send({ name: 'Negroni' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('duplicate_name');
+    expect(res.body.productId).toBe('existing-id');
   });
 });
 

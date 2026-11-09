@@ -183,6 +183,111 @@ describe('useProductSearch (TICKET-P6-008 Slice B)', () => {
     expect(result.current.hasMore).toBe(false);
   });
 
+  // TICKET-P6-007 review finding F1: `hasSettled` is what a caller must gate
+  // a "create new" action on, instead of `!isLoading` — `isLoading` is false
+  // for the whole debounce window too, before the request has even started.
+  describe('hasSettled', () => {
+    it('is false before any request for the current query has resolved, including during the debounce window', async () => {
+      mockSearch.mockResolvedValue(page(['1']));
+      const { result } = await renderHook<ProductSearchState, SearchProps>(
+        ({ query }) => useProductSearch(query, true),
+        { initialProps: { query: 'cola' } },
+      );
+
+      expect(result.current.hasSettled).toBe(false);
+      expect(result.current.isLoading).toBe(false); // the F1 trap: both false here
+
+      await act(async () => {
+        jest.advanceTimersByTime(299);
+      });
+      expect(result.current.hasSettled).toBe(false);
+      expect(mockSearch).not.toHaveBeenCalled();
+    });
+
+    it('becomes true once the current query’s first page resolves', async () => {
+      mockSearch.mockResolvedValue(page(['1']));
+      const { result } = await renderHook<ProductSearchState, SearchProps>(
+        ({ query }) => useProductSearch(query, true),
+        { initialProps: { query: 'cola' } },
+      );
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      expect(result.current.hasSettled).toBe(true);
+    });
+
+    it('goes false again the instant the query changes, before the new debounce fires', async () => {
+      mockSearch.mockResolvedValueOnce(page(['1']));
+      const { result, rerender } = await renderHook<ProductSearchState, SearchProps>(
+        ({ query }) => useProductSearch(query, true),
+        { initialProps: { query: 'cola' } },
+      );
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      expect(result.current.hasSettled).toBe(true);
+
+      mockSearch.mockResolvedValueOnce(page(['2']));
+      await rerender({ query: 'pepsi' });
+
+      expect(result.current.hasSettled).toBe(false);
+      // The stale "cola" results must not read as settled for "pepsi" — a
+      // caller gating a duplicate-similarity check on `hasSettled` must not
+      // run it against "cola"'s results while `query` is already "pepsi".
+      expect(result.current.results.map((r) => r.id)).toEqual(['1']);
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      expect(result.current.hasSettled).toBe(true);
+      expect(result.current.results.map((r) => r.id)).toEqual(['2']);
+    });
+
+    it('never becomes true for a query whose request failed (NetworkError)', async () => {
+      mockSearch.mockRejectedValue(new NetworkError());
+      const { result } = await renderHook<ProductSearchState, SearchProps>(
+        ({ query }) => useProductSearch(query, true),
+        { initialProps: { query: 'cola' } },
+      );
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      expect(result.current.isOffline).toBe(true);
+      expect(result.current.hasSettled).toBe(false);
+    });
+
+    it('never becomes true for a query whose request failed (non-network error)', async () => {
+      mockSearch.mockRejectedValue(new ApiError(500, 'boom', {}));
+      const { result } = await renderHook<ProductSearchState, SearchProps>(
+        ({ query }) => useProductSearch(query, true),
+        { initialProps: { query: 'cola' } },
+      );
+
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      expect(result.current.error).toBeInstanceOf(ApiError);
+      expect(result.current.hasSettled).toBe(false);
+    });
+
+    it('resets to false when the hook deactivates', async () => {
+      mockSearch.mockResolvedValue(page(['1']));
+      const { result, rerender } = await renderHook<ProductSearchState, SearchProps & { active: boolean }>(
+        ({ query, active }) => useProductSearch(query, active),
+        { initialProps: { query: 'cola', active: true } },
+      );
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      expect(result.current.hasSettled).toBe(true);
+
+      await rerender({ query: 'cola', active: false });
+      expect(result.current.hasSettled).toBe(false);
+    });
+  });
+
   it('does not call loadMore again while a page is already loading', async () => {
     mockSearch.mockResolvedValueOnce(page(['1'], 'cursor-1'));
     const { result } = await renderHook<ProductSearchState, SearchProps>(({ query }) => useProductSearch(query, true), {

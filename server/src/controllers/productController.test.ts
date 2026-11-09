@@ -495,6 +495,32 @@ describe('GET /api/products/:productId', () => {
     expect(res.body.packaged).toBeNull();
   });
 
+  it('returns a PENDING_REVIEW CUSTOM product to an anonymous caller, with unverified + submission, no submittedByUserId (TICKET-P6-007)', async () => {
+    session.user = { id: 'anon-1', email: undefined, isAnonymous: true };
+    mockProductFindFirst.mockResolvedValue({
+      id: PRODUCT_ID,
+      kind: ProductKind.CUSTOM,
+      name: 'Negroni',
+      brand: null,
+      image: null,
+      description: null,
+      status: ProductStatus.PENDING_REVIEW,
+      submittedByUserId: 'some-user',
+      packaged: null,
+    });
+
+    const res = await request(app)
+      .get(`/api/products/${PRODUCT_ID}`)
+      .set('Authorization', 'Bearer anon-token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe(ProductKind.CUSTOM);
+    expect(res.body.unverified).toBe(true);
+    expect(res.body.packaged).toBeNull();
+    expect(res.body.submission).toEqual({ name: 'Negroni', brand: null });
+    expect(res.body).not.toHaveProperty('submittedByUserId');
+  });
+
   it('returns 404 for a REJECTED product (visibility rule filters it out of the query)', async () => {
     // `visibleProductWhere` is baked into the `where` clause, so a REJECTED
     // row simply isn't returned by the (mocked) database.
