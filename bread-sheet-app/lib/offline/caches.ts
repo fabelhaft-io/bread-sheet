@@ -1,5 +1,7 @@
 import type { RatingEntry } from '@/features/ratings/types';
 import type { ProductDetail } from '@/features/products/types';
+import type { UserCategory } from '@/features/categories/types';
+import type { CategoryFilterSelection } from '@/features/categories/filter';
 
 import { peekCache, readCache, writeCache } from './store';
 
@@ -24,6 +26,8 @@ import { peekCache, readCache, writeCache } from './store';
 export const PRODUCTS_DOC = 'products';
 export const RATINGS_DOC = 'ratings';
 export const RECENTS_DOC = 'recents';
+export const CATEGORIES_DOC = 'categories';
+export const CATEGORY_FILTER_DOC = 'category-filter';
 
 /** Maximum number of products retained on disk; least-recently-seen evicted. */
 export const PRODUCT_CACHE_LIMIT = 200;
@@ -154,4 +158,29 @@ export const recentsCache: ResourceCache<StoredRecentProduct[]> = {
   peek: () => peekCache<StoredRecentProduct[]>(RECENTS_DOC),
   read: () => readCache<StoredRecentProduct[]>(RECENTS_DOC),
   write: (value) => writeCache(RECENTS_DOC, value),
+};
+
+// ─── Categories (TICKET-P6-003) ───────────────────────────────────────────────
+
+/**
+ * The caller's own `GET /api/users/me/categories` payload — what lets the
+ * rating screen's picker and the Manage Categories screen paint from cache
+ * (and, for the picker, pre-select a suggestion) before any network request
+ * completes, same stale-while-revalidate pattern as `ratingsCache`.
+ */
+export const categoriesCache: ResourceCache<UserCategory[]> = {
+  peek: () => peekCache<UserCategory[]>(CATEGORIES_DOC),
+  read: () => readCache<UserCategory[]>(CATEGORIES_DOC),
+  write: (value) => writeCache(CATEGORIES_DOC, value),
+};
+
+/**
+ * The Home tab's selected category chip. Not a server resource — a view
+ * preference — but persisted the same way (user-namespaced, on disk) so it
+ * survives a restart, per the ticket's AC.
+ */
+export const categoryFilterCache: ResourceCache<CategoryFilterSelection> = {
+  peek: () => peekCache<CategoryFilterSelection>(CATEGORY_FILTER_DOC),
+  read: () => readCache<CategoryFilterSelection>(CATEGORY_FILTER_DOC),
+  write: (value) => writeCache(CATEGORY_FILTER_DOC, value),
 };

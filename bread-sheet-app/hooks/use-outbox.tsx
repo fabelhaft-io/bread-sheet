@@ -35,7 +35,13 @@ interface OutboxContextValue {
   failures: OutboxFailure[];
   /** Product ids with a rating still in the queue. */
   isQueued: (productId: string) => boolean;
-  enqueue: (input: { productId: string; taste: number; comment: string | null }) => Promise<void>;
+  enqueue: (input: {
+    productId: string;
+    taste: number;
+    comment: string | null;
+    categoryId?: string | null;
+    seedSlug?: string;
+  }) => Promise<void>;
   flush: () => Promise<void>;
   dismissFailures: () => void;
 }
@@ -70,7 +76,13 @@ export function OutboxProvider({ children }: { children: ReactNode }) {
   }, [userId]);
 
   const enqueue = useCallback(
-    async (input: { productId: string; taste: number; comment: string | null }) => {
+    async (input: {
+      productId: string;
+      taste: number;
+      comment: string | null;
+      categoryId?: string | null;
+      seedSlug?: string;
+    }) => {
       const next = await enqueueRating(input);
       setQueued(next);
     },

@@ -34,6 +34,7 @@ describe('uploadProductImage', () => {
         name: 'Oat Drink',
         brand: 'Alpro',
         genericName: 'Oat drink',
+        category: 'dairy',
       }),
     }) as unknown as typeof fetch;
 
@@ -44,6 +45,7 @@ describe('uploadProductImage', () => {
       name: 'Oat Drink',
       brand: 'Alpro',
       genericName: 'Oat drink',
+      category: 'dairy',
     });
   });
 
@@ -60,6 +62,7 @@ describe('uploadProductImage', () => {
       name: null,
       brand: null,
       genericName: null,
+      category: null,
     });
   });
 

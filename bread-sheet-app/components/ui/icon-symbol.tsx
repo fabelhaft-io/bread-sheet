@@ -23,6 +23,7 @@ const MAPPING = {
   'arrow.right.square': 'logout',
   'person.badge.plus': 'person-add',
   'barcode.viewfinder': 'qr-code-scanner',
+  'tag.fill': 'label',
 } as const satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

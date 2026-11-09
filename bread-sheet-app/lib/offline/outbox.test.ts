@@ -45,6 +45,7 @@ function savedRating(
   productId: string,
   taste: number,
   kind: 'PACKAGED' | 'CUSTOM' = 'PACKAGED',
+  category: RatingEntry['category'] = null,
 ): RatingEntry {
   return {
     id: `r-${productId}`,
@@ -53,6 +54,7 @@ function savedRating(
     comment: null,
     createdAt: '2026-07-29T00:00:00.000Z',
     product: { id: productId, kind, name: kind === 'CUSTOM' ? 'Negroni' : 'Bread', brand: null, image: null },
+    category,
   };
 }
 
@@ -79,6 +81,55 @@ describe('rating outbox', () => {
     const queue = await readOutbox();
     expect(queue).toHaveLength(1);
     expect(queue[0]).toMatchObject({ taste: 9, comment: 'final' });
+  });
+
+  // TICKET-P6-003: categorising offline carries through the whole queue,
+  // whether the user picked an existing own category (`categoryId`) or a
+  // seed this device could not materialise while offline (`seedSlug`).
+  it('carries categoryId through the queue', async () => {
+    await enqueueRating({ productId: '111', taste: 7, comment: null, categoryId: 'cat-1' });
+    expect(peekOutbox()[0]).toMatchObject({ productId: '111', categoryId: 'cat-1' });
+  });
+
+  it('carries seedSlug through the queue', async () => {
+    await enqueueRating({ productId: '111', taste: 7, comment: null, seedSlug: 'wine' });
+    expect(peekOutbox()[0]).toMatchObject({ productId: '111', seedSlug: 'wine' });
+  });
+
+  it('carries an explicit categoryId: null (clearing) through the queue', async () => {
+    await enqueueRating({ productId: '111', taste: 7, comment: null, categoryId: null });
+    expect(peekOutbox()[0].categoryId).toBeNull();
+  });
+
+  // Each enqueue call carries the *complete* current intent (not a partial
+  // patch), so the collapse-to-latest behaviour above already keeps category
+  // changes correct with no extra merge logic.
+  it('collapsing repeated offline edits keeps the latest category intent, not the first', async () => {
+    await enqueueRating({ productId: '111', taste: 3, comment: null, categoryId: 'cat-1' });
+    await enqueueRating({ productId: '111', taste: 6, comment: null, seedSlug: 'wine' });
+    await enqueueRating({ productId: '111', taste: 9, comment: null, categoryId: null });
+
+    const queue = await readOutbox();
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({ taste: 9, categoryId: null });
+    expect(queue[0].seedSlug).toBeUndefined();
+  });
+
+  it('includes categoryId/seedSlug on the POST when flushed', async () => {
+    mockPost.mockImplementation((_path: string, body: { productId: string; taste: number }) =>
+      Promise.resolve(savedRating(body.productId, body.taste)),
+    );
+    await enqueueRating({ productId: '111', taste: 7, comment: null, seedSlug: 'wine' });
+
+    await flushOutbox();
+
+    expect(mockPost).toHaveBeenCalledWith('/api/ratings', {
+      productId: '111',
+      taste: 7,
+      comment: undefined,
+      categoryId: undefined,
+      seedSlug: 'wine',
+    });
   });
 
   it('keeps the original queue time when an item is replaced', async () => {

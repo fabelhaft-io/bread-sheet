@@ -47,6 +47,7 @@ function rating(id: string, name: string, brand: string | null, kind: 'PACKAGED'
     comment: null,
     createdAt: new Date().toISOString(),
     product: { id: `p-${id}`, kind, name, brand, image: null },
+    category: null,
   };
 }
 
@@ -83,7 +84,8 @@ describe('filterRatingsByQuery', () => {
 
     expect(filterRatingsByQuery(entries, '', onlyNegronis)).toEqual([entries[0]]);
     // A category predicate that excludes the only name match still yields nothing —
-    // this is the AND composition the (not-yet-built) P6-003 chips will rely on.
+    // this is the AND composition TICKET-P6-003's Home-tab chips (via
+    // `features/categories/filter.ts#categoryPredicateFor`) rely on.
     expect(filterRatingsByQuery(entries, 'daiquiri', onlyNegronis)).toEqual([]);
   });
 });

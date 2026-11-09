@@ -27,6 +27,20 @@ export interface OutboxRating {
   productId: string;
   taste: number;
   comment: string | null;
+  /**
+   * TICKET-P6-003: the rating-screen category selection at the moment this
+   * item was queued, in the same shape `POST /api/ratings` accepts —
+   * `categoryId` (an existing own category, or explicit `null` to clear),
+   * `seedSlug` (a seed the user picked that this device could not
+   * materialise while offline; the server's find-or-create on replay is
+   * idempotent, so this is safe), or neither (the user never touched
+   * category — leave whatever the rating already had unchanged). Both
+   * fields are always written together as the *complete* current intent, so
+   * collapsing repeated offline edits of the same product (below) already
+   * keeps the latest one for free — there is no partial state to merge.
+   */
+  categoryId?: string | null;
+  seedSlug?: string;
   /** Epoch millis the user submitted; preserved across collapses. */
   queuedAt: number;
   attempts: number;
@@ -87,6 +101,8 @@ export async function enqueueRating(input: {
   productId: string;
   taste: number;
   comment: string | null;
+  categoryId?: string | null;
+  seedSlug?: string;
 }): Promise<OutboxRating[]> {
   const queue = await readOutbox();
   const previous = queue.find((item) => item.productId === input.productId);
@@ -94,6 +110,8 @@ export async function enqueueRating(input: {
     productId: input.productId,
     taste: input.taste,
     comment: input.comment,
+    categoryId: input.categoryId,
+    seedSlug: input.seedSlug,
     queuedAt: previous?.queuedAt ?? Date.now(),
     attempts: 0,
     nextAttemptAt: 0,
@@ -135,6 +153,8 @@ async function runFlush(): Promise<FlushResult> {
         productId: item.productId,
         taste: item.taste,
         comment: item.comment ?? undefined,
+        categoryId: item.categoryId,
+        seedSlug: item.seedSlug,
       });
       synced.push(item.productId);
       // Replace the optimistic local entry with what the server stored, so ids

@@ -62,6 +62,19 @@ describe('api', () => {
     }
   });
 
+  // TICKET-P6-003: `DELETE /api/users/me/categories/:id` is the first
+  // endpoint to answer `204 No Content` — calling `.json()` on an empty
+  // body throws, which would turn a successful delete into a thrown error.
+  it('resolves to undefined on a 204, never calling .json()', async () => {
+    const json = jest.fn().mockRejectedValue(new Error('Unexpected end of JSON input'));
+    (global.fetch as jest.Mock).mockResolvedValue({ ok: true, status: 204, json });
+
+    const result = await api.delete('/api/users/me/categories/c1');
+
+    expect(result).toBeUndefined();
+    expect(json).not.toHaveBeenCalled();
+  });
+
   it('falls back to a generic message when the body is not JSON', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: false,

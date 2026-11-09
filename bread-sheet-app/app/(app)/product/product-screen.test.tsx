@@ -66,13 +66,16 @@ const mockApiPost = api.post as jest.Mock;
  *  - GET /api/users/me/ratings — only when this device has no cached copy of
  *    the list; "my rating" is then read out of it by product id. The
  *    per-product `GET /api/ratings/me/:barcode` round trip is gone.
+ *  - GET /api/users/me/categories (TICKET-P6-003) — the picker's own-list and
+ *    the suggestion-mapping source.
  *
- * Tests that don't care about the existing-rating path use this to stub the
- * product and return an empty rating history.
+ * Tests that don't care about the existing-rating or category paths use this
+ * to stub the product and return an empty rating history and category list.
  */
 function mockProductAndNoExistingRating(product: unknown) {
   mockApiGet.mockImplementation((path: string) => {
     if (path.startsWith('/api/users/me/ratings')) return Promise.resolve([]);
+    if (path.startsWith('/api/users/me/categories')) return Promise.resolve([]);
     return Promise.resolve(product);
   });
 }
@@ -422,6 +425,7 @@ describe('ProductScreen — existing rating pre-fill', () => {
       if (path.startsWith('/api/users/me/ratings')) {
         return Promise.resolve([ratingEntry(PRODUCT, 8, 'Solid loaf')]);
       }
+      if (path.startsWith('/api/users/me/categories')) return Promise.resolve([]);
       return Promise.resolve(PRODUCT);
     });
 
@@ -447,6 +451,7 @@ describe('ProductScreen — existing rating pre-fill', () => {
       if (path.startsWith('/api/users/me/ratings')) {
         return Promise.resolve([ratingEntry(PRODUCT, 6, null)]);
       }
+      if (path.startsWith('/api/users/me/categories')) return Promise.resolve([]);
       return Promise.resolve(PRODUCT);
     });
     mockApiPost.mockResolvedValue(ratingEntry(PRODUCT, 6, null));
@@ -477,6 +482,7 @@ describe('ProductScreen — existing rating pre-fill', () => {
       if (path.startsWith('/api/users/me/ratings')) {
         return Promise.resolve([ratingEntry(PRODUCT, 7, null)]);
       }
+      if (path.startsWith('/api/users/me/categories')) return Promise.resolve([]);
       return Promise.resolve(PRODUCT);
     });
 

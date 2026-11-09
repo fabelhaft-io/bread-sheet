@@ -3,7 +3,7 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 
 import { NetworkError } from '@/lib/api';
 import { __resetOfflineStoreForTests, setActiveCacheUser } from '@/lib/offline/store';
-import { ratingsCache } from '@/lib/offline/caches';
+import { categoryFilterCache, ratingsCache } from '@/lib/offline/caches';
 import type { RatingEntry } from '@/features/ratings/types';
 
 import HomeScreen from './index';
@@ -72,7 +72,12 @@ const files = (require('expo-file-system/legacy') as { __files: Map<string, stri
 const { api } = require('@/lib/api');
 const mockApiGet = api.get as jest.Mock;
 
-function rating(id: string, name: string, taste: number): RatingEntry {
+function rating(
+  id: string,
+  name: string,
+  taste: number,
+  category: RatingEntry['category'] = null,
+): RatingEntry {
   return {
     id: `r-${id}`,
     score: taste,
@@ -80,6 +85,7 @@ function rating(id: string, name: string, taste: number): RatingEntry {
     comment: null,
     createdAt: new Date().toISOString(),
     product: { id, kind: 'PACKAGED', name, brand: 'Artisan', image: null },
+    category,
   };
 }
 
@@ -217,5 +223,114 @@ describe('HomeScreen — offline ratings list (P8-002/P8-003)', () => {
     await fireEvent.press(await findByTestId('add-choice-custom'));
 
     expect(mockRouter.push).toHaveBeenCalledWith('/(app)/add-custom-product');
+  });
+});
+
+describe('HomeScreen — category chip row (TICKET-P6-003)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    files.clear();
+    __resetOfflineStoreForTests();
+    setActiveCacheUser('u1');
+    mockUseOutbox.mockReturnValue(outbox());
+    mockUseSession.mockReturnValue({
+      session: { user: { id: 'u1', is_anonymous: false } },
+      isAnonymous: false,
+      isLoading: false,
+    });
+  });
+
+  it('shows no chip row when there are no ratings at all', async () => {
+    mockApiGet.mockResolvedValue([]);
+    const { findByTestId, queryByTestId } = await render(<HomeScreen />);
+    await findByTestId('home-search-nothing-rated');
+    expect(queryByTestId('category-chip-row')).toBeNull();
+  });
+
+  it('shows one chip per category with a count, plus Uncategorised, plus All', async () => {
+    mockApiGet.mockResolvedValue([
+      rating('p1', 'Pinot Noir', 8, { id: 'cat-wine', name: 'Wine' }),
+      rating('p2', 'Chardonnay', 7, { id: 'cat-wine', name: 'Wine' }),
+      rating('p3', 'Sourdough Loaf', 6, null),
+    ]);
+    const { findByTestId, getByTestId, getByText } = await render(<HomeScreen />);
+    await findByTestId('category-chip-row');
+
+    expect(getByText('Wine (2)')).toBeTruthy();
+    expect(getByText('Uncategorised (1)')).toBeTruthy();
+    expect(getByTestId('category-chip-all').props.accessibilityState?.selected).toBe(true);
+  });
+
+  it('does not show an Uncategorised chip when every rating has a category', async () => {
+    mockApiGet.mockResolvedValue([rating('p1', 'Pinot Noir', 8, { id: 'cat-wine', name: 'Wine' })]);
+    const { findByTestId, queryByTestId } = await render(<HomeScreen />);
+    await findByTestId('category-chip-row');
+    expect(queryByTestId('category-chip-uncategorized')).toBeNull();
+  });
+
+  it('filters the list to the selected category, with no network request', async () => {
+    mockApiGet.mockResolvedValue([
+      rating('p1', 'Pinot Noir', 8, { id: 'cat-wine', name: 'Wine' }),
+      rating('p2', 'Negroni', 9, { id: 'cat-cocktails', name: 'Cocktails' }),
+    ]);
+    const { findByTestId, queryByText, getByText } = await render(<HomeScreen />);
+    await findByTestId('category-chip-cat-wine');
+
+    await fireEvent.press(getByText('Wine (1)'));
+
+    expect(queryByText('Pinot Noir')).toBeTruthy();
+    expect(queryByText('Negroni')).toBeNull();
+    expect(mockApiGet.mock.calls.filter((args) => args[0] !== '/api/users/me/ratings')).toHaveLength(0);
+  });
+
+  it('filters to Uncategorised', async () => {
+    mockApiGet.mockResolvedValue([
+      rating('p1', 'Pinot Noir', 8, { id: 'cat-wine', name: 'Wine' }),
+      rating('p2', 'Sourdough Loaf', 6, null),
+    ]);
+    const { findByTestId, queryByText } = await render(<HomeScreen />);
+    await findByTestId('category-chip-uncategorized');
+
+    await fireEvent.press(await findByTestId('category-chip-uncategorized'));
+
+    expect(queryByText('Sourdough Loaf')).toBeTruthy();
+    expect(queryByText('Pinot Noir')).toBeNull();
+  });
+
+  it('persists the selected chip across a restart', async () => {
+    mockApiGet.mockResolvedValue([
+      rating('p1', 'Pinot Noir', 8, { id: 'cat-wine', name: 'Wine' }),
+      rating('p2', 'Negroni', 9, { id: 'cat-cocktails', name: 'Cocktails' }),
+    ]);
+    const { findByTestId, getByTestId, unmount } = await render(<HomeScreen />);
+    await fireEvent.press(await findByTestId('category-chip-cat-wine'));
+    await waitFor(() =>
+      expect(getByTestId('category-chip-cat-wine').props.accessibilityState?.selected).toBe(true),
+    );
+    await unmount();
+
+    const rendered = await render(<HomeScreen />);
+    await rendered.findByTestId('category-chip-cat-wine');
+    await waitFor(() =>
+      expect(rendered.getByTestId('category-chip-cat-wine').props.accessibilityState?.selected).toBe(
+        true,
+      ),
+    );
+  });
+
+  it('falls back to All when the persisted selection no longer corresponds to a chip', async () => {
+    // Simulates returning to a selection whose category has since been
+    // deleted/merged away server-side (or simply has no ratings left) —
+    // the persisted preference still points at it, but the fetched list no
+    // longer carries that category at all.
+    await categoryFilterCache.write({ kind: 'category', id: 'cat-wine', name: 'Wine' });
+    mockApiGet.mockResolvedValue([rating('p2', 'Negroni', 9, { id: 'cat-cocktails', name: 'Cocktails' })]);
+
+    const { findByTestId, getByTestId } = await render(<HomeScreen />);
+    await findByTestId('category-chip-row');
+
+    await waitFor(() =>
+      expect(getByTestId('category-chip-all').props.accessibilityState?.selected).toBe(true),
+    );
   });
 });

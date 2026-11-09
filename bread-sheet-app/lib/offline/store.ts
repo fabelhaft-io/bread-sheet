@@ -40,8 +40,17 @@ import {
  * `Product.id`, and the ratings/outbox payloads moved with it. There is no
  * migration path for a barcode-keyed v1 document — the existing
  * wipe-on-mismatch behaviour is the whole plan, outbox included (no users).
+ *
+ * v3 (TICKET-P6-003): `RatingEntry.category` is now a required field (not
+ * optional) and `OutboxRating` grew `categoryId`/`seedSlug`. A v2 `ratings`
+ * or `outbox` document on disk would decode fine at runtime — the new reads
+ * would just see `undefined` where the type says `RatingCategory | null` —
+ * but that is exactly the "silently wrong shape" this store's wipe-not-
+ * migrate rule exists to avoid, and per the project's no-users-yet policy a
+ * breaking cache shape change ships as a clean wipe rather than a compat
+ * shim. There is still no install base, so nothing is lost.
  */
-export const CACHE_SCHEMA_VERSION = 2;
+export const CACHE_SCHEMA_VERSION = 3;
 
 const ROOT_DIR_NAME = 'offline';
 const VERSION_DIR_NAME = `v${CACHE_SCHEMA_VERSION}`;

@@ -164,6 +164,7 @@ describe('ProductScreen — offline (P8-002)', () => {
         comment: 'Great crust',
         createdAt: '2026-07-01T00:00:00.000Z',
         product: { id: 'p1', kind: 'PACKAGED', name: PRODUCT.name, brand: null, image: null },
+        category: null,
       },
     ]);
     mockApiGet.mockRejectedValue(new NetworkError());

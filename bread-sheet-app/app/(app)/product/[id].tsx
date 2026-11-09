@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -22,6 +22,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { CategoryPickerSheet, type PickerActionResult } from '@/components/category-picker-sheet';
 import { SPACING_COMPACT } from '@/constants/spacing';
 import { Colors } from '@/constants/theme';
 import { ApiError, NetworkError, api } from '@/lib/api';
@@ -29,10 +30,15 @@ import { formatApiError } from '@/lib/format-error';
 import { upsertCachedRating, productCache } from '@/lib/offline/caches';
 import { useCachedResource } from '@/hooks/use-cached-resource';
 import { useFitToScreen } from '@/hooks/use-fit-to-screen';
+import { useMyCategories } from '@/hooks/use-my-categories';
 import { useMyRating } from '@/hooks/use-my-rating';
 import { useOutbox } from '@/hooks/use-outbox';
 import { useRecentProducts } from '@/hooks/use-recent-products';
 import { useSession } from '@/hooks/use-session';
+import { createCategory } from '@/features/categories/api';
+import { buildRatingCategoryFields, mapSuggestion, type CategorySelection } from '@/features/categories/picker';
+import type { CategorySeed } from '@/features/categories/seeds';
+import type { UserCategory, RatingCategory } from '@/features/categories/types';
 import { getPendingEdit } from '@/features/products/api';
 import type { PendingEdit, ProductDetail } from '@/features/products/types';
 import type { RatingEntry } from '@/features/ratings/types';
@@ -426,6 +432,138 @@ export default function ProductScreen() {
     setComment(existingRating.comment ?? '');
   }, [existingRating]);
 
+  // ─── Category (TICKET-P6-003) ───────────────────────────────────────────
+  // A category is the user's own label for this rating, never the machine
+  // suggestion (`product.suggestedCategory`) shown as fact. `categories`
+  // backs both the suggestion-mapping below and the picker's own-list
+  // section; it is stale-while-revalidate over the same on-disk cache the
+  // Manage Categories screen reads, so a rename/merge made there shows up
+  // here without extra plumbing.
+  const { categories: myCategories, refresh: refreshCategories } = useMyCategories(userId);
+
+  const [categorySelection, setCategorySelection] = useState<CategorySelection | null>(null);
+  // True once the user has made an explicit choice this session (selecting,
+  // creating, or clearing). Drives whether a rating write sends a category
+  // field at all — per the backend contract, omitting it leaves an existing
+  // rating's category unchanged, while an untouched *new* rating simply has
+  // none (see `buildRatingCategoryFields`).
+  const [categoryTouched, setCategoryTouched] = useState(false);
+  const [categoryPickerVisible, setCategoryPickerVisible] = useState(false);
+  const [categoryActionError, setCategoryActionError] = useState<string | null>(null);
+
+  // Maps `product.suggestedCategory` onto the user's own list: an existing
+  // own category with that slug wins outright; otherwise, if the slug is a
+  // known seed, it is offered unmaterialised (a one-tap create).
+  const suggestion = useMemo(
+    () => mapSuggestion(product?.suggestedCategory, myCategories),
+    [product?.suggestedCategory, myCategories],
+  );
+
+  // Until the user touches the category control, `categorySelection` tracks
+  // the best known default: the rating's own existing category takes
+  // priority (re-opening a rating you already organised should not be
+  // second-guessed by a suggestion) and is NOT marked touched — omitting
+  // the field on submit if nothing changes is correct and avoids a needless
+  // write. Otherwise, an `existing`-kind suggestion (an own category already
+  // materialised under that slug) both pre-selects *and* is marked touched
+  // immediately: the AC is that this pre-selection is already applied, not
+  // merely visible, so it must be sent even with no further tap. A
+  // `seed`-kind suggestion deliberately does neither here — it stays
+  // offered, unselected, rendered by the category row directly from
+  // `suggestion` — selecting it is the one tap that is allowed to
+  // materialise a row (see `handleSelectSeedCategory`). Reactive rather than
+  // "apply once" so a `categories` list that finishes loading after the
+  // product (a cold cache miss) still gets to upgrade a seed-only
+  // suggestion into the matching existing category once it arrives.
+  /* eslint-disable react-hooks/set-state-in-effect -- synchronising display
+     state with two external, asynchronously-arriving reads (the ratings
+     cache and the categories cache), exactly like the pending-edit lookup
+     above; not derivable during render. */
+  useEffect(() => {
+    if (categoryTouched) return;
+    if (existingRating) {
+      setCategorySelection(
+        existingRating.category
+          ? { kind: 'existing', id: existingRating.category.id, name: existingRating.category.name }
+          : suggestion?.kind === 'existing'
+            ? suggestion
+            : null,
+      );
+      if (!existingRating.category && suggestion?.kind === 'existing') setCategoryTouched(true);
+      return;
+    }
+    if (suggestion?.kind === 'existing') {
+      setCategorySelection(suggestion);
+      setCategoryTouched(true);
+      return;
+    }
+    setCategorySelection(null);
+  }, [existingRating, suggestion, categoryTouched]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  const applyCategorySelection = useCallback((next: CategorySelection | null) => {
+    setCategorySelection(next);
+    setCategoryTouched(true);
+    setCategoryActionError(null);
+  }, []);
+
+  const handleSelectExistingCategory = useCallback(
+    (category: UserCategory) => {
+      applyCategorySelection({ kind: 'existing', id: category.id, name: category.name });
+    },
+    [applyCategorySelection],
+  );
+
+  const handleClearCategory = useCallback(() => {
+    applyCategorySelection(null);
+  }, [applyCategorySelection]);
+
+  // Tries to materialise the seed immediately (`POST /api/users/me/categories
+  // { seedSlug }` — find-or-create, so this never duplicates). Offline, that
+  // call cannot be made; the selection is still applied, carried as the seed
+  // slug itself, and resolved server-side once the rating is actually sent
+  // (`POST /api/ratings`'s own `seedSlug` field, or the outbox replaying it).
+  const handleSelectSeedCategory = useCallback(
+    async (seed: CategorySeed): Promise<PickerActionResult> => {
+      try {
+        const created = await createCategory({ seedSlug: seed.slug });
+        applyCategorySelection({ kind: 'existing', id: created.id, name: created.name });
+        void refreshCategories();
+        return { ok: true };
+      } catch (err) {
+        if (err instanceof NetworkError) {
+          applyCategorySelection({ kind: 'seed', slug: seed.slug, name: seed.name });
+          return { ok: true };
+        }
+        return {
+          ok: false,
+          message: formatApiError(err, 'Could not add that category. Please try again.'),
+        };
+      }
+    },
+    [applyCategorySelection, refreshCategories],
+  );
+
+  // A brand-new custom name is online-only (TICKET-P6-003's offline scope is
+  // explicitly the `categoryId`/`seedSlug` cases above, not an unmaterialised
+  // free-text name) — a `NetworkError` here surfaces as a normal inline error.
+  const handleCreateCategory = useCallback(
+    async (name: string): Promise<PickerActionResult> => {
+      try {
+        const created = await createCategory({ name });
+        applyCategorySelection({ kind: 'existing', id: created.id, name: created.name });
+        void refreshCategories();
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          message: formatApiError(err, 'Could not create that category. Please try again.'),
+        };
+      }
+    },
+    [applyCategorySelection, refreshCategories],
+  );
+
   useEffect(() => {
     if (product) {
       addRecentProduct({
@@ -493,11 +631,16 @@ export default function ProductScreen() {
     setSubmitting(true);
     setSubmittedAsUpdate(existingRating !== null);
     const trimmed = comment.trim();
+    // TICKET-P6-003: omitted entirely when the user never touched category
+    // (leaves an existing rating's category unchanged, per the backend
+    // contract); `categoryId: null` when they explicitly cleared it.
+    const categoryFields = buildRatingCategoryFields(categorySelection, categoryTouched);
     try {
       const saved = await api.post<RatingEntry>('/api/ratings', {
         productId: product.id,
         taste,
         comment: trimmed || undefined,
+        ...categoryFields,
       });
       if (saved?.product?.id) {
         await upsertCachedRating(saved);
@@ -510,6 +653,17 @@ export default function ProductScreen() {
         // Ratings are the one write safe to queue: the endpoint upserts on
         // (user, product), so replay is idempotent and the local value is by
         // definition the user's latest intent (P8-004).
+        //
+        // The optimistic `category` only carries an id we already know about
+        // (an existing own category, or whatever the rating already had);
+        // a not-yet-materialised seed selection has no id to show yet and
+        // reads as uncategorised locally until the outbox flush returns the
+        // server's authoritative version.
+        const optimisticCategory: RatingCategory | null = !categoryTouched
+          ? existingRating?.category ?? null
+          : categorySelection?.kind === 'existing'
+            ? { id: categorySelection.id, name: categorySelection.name }
+            : null;
         const optimistic: RatingEntry = {
           id: existingRating?.id ?? `local:${product.id}`,
           score: taste,
@@ -523,8 +677,9 @@ export default function ProductScreen() {
             brand: product.brand,
             image: product.image,
           },
+          category: optimisticCategory,
         };
-        await enqueue({ productId: product.id, taste, comment: trimmed || null });
+        await enqueue({ productId: product.id, taste, comment: trimmed || null, ...categoryFields });
         await upsertCachedRating(optimistic);
         applyLocalRating(optimistic);
         setQueuedOffline(true);
@@ -535,7 +690,17 @@ export default function ProductScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [product, taste, comment, submitting, existingRating, enqueue, applyLocalRating]);
+  }, [
+    product,
+    taste,
+    comment,
+    submitting,
+    existingRating,
+    enqueue,
+    applyLocalRating,
+    categorySelection,
+    categoryTouched,
+  ]);
 
   const isUpdate = existingRating !== null;
   const pendingSync = product ? isQueued(product.id) : false;
@@ -852,6 +1017,80 @@ export default function ProductScreen() {
 
         <TasteSlider value={taste} onChange={setTaste} />
 
+        {/*
+          Category row (TICKET-P6-003) — the user's own label for this
+          rating, beneath the taste control. Never the product's machine
+          suggestion shown as fact: the chip here only ever reflects the
+          user's own decision (whether that decision started from the
+          suggestion or not). Skipping is always allowed — there is no
+          "+ Add category" nagging state, just a quiet affordance.
+        */}
+        <View style={styles.categoryRow} testID="category-row">
+          <ThemedText style={[styles.categoryLabel, { color: colors.icon }]}>Category</ThemedText>
+          <View style={styles.categoryChipsRow}>
+            {categorySelection ? (
+              <>
+                <TouchableOpacity
+                  testID="category-chip-selected"
+                  style={[
+                    styles.categoryChip,
+                    { borderColor: colors.tint, backgroundColor: colors.tint + '18' },
+                  ]}
+                  onPress={() => setCategoryPickerVisible(true)}
+                >
+                  <Text style={[styles.categoryChipText, { color: colors.tint }]}>
+                    🏷 {categorySelection.name}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  testID="category-chip-remove"
+                  accessibilityLabel="Remove category"
+                  hitSlop={8}
+                  style={styles.categoryRemoveBtn}
+                  onPress={handleClearCategory}
+                >
+                  <Text style={[styles.categoryRemoveText, { color: colors.icon }]}>✕</Text>
+                </TouchableOpacity>
+              </>
+            ) : suggestion?.kind === 'seed' ? (
+              <TouchableOpacity
+                testID="category-chip-suggestion"
+                style={[styles.categoryChip, { borderColor: colors.tint }]}
+                onPress={() => {
+                  void handleSelectSeedCategory(suggestion).then((result) => {
+                    if (!result.ok) setCategoryActionError(result.message);
+                  });
+                }}
+              >
+                <Text style={[styles.categoryChipText, { color: colors.tint }]}>
+                  + {suggestion.name}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                testID="category-chip-add"
+                style={[styles.categoryChip, { borderColor: colors.icon + '55' }]}
+                onPress={() => setCategoryPickerVisible(true)}
+              >
+                <Text style={[styles.categoryChipText, { color: colors.icon }]}>+ Add category</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              testID="category-change-link"
+              onPress={() => setCategoryPickerVisible(true)}
+            >
+              <Text style={[styles.categoryChangeLink, { color: colors.tint }]}>
+                {categorySelection ? 'Change' : 'Browse'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {categoryActionError ? (
+            <ThemedText testID="category-action-error" style={styles.errorText}>
+              {categoryActionError}
+            </ThemedText>
+          ) : null}
+        </View>
+
         <TextInput
           testID="rating-comment-input"
           autoFocus={autoFocusRatingComment}
@@ -897,6 +1136,17 @@ export default function ProductScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      <CategoryPickerSheet
+        visible={categoryPickerVisible}
+        onClose={() => setCategoryPickerVisible(false)}
+        ownCategories={myCategories}
+        currentSelection={categorySelection}
+        onSelectExisting={handleSelectExistingCategory}
+        onSelectSeed={handleSelectSeedCategory}
+        onCreate={handleCreateCategory}
+        onClear={handleClearCategory}
+      />
     </ScrollView>
   );
 }
@@ -966,6 +1216,46 @@ const styles = StyleSheet.create({
     opacity: 0.5,
     textAlign: 'center',
     marginBottom: 12,
+  },
+  categoryRow: {
+    alignSelf: 'stretch',
+    marginTop: 20,
+    gap: 6,
+  },
+  categoryLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  categoryChipsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  categoryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  categoryChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  categoryRemoveBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  categoryRemoveText: {
+    fontSize: 15,
+  },
+  categoryChangeLink: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   commentInput: {
     alignSelf: 'stretch',

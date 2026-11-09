@@ -290,6 +290,69 @@ describe('AddProductScreen — flow progression', () => {
     expect(getByTestId('field-brand').props.value).toBe('Coca-Cola');
   });
 
+  // TICKET-P6-003: the plausibility check's `category` guess is echoed back
+  // verbatim on submission as `suggestedCategory`, so the server can persist
+  // it onto `Product.suggestedCategory`.
+  it('echoes the product-photo category guess back as suggestedCategory on submit', async () => {
+    productsApi.uploadProductImage.mockResolvedValueOnce({
+      imageKey: 'processed/mock-uuid.jpg',
+      name: 'Chips',
+      brand: null,
+      genericName: null,
+      category: 'snacks',
+    });
+    productsApi.submitProduct.mockResolvedValue({
+      id: 'new-id',
+      gtin: '0000000000001',
+      status: 'PENDING_REVIEW',
+    });
+
+    const { getByTestId, findByTestId } = await render(<AddProductScreen />);
+    await fireEvent.press(getByTestId('product-photo-slot-camera'));
+    await waitFor(() => expect(productsApi.uploadProductImage).toHaveBeenCalled());
+
+    await fireEvent.press(getByTestId('photos-skip'));
+    await findByTestId('field-name'); // pre-filled from the suggestion, so canSubmit is already true
+
+    await fireEvent.press(getByTestId('submit-product'));
+
+    await waitFor(() =>
+      expect(productsApi.submitProduct).toHaveBeenCalledWith(
+        expect.objectContaining({ suggestedCategory: 'snacks' }),
+      ),
+    );
+  });
+
+  it('sends a null suggestedCategory when the photo had no confident guess', async () => {
+    productsApi.uploadProductImage.mockResolvedValueOnce({
+      imageKey: 'processed/mock-uuid.jpg',
+      name: 'Mystery Item',
+      brand: null,
+      genericName: null,
+      category: null,
+    });
+    productsApi.submitProduct.mockResolvedValue({
+      id: 'new-id',
+      gtin: '0000000000001',
+      status: 'PENDING_REVIEW',
+    });
+
+    const { getByTestId, findByTestId } = await render(<AddProductScreen />);
+    await fireEvent.press(getByTestId('product-photo-slot-camera'));
+    await waitFor(() => expect(productsApi.uploadProductImage).toHaveBeenCalled());
+
+    await fireEvent.press(getByTestId('photos-skip'));
+    await findByTestId('field-name');
+
+    await fireEvent.press(getByTestId('submit-product'));
+
+    await waitFor(() =>
+      expect(productsApi.submitProduct).toHaveBeenCalledWith(
+        expect.objectContaining({ suggestedCategory: null }),
+      ),
+    );
+  });
+
   it('surfaces a 422 plausibility error from submit as a field-level error', async () => {
     productsApi.submitProduct.mockRejectedValue(
       new ApiError(422, 'Implausible values', {

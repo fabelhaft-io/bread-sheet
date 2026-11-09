@@ -34,6 +34,15 @@ export interface ProductSubmission {
   /** S3 object key (`processed/{uuid}.jpg`) returned by the upload-image endpoint. */
   productImageKey: string;
   ingredients: string | null;
+  /**
+   * TICKET-P6-003 — echoed back verbatim from `ProductImageUploadResult.category`
+   * (the product-photo plausibility check's guess), so the server can persist
+   * it onto `Product.suggestedCategory`. Optional/omittable — a submission
+   * with no product photo yet, or a photo with no confident guess, sends
+   * `null`. Deliberately excluded from `ProductCorrectionPayload` below: it
+   * is machine-derived and never part of what a correction changes.
+   */
+  suggestedCategory?: string | null;
 }
 
 /**
@@ -101,6 +110,15 @@ export interface ProductDetail {
   /** Fully-populated submission view for the reviewer screen (P5-002). Stays flat. */
   submission?: Partial<ProductSubmission> | null;
   packaged: PackagedDetails | null;
+  /**
+   * TICKET-P6-003: a machine-derived seed slug (OFF category tag mapping,
+   * then the image plausibility call), or `null`. A *suggestion*, never a
+   * fact — it only ever pre-selects the rating screen's category picker and
+   * must never be rendered as the product's category. Deliberately absent
+   * from `ProductEditChanges`/`edit-form.ts` — it is not peer-reviewed and is
+   * freely recomputable at any time, so it has no place in the edit diff.
+   */
+  suggestedCategory?: string | null;
 }
 
 /**
@@ -111,7 +129,9 @@ export interface ProductDetail {
  * on their mere presence in a `CUSTOM` payload.
  */
 export type ProductCorrectionPayload =
-  | (Omit<ProductSubmission, 'gtin' | 'productImageKey'> & { productImageKey?: string })
+  | (Omit<ProductSubmission, 'gtin' | 'productImageKey' | 'suggestedCategory'> & {
+      productImageKey?: string;
+    })
   | { name: string; productImageKey?: string };
 
 // ─── Custom products (TICKET-P6-007) ─────────────────────────────────────────

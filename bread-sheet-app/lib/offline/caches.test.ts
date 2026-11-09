@@ -71,6 +71,7 @@ function rating(productId: string, taste: number): RatingEntry {
     comment: null,
     createdAt: '2026-07-29T00:00:00.000Z',
     product: { id: productId, kind: 'PACKAGED', name: `Product ${productId}`, brand: null, image: null },
+    category: null,
   };
 }
 
