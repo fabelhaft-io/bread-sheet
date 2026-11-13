@@ -129,7 +129,7 @@ jobs:
           echo "live: $image (task-def revision $revision)"
 
       # ── 5. Terraform init ──────────────────────────────────────────────────────
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         if: steps.gate.outputs.action == 'teardown'
         with:
           terraform_version: 1.15.9
