@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mastra/core": "^1.82.0",
+    "@mastra/core": "^1.83.0",
     "dotenv": "^18.0.9",
     "zod": "^4.6.7"
   },
